@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+
+# Env files
+.env
+.env.*
+.env.example
+
+# Editor / OS files
+.DS_Store
+Thumbs.db
+
+# History folder (VS Code extension)
+.history/
