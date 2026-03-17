@@ -1,18 +1,53 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ...database.session import get_db
-from ...schemas.task import TaskCreate, TaskRead
-from ...services.task_service import create_task, get_tasks
+from agents.orchestrator_agent import OrchestratorAgent
+from backend.app.database.session import SessionLocal
+from backend.app.schemas.task import TaskCreate, TaskResponse
+from backend.app.services.task_service import TaskService
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
-
-
-@router.get("", response_model=list[TaskRead])
-def read_tasks(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return get_tasks(db, skip=skip, limit=limit)
+router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
 
-@router.post("", response_model=TaskRead, status_code=201)
-def create_new_task(task_in: TaskCreate, db: Session = Depends(get_db)):
-    return create_task(db, task_in)
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@router.post("/", response_model=TaskResponse)
+def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
+    task = TaskService.create_task(db, payload.prompt)
+
+    try:
+        TaskService.update_task_status(db, task, "in_progress")
+        TaskService.append_log(db, task, "orchestrator", "Starting orchestration")
+
+        orchestrator = OrchestratorAgent()
+        result = orchestrator.process_request(payload.prompt)
+
+        TaskService.append_log(db, task, "planner", "Execution plan generated")
+        TaskService.save_plan(db, task, result["plan"])
+        TaskService.save_result(db, task, result)
+        TaskService.update_task_status(db, task, "completed")
+        TaskService.append_log(db, task, "completed", "Task completed successfully")
+
+    except Exception as e:
+        task = TaskService.save_error(db, task, str(e))
+        raise HTTPException(status_code=500, detail=f"Task processing failed: {str(e)}")
+
+    return task
+
+
+@router.get("/{task_id}", response_model=TaskResponse)
+def get_task(task_id: str, db: Session = Depends(get_db)):
+    task = TaskService.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+@router.get("/", response_model=list[TaskResponse])
+def list_tasks(db: Session = Depends(get_db)):
+    return TaskService.list_tasks(db)
