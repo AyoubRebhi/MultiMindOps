@@ -23,16 +23,22 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
 
     try:
         TaskService.update_task_status(db, task, "in_progress")
-        TaskService.append_log(db, task, "orchestrator", "Starting orchestration")
 
         orchestrator = OrchestratorAgent()
-        result = orchestrator.process_request(payload.prompt)
+        workflow_state = orchestrator.process_request(payload.prompt)
 
-        TaskService.append_log(db, task, "planner", "Execution plan generated")
-        TaskService.save_plan(db, task, result["plan"])
-        TaskService.save_result(db, task, result)
-        TaskService.update_task_status(db, task, "completed")
-        TaskService.append_log(db, task, "completed", "Task completed successfully")
+        for log in workflow_state.get("logs", []):
+            if log["step"] != "task_created":
+                TaskService.append_log(db, task, log["step"], log["message"])
+
+        if workflow_state.get("plan"):
+            TaskService.save_plan(db, task, workflow_state["plan"])
+
+        if workflow_state.get("result"):
+            TaskService.save_result(db, task, workflow_state["result"])
+
+        final_status = workflow_state.get("status", "completed")
+        TaskService.update_task_status(db, task, final_status)
 
     except Exception as e:
         task = TaskService.save_error(db, task, str(e))
@@ -41,13 +47,14 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
     return task
 
 
+@router.get("/", response_model=list[TaskResponse])
+def list_tasks(db: Session = Depends(get_db)):
+    return TaskService.list_tasks(db)
+
+
 @router.get("/{task_id}", response_model=TaskResponse)
 def get_task(task_id: str, db: Session = Depends(get_db)):
     task = TaskService.get_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
-
-@router.get("/", response_model=list[TaskResponse])
-def list_tasks(db: Session = Depends(get_db)):
-    return TaskService.list_tasks(db)
