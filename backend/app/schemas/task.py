@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 class TaskCreate(BaseModel):
     prompt: str
+    repo_url: Optional[str] = None
 
 
 class TaskResponse(BaseModel):
