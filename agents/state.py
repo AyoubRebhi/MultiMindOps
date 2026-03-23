@@ -6,5 +6,6 @@ class OrchestratorState(TypedDict, total=False):
     status: str
     logs: List[Dict[str, str]]
     plan: Optional[Dict[str, Any]]
+    infra: Optional[Dict[str, Any]]
     result: Optional[Dict[str, Any]]
     error_message: Optional[str]

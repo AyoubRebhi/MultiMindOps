@@ -15,6 +15,9 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/devsecops_db"
 
+    GROQ_API_KEY: str = "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"
+    GROQ_MODEL: str = "llama3-8b-8192"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
