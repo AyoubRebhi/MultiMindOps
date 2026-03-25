@@ -8,6 +8,8 @@ class OrchestratorState(TypedDict, total=False):
     status: str
     logs: List[Dict[str, str]]
 
+    repository_security: Optional[Dict[str, Any]]
+
     repo_summary: Optional[Dict[str, Any]]
     file_tree: Optional[List[str]]
     important_files: Optional[List[str]]

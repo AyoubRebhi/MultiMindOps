@@ -17,3 +17,6 @@ Thumbs.db
 
 # History folder (VS Code extension)
 .history/
+
+#Source code des projets de test
+workspace/

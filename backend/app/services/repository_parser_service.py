@@ -125,20 +125,32 @@ class RepositoryParserService:
             "devops_tools": devops_tools,
         }
 
-    def _read_key_files(self, repo: Path, important_files: List[str], max_chars: int = 6000) -> Dict[str, str]:
+    def _read_key_files(self, repo: Path, important_files: List[str], max_chars: int = 1500) -> Dict[str, str]:
         contents: Dict[str, str] = {}
 
+        priority_files = [
+            "README.md",
+            "requirements.txt",
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "Dockerfile",
+            "backend/app/main.py",
+            "main.py",
+            "app.py",
+        ]
+
+        selected_files = []
+        for pf in priority_files:
+            if pf in important_files:
+                selected_files.append(pf)
+
         for rel_path in important_files:
+            if rel_path not in selected_files and len(selected_files) < 12:
+                selected_files.append(rel_path)
+
+        for rel_path in selected_files:
             path = repo / rel_path
             if not path.is_file():
-                continue
-
-            if path.suffix.lower() not in self.TEXT_EXTENSIONS and path.name not in {
-                "Dockerfile",
-                "Jenkinsfile",
-                "README.md",
-                "requirements.txt",
-            }:
                 continue
 
             try:

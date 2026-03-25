@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict
 
 from openai import OpenAI
 
@@ -56,4 +57,10 @@ class LLMService:
             if len(lines) >= 3:
                 content = "\n".join(lines[1:-1]).strip()
 
-        return json.loads(content)
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+            raise ValueError(f"LLM did not return valid JSON. Raw output:\n{content}")

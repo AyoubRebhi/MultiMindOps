@@ -35,7 +35,10 @@ class OrchestratorAgent(BaseAgent):
             "Please generate complete infrastructure artifacts for the provided plan."
         )
 
-        planner_prompt = planner_prompt or _read_prompt_file("planner_prompt.txt", default_planner)
+        planner_prompt = planner_prompt or _read_prompt_file(
+            "planner_prompt.txt",
+            default_planner,
+        )
         infrastructure_prompt = infrastructure_prompt or _read_prompt_file(
             "infrastructure_prompt.txt",
             default_infrastructure,
@@ -43,26 +46,73 @@ class OrchestratorAgent(BaseAgent):
 
         self.planner_agent = PlannerAgent(prompt_template=planner_prompt)
         self.codebase_agent = CodebaseAnalysisAgent()
-        self.infrastructure_agent = InfrastructureAgent(prompt_template=infrastructure_prompt)
+        self.infrastructure_agent = InfrastructureAgent(
+            prompt_template=infrastructure_prompt
+        )
         self.graph = self._build_graph()
 
     def _initialize_node(self, state: OrchestratorState) -> OrchestratorState:
         logs = list(state.get("logs", []))
-        logs.append({"step": "orchestrator", "message": "Workflow started"})
-        return {**state, "status": "in_progress", "logs": logs}
+        logs.append(
+            {
+                "step": "orchestrator",
+                "message": "Workflow started",
+            }
+        )
+        return {
+            **state,
+            "status": "in_progress",
+            "logs": logs,
+        }
 
     def _route_repository(self, state: OrchestratorState) -> str:
         repo_url = state.get("repo_url")
         return "analyze_repository" if repo_url else "planner"
 
+    def _route_after_repository_analysis(self, state: OrchestratorState) -> str:
+        security_result = state.get("repository_security") or {}
+        if security_result.get("status") == "blocked":
+            return "finalize"
+        return "planner"
+
     def _analyze_repository_node(self, state: OrchestratorState) -> OrchestratorState:
         analysis = self.codebase_agent.run(state["repo_url"])  # type: ignore[index]
 
         logs = list(state.get("logs", []))
-        logs.append({"step": "codebase_analysis", "message": "Repository analyzed successfully"})
+        security_result = analysis.get("security")
+
+        if security_result and security_result.get("status") == "blocked":
+            logs.append(
+                {
+                    "step": "repository_security",
+                    "message": "Repository blocked by security gate",
+                }
+            )
+        elif security_result and security_result.get("status") == "safe_with_warnings":
+            logs.append(
+                {
+                    "step": "repository_security",
+                    "message": "Repository passed with warnings",
+                }
+            )
+        else:
+            logs.append(
+                {
+                    "step": "repository_security",
+                    "message": "Repository passed security checks",
+                }
+            )
+
+        logs.append(
+            {
+                "step": "codebase_analysis",
+                "message": "Repository analyzed successfully",
+            }
+        )
 
         return {
             **state,
+            "repository_security": security_result,
             "repo_summary": analysis.get("repo_summary"),
             "file_tree": analysis.get("file_tree"),
             "important_files": analysis.get("important_files"),
@@ -75,12 +125,24 @@ class OrchestratorAgent(BaseAgent):
         plan = self.planner_agent.run(state["prompt"], planner_context)
 
         logs = list(state.get("logs", []))
-        logs.append({"step": "planner", "message": "Plan generated successfully"})
+        logs.append(
+            {
+                "step": "planner",
+                "message": "Plan generated successfully",
+            }
+        )
 
-        return {**state, "plan": plan, "logs": logs}
+        return {
+            **state,
+            "plan": plan,
+            "logs": logs,
+        }
 
     def _infrastructure_node(self, state: OrchestratorState) -> OrchestratorState:
-        infrastructure_context = (state.get("agent_context") or {}).get("infrastructure_context")
+        infrastructure_context = (state.get("agent_context") or {}).get(
+            "infrastructure_context"
+        )
+
         infra = self.infrastructure_agent.run(
             prompt=state["prompt"],
             plan=state["plan"],  # type: ignore[index]
@@ -88,9 +150,18 @@ class OrchestratorAgent(BaseAgent):
         )
 
         logs = list(state.get("logs", []))
-        logs.append({"step": "infrastructure", "message": "Infrastructure artifacts generated"})
+        logs.append(
+            {
+                "step": "infrastructure",
+                "message": "Infrastructure artifacts generated",
+            }
+        )
 
-        return {**state, "infra": infra, "logs": logs}
+        return {
+            **state,
+            "infra": infra,
+            "logs": logs,
+        }
 
     def _artifact_validation_node(self, state: OrchestratorState) -> OrchestratorState:
         plan = state.get("plan") or {}
@@ -100,7 +171,8 @@ class OrchestratorAgent(BaseAgent):
         generated_artifacts = infra.get("generated_artifacts", [])
 
         missing_artifacts = [
-            artifact for artifact in required_artifacts
+            artifact
+            for artifact in required_artifacts
             if artifact not in generated_artifacts
         ]
 
@@ -115,15 +187,19 @@ class OrchestratorAgent(BaseAgent):
 
         logs = list(state.get("logs", []))
         if missing_artifacts:
-            logs.append({
-                "step": "artifact_validation",
-                "message": f"Missing artifacts detected: {', '.join(missing_artifacts)}",
-            })
+            logs.append(
+                {
+                    "step": "artifact_validation",
+                    "message": f"Missing artifacts detected: {', '.join(missing_artifacts)}",
+                }
+            )
         else:
-            logs.append({
-                "step": "artifact_validation",
-                "message": "All required artifacts were generated successfully",
-            })
+            logs.append(
+                {
+                    "step": "artifact_validation",
+                    "message": "All required artifacts were generated successfully",
+                }
+            )
 
         return {
             **state,
@@ -133,19 +209,30 @@ class OrchestratorAgent(BaseAgent):
 
     def _finalize_node(self, state: OrchestratorState) -> OrchestratorState:
         logs = list(state.get("logs", []))
-        logs.append({"step": "completed", "message": "Workflow completed successfully"})
+        logs.append(
+            {
+                "step": "completed",
+                "message": "Workflow completed successfully",
+            }
+        )
 
         validation = state.get("validation") or {}
+        security_result = state.get("repository_security") or {}
+
         final_status = "completed"
         result_status = "success"
 
-        if validation.get("status") == "partial":
+        if security_result.get("status") == "blocked":
+            final_status = "blocked"
+            result_status = "blocked"
+        elif validation.get("status") == "partial":
             final_status = "partial_success"
             result_status = "partial_success"
 
         result = {
             "agent": self.name,
             "status": result_status,
+            "repository_security": security_result,
             "repo_summary": state.get("repo_summary"),
             "plan": state.get("plan"),
             "infrastructure": state.get("infra"),
@@ -170,6 +257,7 @@ class OrchestratorAgent(BaseAgent):
         workflow.add_node("finalize", self._finalize_node)
 
         workflow.add_edge(START, "initialize")
+
         workflow.add_conditional_edges(
             "initialize",
             self._route_repository,
@@ -178,7 +266,16 @@ class OrchestratorAgent(BaseAgent):
                 "planner": "planner",
             },
         )
-        workflow.add_edge("analyze_repository", "planner")
+
+        workflow.add_conditional_edges(
+            "analyze_repository",
+            self._route_after_repository_analysis,
+            {
+                "planner": "planner",
+                "finalize": "finalize",
+            },
+        )
+
         workflow.add_edge("planner", "infrastructure")
         workflow.add_edge("infrastructure", "artifact_validation")
         workflow.add_edge("artifact_validation", "finalize")
@@ -192,6 +289,7 @@ class OrchestratorAgent(BaseAgent):
             "repo_url": repo_url,
             "status": "pending",
             "logs": [],
+            "repository_security": None,
             "repo_summary": None,
             "file_tree": None,
             "important_files": None,

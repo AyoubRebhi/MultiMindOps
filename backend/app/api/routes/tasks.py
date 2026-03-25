@@ -37,15 +37,13 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
         if workflow_state.get("result"):
             TaskService.save_result(db, task, workflow_state["result"])
 
-        final_status = workflow_state.get("status", "completed")
-        TaskService.update_task_status(db, task, final_status)
+        TaskService.update_task_status(db, task, workflow_state.get("status", "completed"))
 
     except Exception as e:
-        task = TaskService.save_error(db, task, str(e))
+        TaskService.save_error(db, task, str(e))
         raise HTTPException(status_code=500, detail=f"Task processing failed: {str(e)}")
 
     return task
-
 
 @router.get("/", response_model=list[TaskResponse])
 def list_tasks(db: Session = Depends(get_db)):
