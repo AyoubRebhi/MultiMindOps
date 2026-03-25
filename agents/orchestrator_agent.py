@@ -28,11 +28,18 @@ class OrchestratorAgent(BaseAgent):
                     pass
             return fallback
 
-        default_planner = "Please generate a DevOps execution plan for the provided task."
-        default_infrastructure = "Please generate infrastructure artifacts (Dockerfile, docker-compose, Kubernetes manifests) for the provided plan."
+        default_planner = (
+            "Please generate a DevSecOps execution plan with required_artifacts for the provided task."
+        )
+        default_infrastructure = (
+            "Please generate complete infrastructure artifacts for the provided plan."
+        )
 
         planner_prompt = planner_prompt or _read_prompt_file("planner_prompt.txt", default_planner)
-        infrastructure_prompt = infrastructure_prompt or _read_prompt_file("infrastructure_prompt.txt", default_infrastructure)
+        infrastructure_prompt = infrastructure_prompt or _read_prompt_file(
+            "infrastructure_prompt.txt",
+            default_infrastructure,
+        )
 
         self.planner_agent = PlannerAgent(prompt_template=planner_prompt)
         self.codebase_agent = CodebaseAnalysisAgent()
@@ -85,21 +92,69 @@ class OrchestratorAgent(BaseAgent):
 
         return {**state, "infra": infra, "logs": logs}
 
+    def _artifact_validation_node(self, state: OrchestratorState) -> OrchestratorState:
+        plan = state.get("plan") or {}
+        infra = state.get("infra") or {}
+
+        required_artifacts = plan.get("required_artifacts", [])
+        generated_artifacts = infra.get("generated_artifacts", [])
+
+        missing_artifacts = [
+            artifact for artifact in required_artifacts
+            if artifact not in generated_artifacts
+        ]
+
+        validation_status = "valid" if not missing_artifacts else "partial"
+
+        validation = {
+            "status": validation_status,
+            "required_artifacts": required_artifacts,
+            "generated_artifacts": generated_artifacts,
+            "missing_artifacts": missing_artifacts,
+        }
+
+        logs = list(state.get("logs", []))
+        if missing_artifacts:
+            logs.append({
+                "step": "artifact_validation",
+                "message": f"Missing artifacts detected: {', '.join(missing_artifacts)}",
+            })
+        else:
+            logs.append({
+                "step": "artifact_validation",
+                "message": "All required artifacts were generated successfully",
+            })
+
+        return {
+            **state,
+            "validation": validation,
+            "logs": logs,
+        }
+
     def _finalize_node(self, state: OrchestratorState) -> OrchestratorState:
         logs = list(state.get("logs", []))
         logs.append({"step": "completed", "message": "Workflow completed successfully"})
 
+        validation = state.get("validation") or {}
+        final_status = "completed"
+        result_status = "success"
+
+        if validation.get("status") == "partial":
+            final_status = "partial_success"
+            result_status = "partial_success"
+
         result = {
             "agent": self.name,
-            "status": "success",
+            "status": result_status,
             "repo_summary": state.get("repo_summary"),
             "plan": state.get("plan"),
             "infrastructure": state.get("infra"),
+            "validation": validation,
         }
 
         return {
             **state,
-            "status": "completed",
+            "status": final_status,
             "result": result,
             "logs": logs,
         }
@@ -111,6 +166,7 @@ class OrchestratorAgent(BaseAgent):
         workflow.add_node("analyze_repository", self._analyze_repository_node)
         workflow.add_node("planner", self._planner_node)
         workflow.add_node("infrastructure", self._infrastructure_node)
+        workflow.add_node("artifact_validation", self._artifact_validation_node)
         workflow.add_node("finalize", self._finalize_node)
 
         workflow.add_edge(START, "initialize")
@@ -124,7 +180,8 @@ class OrchestratorAgent(BaseAgent):
         )
         workflow.add_edge("analyze_repository", "planner")
         workflow.add_edge("planner", "infrastructure")
-        workflow.add_edge("infrastructure", "finalize")
+        workflow.add_edge("infrastructure", "artifact_validation")
+        workflow.add_edge("artifact_validation", "finalize")
         workflow.add_edge("finalize", END)
 
         return workflow.compile()
@@ -141,6 +198,7 @@ class OrchestratorAgent(BaseAgent):
             "agent_context": None,
             "plan": None,
             "infra": None,
+            "validation": None,
             "result": None,
             "error_message": None,
         }

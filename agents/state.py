@@ -10,6 +10,7 @@ class OrchestratorState(TypedDict, total=False):
 
     repo_summary: Optional[Dict[str, Any]]
     file_tree: Optional[List[str]]
+    important_files: Optional[List[str]]
     code_chunks: Optional[List[Dict[str, Any]]]
     agent_context: Optional[Dict[str, Any]]
 
@@ -20,6 +21,7 @@ class OrchestratorState(TypedDict, total=False):
     deployment: Optional[Dict[str, Any]]
     monitoring: Optional[Dict[str, Any]]
     knowledge: Optional[Dict[str, Any]]
+    validation: Optional[Dict[str, Any]]
 
     result: Optional[Dict[str, Any]]
     error_message: Optional[str]
