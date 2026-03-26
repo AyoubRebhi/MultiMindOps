@@ -76,7 +76,11 @@ class OrchestratorAgent(BaseAgent):
         return "planner"
 
     def _analyze_repository_node(self, state: OrchestratorState) -> OrchestratorState:
-        analysis = self.codebase_agent.run(state["repo_url"])  # type: ignore[index]
+        analysis = self.codebase_agent.run(
+            repo_url=state["repo_url"],  # type: ignore[index]
+            repository_visibility=state.get("repository_visibility", "public"),
+            github_token=state.get("github_token"),
+        )
 
         logs = list(state.get("logs", []))
         security_result = analysis.get("security")
@@ -88,11 +92,23 @@ class OrchestratorAgent(BaseAgent):
                     "message": "Repository blocked by security gate",
                 }
             )
+            logs.append(
+                {
+                    "step": "codebase_analysis",
+                    "message": "Repository analysis stopped after security block",
+                }
+            )
         elif security_result and security_result.get("status") == "safe_with_warnings":
             logs.append(
                 {
                     "step": "repository_security",
                     "message": "Repository passed with warnings",
+                }
+            )
+            logs.append(
+                {
+                    "step": "codebase_analysis",
+                    "message": "Repository analyzed successfully",
                 }
             )
         else:
@@ -102,13 +118,12 @@ class OrchestratorAgent(BaseAgent):
                     "message": "Repository passed security checks",
                 }
             )
-
-        logs.append(
-            {
-                "step": "codebase_analysis",
-                "message": "Repository analyzed successfully",
-            }
-        )
+            logs.append(
+                {
+                    "step": "codebase_analysis",
+                    "message": "Repository analyzed successfully",
+                }
+            )
 
         return {
             **state,
@@ -283,10 +298,18 @@ class OrchestratorAgent(BaseAgent):
 
         return workflow.compile()
 
-    def run(self, prompt: str, repo_url: str | None = None) -> dict:
+    def run(
+        self,
+        prompt: str,
+        repo_url: str | None = None,
+        repository_visibility: str = "public",
+        github_token: str | None = None,
+    ) -> dict:
         initial_state: OrchestratorState = {
             "prompt": prompt,
             "repo_url": repo_url,
+            "repository_visibility": repository_visibility,
+            "github_token": github_token,
             "status": "pending",
             "logs": [],
             "repository_security": None,

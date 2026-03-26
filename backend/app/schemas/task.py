@@ -7,6 +7,8 @@ from pydantic import BaseModel
 class TaskCreate(BaseModel):
     prompt: str
     repo_url: Optional[str] = None
+    repository_visibility: str = "public"
+    github_token: Optional[str] = None
 
 
 class TaskResponse(BaseModel):

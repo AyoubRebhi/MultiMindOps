@@ -25,7 +25,12 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
         TaskService.update_task_status(db, task, "in_progress")
 
         orchestrator = OrchestratorAgent()
-        workflow_state = orchestrator.run(payload.prompt, payload.repo_url)
+        workflow_state = orchestrator.run(
+            prompt=payload.prompt,
+            repo_url=payload.repo_url,
+            repository_visibility=payload.repository_visibility,
+            github_token=payload.github_token,
+        )
 
         for log in workflow_state.get("logs", []):
             if log["step"] != "task_created":

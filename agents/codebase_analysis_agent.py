@@ -15,8 +15,17 @@ class CodebaseAnalysisAgent(BaseAgent):
         self.repository_parser = RepositoryParserService()
         self.context_builder = ContextBuilderService()
 
-    def run(self, repo_url: str) -> Dict[str, Any]:
-        repo_path = self.github_service.clone_repository(repo_url)
+    def run(
+        self,
+        repo_url: str,
+        repository_visibility: str = "public",
+        github_token: str | None = None,
+    ) -> Dict[str, Any]:
+        repo_path = self.github_service.clone_repository(
+            repo_url=repo_url,
+            repository_visibility=repository_visibility,
+            github_token=github_token,
+        )
 
         security_result = self.security_service.run_security_gate(
             repo_url=repo_url,

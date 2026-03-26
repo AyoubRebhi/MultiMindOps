@@ -4,7 +4,9 @@ from typing import Any, Dict, List, Optional, TypedDict
 class OrchestratorState(TypedDict, total=False):
     prompt: str
     repo_url: Optional[str]
-
+    repository_visibility: Optional[str]
+    github_token: Optional[str]
+    
     status: str
     logs: List[Dict[str, str]]
 
