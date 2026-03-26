@@ -7,9 +7,14 @@ from urllib.parse import urlparse
 class RepositorySecurityService:
     ALLOWED_HOSTS = {"github.com", "www.github.com"}
 
-    BLOCKED_EXTENSIONS = {
-        ".exe", ".dll", ".so", ".bin", ".msi", ".bat", ".cmd", ".scr",
-        ".ps1", ".jar", ".class", ".apk", ".dmg", ".iso"
+    # Extensions vraiment dangereuses / inutiles pour l'analyse
+    HARD_BLOCKED_EXTENSIONS = {
+        ".exe", ".dll", ".so", ".bin", ".msi", ".scr", ".apk", ".dmg", ".iso"
+    }
+
+    # Extensions script à surveiller, mais pas à bloquer automatiquement
+    SOFT_SCRIPT_EXTENSIONS = {
+        ".bat", ".cmd", ".ps1", ".sh"
     }
 
     SUSPICIOUS_FILENAMES = {
@@ -19,6 +24,15 @@ class RepositorySecurityService:
         "id_dsa",
         "secrets.txt",
         "credentials.txt",
+    }
+
+    LOW_RISK_DIRS = {
+        "docs",
+        "doc",
+        "tests",
+        "test",
+        "examples",
+        "example",
     }
 
     PROMPT_INJECTION_PATTERNS = [
@@ -44,6 +58,13 @@ class RepositorySecurityService:
         r"(?i)token\s*=\s*['\"][^'\"]+['\"]",
     ]
 
+    HIGH_CONFIDENCE_SECRET_PATTERNS = [
+        r"AKIA[0-9A-Z]{16}",
+        r"ghp_[A-Za-z0-9]{20,}",
+        r"AIza[0-9A-Za-z\-_]{35}",
+        r"-----BEGIN\s+PRIVATE\s+KEY-----",
+    ]
+
     def validate_repo_url(self, repo_url: str) -> Dict[str, Any]:
         repo_url = repo_url.strip()
         parsed = urlparse(repo_url)
@@ -60,10 +81,8 @@ class RepositorySecurityService:
         if len(path_parts) < 2:
             issues.append("Repository URL must contain owner and repository name")
 
-        is_valid = len(issues) == 0
-
         return {
-            "valid": is_valid,
+            "valid": len(issues) == 0,
             "issues": issues,
             "normalized_url": repo_url,
         }
@@ -74,10 +93,13 @@ class RepositorySecurityService:
         blocked_reasons: List[str] = []
         warnings: List[str] = []
 
+        hard_blocked_files: List[str] = []
         suspicious_files: List[str] = []
         prompt_injection_hits: List[Dict[str, str]] = []
         secret_hits: List[Dict[str, str]] = []
+        high_confidence_secret_hits: List[Dict[str, str]] = []
         oversized_files: List[str] = []
+        soft_script_hits: List[str] = []
 
         scanned_files = 0
 
@@ -88,16 +110,29 @@ class RepositorySecurityService:
                 continue
 
             scanned_files += 1
-            rel_path = str(path.relative_to(repo))
+            rel_path = str(path.relative_to(repo)).replace("\\", "/")
+            suffix = path.suffix.lower()
 
-            if path.suffix.lower() in self.BLOCKED_EXTENSIONS:
-                suspicious_files.append(rel_path)
-                blocked_reasons.append(f"Blocked binary or executable extension detected: {rel_path}")
+            # Hard block seulement pour de vraies extensions à risque
+            if suffix in self.HARD_BLOCKED_EXTENSIONS:
+                hard_blocked_files.append(rel_path)
+                blocked_reasons.append(
+                    f"Blocked binary or executable extension detected: {rel_path}"
+                )
                 continue
+
+            # Scripts: warning seulement
+            if suffix in self.SOFT_SCRIPT_EXTENSIONS:
+                soft_script_hits.append(rel_path)
+                if not self._is_low_risk_path(rel_path):
+                    warnings.append(f"Script file detected and should be reviewed: {rel_path}")
 
             if path.name in self.SUSPICIOUS_FILENAMES:
                 suspicious_files.append(rel_path)
-                warnings.append(f"Sensitive filename detected: {rel_path}")
+                if self._is_low_risk_path(rel_path):
+                    warnings.append(f"Sensitive-like filename detected in low-risk area: {rel_path}")
+                else:
+                    warnings.append(f"Sensitive filename detected: {rel_path}")
 
             try:
                 size = path.stat().st_size
@@ -115,6 +150,7 @@ class RepositorySecurityService:
                 warnings.append(f"Unable to read text content: {rel_path}")
                 continue
 
+            # Prompt injection hits
             for pattern in self.PROMPT_INJECTION_PATTERNS:
                 if re.search(pattern, content, flags=re.IGNORECASE):
                     prompt_injection_hits.append({
@@ -122,6 +158,15 @@ class RepositorySecurityService:
                         "pattern": pattern,
                     })
 
+            # High-confidence secrets
+            for pattern in self.HIGH_CONFIDENCE_SECRET_PATTERNS:
+                if re.search(pattern, content, flags=re.IGNORECASE):
+                    high_confidence_secret_hits.append({
+                        "file": rel_path,
+                        "pattern": pattern,
+                    })
+
+            # Generic secret-like patterns
             for pattern in self.SECRET_PATTERNS:
                 if re.search(pattern, content, flags=re.IGNORECASE):
                     secret_hits.append({
@@ -133,13 +178,19 @@ class RepositorySecurityService:
             warnings.append("Potential prompt injection patterns detected in repository files")
 
         if secret_hits:
-            warnings.append("Potential secrets detected in repository files")
+            warnings.append("Potential secret-like patterns detected in repository files")
+
+        if high_confidence_secret_hits:
+            blocked_reasons.append("High-confidence secret material detected in repository files")
 
         risk_score = self._compute_risk_score(
             blocked_reasons=blocked_reasons,
+            hard_blocked_files=hard_blocked_files,
             suspicious_files=suspicious_files,
             prompt_injection_hits=prompt_injection_hits,
             secret_hits=secret_hits,
+            high_confidence_secret_hits=high_confidence_secret_hits,
+            soft_script_hits=soft_script_hits,
         )
 
         status = self._decide_status(
@@ -152,17 +203,21 @@ class RepositorySecurityService:
             "scanned_files": scanned_files,
             "risk_score": risk_score,
             "checks": {
-                "blocked_extensions": "failed" if blocked_reasons else "passed",
+                "blocked_extensions": "failed" if hard_blocked_files else "passed",
                 "prompt_injection_scan": "warning" if prompt_injection_hits else "passed",
-                "secret_scan": "warning" if secret_hits else "passed",
+                "secret_scan": "failed" if high_confidence_secret_hits else ("warning" if secret_hits else "passed"),
                 "size_policy": "warning" if oversized_files else "passed",
+                "script_review": "warning" if soft_script_hits else "passed",
             },
             "warnings": sorted(set(warnings)),
             "blocked_reasons": sorted(set(blocked_reasons)),
             "details": {
+                "hard_blocked_files": hard_blocked_files,
                 "suspicious_files": suspicious_files,
-                "prompt_injection_hits": prompt_injection_hits,
-                "secret_hits": secret_hits,
+                "soft_script_hits": soft_script_hits,
+                "prompt_injection_hits": self._deduplicate_hits(prompt_injection_hits),
+                "secret_hits": self._filter_contextual_secret_hits(secret_hits),
+                "high_confidence_secret_hits": self._deduplicate_hits(high_confidence_secret_hits),
                 "oversized_files": oversized_files,
             },
         }
@@ -200,24 +255,71 @@ class RepositorySecurityService:
             "scanned_files": scan_result["scanned_files"],
         }
 
+    def _is_low_risk_path(self, rel_path: str) -> bool:
+        parts = {part.lower() for part in rel_path.replace("\\", "/").split("/")}
+        return any(part in self.LOW_RISK_DIRS for part in parts)
+
+    def _filter_contextual_secret_hits(self, hits: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        filtered: List[Dict[str, str]] = []
+        for hit in self._deduplicate_hits(hits):
+            file_path = hit["file"]
+            # On garde tout dans le détail, mais le scoring sera plus faible pour docs/tests/examples
+            filtered.append({
+                **hit,
+                "context": "low_risk_area" if self._is_low_risk_path(file_path) else "normal_area",
+            })
+        return filtered
+
     @staticmethod
+    def _deduplicate_hits(hits: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        seen = set()
+        deduped = []
+        for hit in hits:
+            key = (hit.get("file"), hit.get("pattern"))
+            if key not in seen:
+                seen.add(key)
+                deduped.append(hit)
+        return deduped
+
     def _compute_risk_score(
+        self,
         blocked_reasons: List[str],
+        hard_blocked_files: List[str],
         suspicious_files: List[str],
         prompt_injection_hits: List[Dict[str, str]],
         secret_hits: List[Dict[str, str]],
+        high_confidence_secret_hits: List[Dict[str, str]],
+        soft_script_hits: List[str],
     ) -> int:
         score = 0
+
+        # Hard blocks = score élevé
         score += len(blocked_reasons) * 50
-        score += len(suspicious_files) * 10
-        score += len(prompt_injection_hits) * 15
-        score += len(secret_hits) * 20
+        score += len(hard_blocked_files) * 40
+        score += len(high_confidence_secret_hits) * 50
+
+        # Scripts = léger warning
+        score += len(soft_script_hits) * 2
+
+        # Sensitive filenames = warning léger
+        score += len(suspicious_files) * 5
+
+        # Prompt injection = plus sérieux
+        score += len(prompt_injection_hits) * 12
+
+        # Secret-like patterns = dépend du contexte
+        for hit in self._deduplicate_hits(secret_hits):
+            if self._is_low_risk_path(hit["file"]):
+                score += 2
+            else:
+                score += 10
+
         return min(score, 100)
 
     @staticmethod
     def _decide_status(blocked_reasons: List[str], risk_score: int) -> str:
         if blocked_reasons:
             return "blocked"
-        if risk_score >= 40:
+        if risk_score >= 20:
             return "safe_with_warnings"
         return "safe"
