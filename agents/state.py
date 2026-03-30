@@ -6,7 +6,8 @@ class OrchestratorState(TypedDict, total=False):
     repo_url: Optional[str]
     repository_visibility: Optional[str]
     github_token: Optional[str]
-    
+    approved_artifacts: Optional[List[str]]
+
     status: str
     logs: List[Dict[str, str]]
 
@@ -15,7 +16,9 @@ class OrchestratorState(TypedDict, total=False):
     repo_summary: Optional[Dict[str, Any]]
     file_tree: Optional[List[str]]
     important_files: Optional[List[str]]
-    code_chunks: Optional[List[Dict[str, Any]]]
+    key_entrypoints: Optional[List[str]]
+    categorized_files: Optional[Dict[str, Any]]
+    chunks: Optional[List[Dict[str, Any]]]
     agent_context: Optional[Dict[str, Any]]
 
     plan: Optional[Dict[str, Any]]

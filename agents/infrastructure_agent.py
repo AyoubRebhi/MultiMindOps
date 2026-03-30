@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from agents.base_agent import BaseAgent
 from backend.app.services.llm_service import LLMService
@@ -15,6 +15,7 @@ class InfrastructureAgent(BaseAgent):
         prompt: str,
         plan: Dict[str, Any],
         infrastructure_context: Dict[str, Any] | None = None,
+        approved_artifacts: List[str] | None = None,
     ) -> Dict[str, Any]:
         user_prompt = f"""
 User task:
@@ -25,6 +26,9 @@ Execution plan:
 
 Infrastructure context:
 {infrastructure_context or {}}
+
+Approved artifacts to generate:
+{approved_artifacts or []}
 """.strip()
 
         return self.llm.chat_json(

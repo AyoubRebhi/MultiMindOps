@@ -11,6 +11,29 @@ class TaskCreate(BaseModel):
     github_token: Optional[str] = None
 
 
+class PlanPreviewRequest(BaseModel):
+    prompt: str
+    repo_url: Optional[str] = None
+    repository_visibility: str = "public"
+    github_token: Optional[str] = None
+
+
+class GenerateArtifactsRequest(BaseModel):
+    prompt: str
+    repo_url: Optional[str] = None
+    repository_visibility: str = "public"
+    github_token: Optional[str] = None
+    approved_artifacts: List[str] = []
+
+
+class PlanPreviewResponse(BaseModel):
+    status: str
+    plan: Optional[Any] = None
+    repository_security: Optional[Any] = None
+    repo_summary: Optional[Any] = None
+    logs: List[Any] = []
+
+
 class TaskResponse(BaseModel):
     id: str
     prompt: str

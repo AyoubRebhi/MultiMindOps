@@ -40,6 +40,9 @@ class CodebaseAnalysisAgent(BaseAgent):
                 "repo_summary": None,
                 "file_tree": None,
                 "important_files": None,
+                "key_entrypoints": None,
+                "categorized_files": None,
+                "chunks": None,
                 "agent_context": None,
             }
 
@@ -53,5 +56,8 @@ class CodebaseAnalysisAgent(BaseAgent):
             "repo_summary": parsed_repo.get("project_summary"),
             "file_tree": parsed_repo.get("file_tree"),
             "important_files": parsed_repo.get("important_files"),
+            "key_entrypoints": parsed_repo.get("key_entrypoints"),
+            "categorized_files": parsed_repo.get("categorized_files"),
+            "chunks": parsed_repo.get("chunks"),
             "agent_context": agent_context,
         }

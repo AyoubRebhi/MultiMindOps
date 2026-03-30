@@ -131,6 +131,9 @@ class OrchestratorAgent(BaseAgent):
             "repo_summary": analysis.get("repo_summary"),
             "file_tree": analysis.get("file_tree"),
             "important_files": analysis.get("important_files"),
+            "key_entrypoints": analysis.get("key_entrypoints"),
+            "categorized_files": analysis.get("categorized_files"),
+            "chunks": analysis.get("chunks"),
             "agent_context": analysis.get("agent_context"),
             "logs": logs,
         }
@@ -162,6 +165,7 @@ class OrchestratorAgent(BaseAgent):
             prompt=state["prompt"],
             plan=state["plan"],  # type: ignore[index]
             infrastructure_context=infrastructure_context,
+            approved_artifacts=state.get("approved_artifacts"),
         )
 
         logs = list(state.get("logs", []))
@@ -177,12 +181,56 @@ class OrchestratorAgent(BaseAgent):
             "infra": infra,
             "logs": logs,
         }
+    def _filter_generated_artifacts(self, state: OrchestratorState) -> OrchestratorState:
+        approved = set(state.get("approved_artifacts") or [])
+        infra = state.get("infra") or {}
 
+        artifacts = infra.get("artifacts", {})
+        generated = infra.get("generated_artifacts", [])
+
+        artifact_key_to_file = {
+            "dockerfile": "Dockerfile",
+            "dockerignore": ".dockerignore",
+            "docker_compose": "docker-compose.yml",
+            "env_example": ".env.example",
+            "build_script": "scripts/build.sh",
+            "deploy_script": "scripts/deploy.sh",
+            "test_script": "scripts/test.sh",
+            "security_scan_config": ".github/workflows/security-scan.yml",
+            "readme_snippet": "README_infrastructure.md",
+        }
+
+        filtered_artifacts = {}
+        filtered_generated = []
+
+        for key, content in artifacts.items():
+            file_name = artifact_key_to_file.get(key)
+            if file_name and file_name in approved:
+                filtered_artifacts[key] = content
+                filtered_generated.append(file_name)
+
+        # si le LLM a déclaré generated_artifacts, on peut aussi intersecter proprement
+        filtered_generated = sorted(set(filtered_generated) & approved)
+
+        infra["artifacts"] = filtered_artifacts
+        infra["generated_artifacts"] = filtered_generated
+
+        logs = list(state.get("logs", []))
+        logs.append({
+            "step": "artifact_filtering",
+            "message": f"{len(filtered_generated)} artifacts kept after filtering"
+        })
+
+        return {
+            **state,
+            "infra": infra,
+            "logs": logs,
+        }
     def _artifact_validation_node(self, state: OrchestratorState) -> OrchestratorState:
         plan = state.get("plan") or {}
         infra = state.get("infra") or {}
 
-        required_artifacts = plan.get("required_artifacts", [])
+        required_artifacts = plan.get("approved_artifacts") or plan.get("required_artifacts", [])
         generated_artifacts = infra.get("generated_artifacts", [])
 
         missing_artifacts = [
@@ -324,3 +372,80 @@ class OrchestratorAgent(BaseAgent):
             "error_message": None,
         }
         return self.graph.invoke(initial_state)
+    
+    def run_plan_preview(
+        self,
+        prompt: str,
+        repo_url: str | None = None,
+        repository_visibility: str = "public",
+        github_token: str | None = None,
+    ) -> dict:
+        state: OrchestratorState = {
+            "prompt": prompt,
+            "repo_url": repo_url,
+            "repository_visibility": repository_visibility,
+            "github_token": github_token,
+            "approved_artifacts": None,
+            "status": "pending",
+            "logs": [],
+            "repository_security": None,
+            "repo_summary": None,
+            "file_tree": None,
+            "important_files": None,
+            "agent_context": None,
+            "plan": None,
+            "infra": None,
+            "validation": None,
+            "result": None,
+            "error_message": None,
+        }
+
+        state = self._initialize_node(state)
+
+        if repo_url:
+            state = self._analyze_repository_node(state)
+            security_result = state.get("repository_security") or {}
+            if security_result.get("status") == "blocked":
+                state["status"] = "blocked"
+                return state
+
+        state = self._planner_node(state)
+        state["status"] = "awaiting_user_review"
+        state["logs"] = list(state.get("logs", [])) + [
+            {
+                "step": "awaiting_user_review",
+                "message": "Waiting for user approval of required artifacts",
+            }
+        ]
+        return state
+
+    def run_generation(
+        self,
+        prompt: str,
+        approved_artifacts: list[str],
+        repo_url: str | None = None,
+        repository_visibility: str = "public",
+        github_token: str | None = None,
+    ) -> dict:
+        preview_state = self.run_plan_preview(
+            prompt=prompt,
+            repo_url=repo_url,
+            repository_visibility=repository_visibility,
+            github_token=github_token,
+        )
+
+        if preview_state.get("status") == "blocked":
+            return preview_state
+
+        preview_state["approved_artifacts"] = approved_artifacts
+
+        plan = preview_state.get("plan") or {}
+        plan["approved_artifacts"] = approved_artifacts
+        preview_state["plan"] = plan
+
+        preview_state = self._infrastructure_node(preview_state)
+        preview_state = self._filter_generated_artifacts(preview_state)
+        preview_state = self._artifact_validation_node(preview_state)
+        preview_state = self._finalize_node(preview_state)
+
+        return preview_state
