@@ -3,13 +3,13 @@ from typing import Any, Dict
 
 class ContextBuilderService:
     def build_agent_context(self, parsed_repo: Dict[str, Any]) -> Dict[str, Any]:
-        summary = parsed_repo.get("project_summary", {})
-        stack = parsed_repo.get("detected_stack", {})
-        key_files = parsed_repo.get("key_files_content", {})
-        important_files = parsed_repo.get("important_files", [])
-        chunks = parsed_repo.get("chunks", [])
-        key_entrypoints = parsed_repo.get("key_entrypoints", [])
-        categorized_files = parsed_repo.get("categorized_files", {})
+        summary = parsed_repo.get("project_summary") or {}
+        stack = parsed_repo.get("detected_stack") or {}
+        key_files = parsed_repo.get("key_files_content") or {}
+        important_files = parsed_repo.get("important_files") or []
+        chunks = parsed_repo.get("chunks") or []
+        key_entrypoints = parsed_repo.get("key_entrypoints") or []
+        categorized_files = parsed_repo.get("categorized_files") or {}
 
         planner_context = {
             "project_summary": summary,
@@ -36,7 +36,7 @@ class ContextBuilderService:
             "relevant_chunks": [
                 chunk for chunk in chunks
                 if chunk.get("category") in {"infrastructure", "deployment", "dependencies", "source_code"}
-            ][:20],
+            ][:10],
         }
 
         security_context = {
@@ -47,7 +47,7 @@ class ContextBuilderService:
             "relevant_chunks": [
                 chunk for chunk in chunks
                 if chunk.get("category") in {"dependencies", "infrastructure", "ci_cd", "source_code"}
-            ][:20],
+            ][:10],
         }
 
         cicd_context = {
@@ -59,7 +59,7 @@ class ContextBuilderService:
             "relevant_chunks": [
                 chunk for chunk in chunks
                 if chunk.get("category") in {"ci_cd", "deployment", "dependencies", "source_code"}
-            ][:20],
+            ][:10],
         }
 
         return {

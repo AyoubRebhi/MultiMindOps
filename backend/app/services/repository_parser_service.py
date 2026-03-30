@@ -63,7 +63,7 @@ class RepositoryParserService:
             ),
         }
 
-    def _build_file_tree(self, repo: Path, max_files: int = 500) -> List[str]:
+    def _build_file_tree(self, repo: Path, max_files: int = 250) -> List[str]:
         file_tree: List[str] = []
 
         for path in repo.rglob("*"):
@@ -96,7 +96,7 @@ class RepositoryParserService:
                 elif rel_path.startswith(".github/workflows/"):
                     found.append(rel_path)
 
-        return sorted(set(found))
+        return sorted(set(found))[:120]
 
     def _categorize_files(self, file_tree: List[str]) -> Dict[str, List[str]]:
         infra_files = []
@@ -252,7 +252,7 @@ class RepositoryParserService:
 
         return sorted(set(entrypoint_candidates))[:20]
 
-    def _read_key_files(self, repo: Path, important_files: List[str], max_chars: int = 1500) -> Dict[str, str]:
+    def _read_key_files(self, repo: Path, important_files: List[str], max_chars: int = 1000) -> Dict[str, str]:
         contents: Dict[str, str] = {}
 
         priority_files = [
@@ -273,7 +273,7 @@ class RepositoryParserService:
                 selected_files.append(pf)
 
         for rel_path in important_files:
-            if rel_path not in selected_files and len(selected_files) < 15:
+            if rel_path not in selected_files and len(selected_files) < 10:
                 selected_files.append(rel_path)
 
         for rel_path in selected_files:

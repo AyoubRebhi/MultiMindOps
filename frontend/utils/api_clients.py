@@ -15,8 +15,20 @@ def preview_plan(
         "repository_visibility": repository_visibility,
         "github_token": github_token,
     }
-    response = requests.post(f"{API_BASE}/tasks/plan-preview", json=payload, timeout=300)
-    response.raise_for_status()
+
+    response = requests.post(
+        f"{API_BASE}/tasks/plan-preview",
+        json=payload,
+        timeout=300,
+    )
+
+    if not response.ok:
+        try:
+            detail = response.json()
+        except Exception:
+            detail = response.text
+        raise Exception(f"Backend error {response.status_code}: {detail}")
+
     return response.json()
 
 

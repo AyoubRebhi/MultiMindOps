@@ -85,8 +85,10 @@ def plan_preview(payload: PlanPreviewRequest):
             "logs": state.get("logs", []),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Plan preview failed: {str(e)}")
-    
+        raise HTTPException(
+            status_code=500,
+            detail=f"Plan preview failed: {type(e).__name__}: {str(e)}"
+        ) 
 @router.post("/generate", response_model=TaskResponse)
 def generate_artifacts(payload: GenerateArtifactsRequest, db: Session = Depends(get_db)):
     task = TaskService.create_task(db, payload.prompt)

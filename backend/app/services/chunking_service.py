@@ -23,12 +23,16 @@ class ChunkingService:
         self,
         repo_path: str,
         file_paths: List[str],
-        max_chars_per_chunk: int = 1500,
+        max_chars_per_chunk: int = 1200,
+        max_total_chunks: int = 60,
     ) -> List[Dict[str, Any]]:
         repo = Path(repo_path)
         chunks: List[Dict[str, Any]] = []
 
         for rel_path in file_paths:
+            if len(chunks) >= max_total_chunks:
+                break
+
             path = repo / rel_path
             if not path.exists() or not path.is_file():
                 continue
@@ -51,6 +55,9 @@ class ChunkingService:
                 continue
 
             for idx, chunk_text in enumerate(self._split_text(content, max_chars_per_chunk)):
+                if len(chunks) >= max_total_chunks:
+                    break
+
                 chunks.append(
                     {
                         "file_path": rel_path,
