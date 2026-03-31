@@ -2,11 +2,11 @@ import streamlit as st
 
 
 def render_repository_input():
-    st.subheader("Nouvelle tâche")
+    st.subheader("Nouvelle tache")
 
     prompt = st.text_area(
         "Task",
-        placeholder="Ex: Générer une infrastructure Docker/Kubernetes sécurisée pour ce projet",
+        placeholder="Ex: Generer une infrastructure Docker/Kubernetes securisee pour ce projet",
         height=150,
     )
 
@@ -28,7 +28,7 @@ def render_repository_input():
             "GitHub Personal Access Token",
             type="password",
             placeholder="ghp_xxxxxxxxxxxxxxxxxxxx",
-            help="Ce token est utilisé uniquement pour cloner le dépôt privé. Il n'est pas stocké.",
+            help="Ce token est utilise uniquement pour cloner le depot prive. Il n'est pas stocke.",
         )
 
     submitted = st.button("Lancer les agents")

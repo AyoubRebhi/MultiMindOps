@@ -20,13 +20,13 @@ def _render_security_section(repository_security: dict):
         st.markdown("### Security checks")
         for check_name, check_status in checks.items():
             if check_status == "passed":
-                st.write(f"✅ **{check_name}**: {check_status}")
+                st.write(f"[PASS] **{check_name}**: {check_status}")
             elif check_status == "warning":
-                st.write(f"⚠️ **{check_name}**: {check_status}")
+                st.write(f"[WARN] **{check_name}**: {check_status}")
             elif check_status == "failed":
-                st.write(f"❌ **{check_name}**: {check_status}")
+                st.write(f"[FAIL] **{check_name}**: {check_status}")
             else:
-                st.write(f"ℹ️ **{check_name}**: {check_status}")
+                st.write(f"[INFO] **{check_name}**: {check_status}")
 
     warnings = repository_security.get("warnings", [])
     if warnings:

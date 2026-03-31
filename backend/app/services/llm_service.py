@@ -9,6 +9,11 @@ from backend.app.core.config import settings
 
 class LLMService:
     def __init__(self) -> None:
+        if not settings.GROQ_API_KEY:
+            raise ValueError(
+                "GROQ_API_KEY is not configured. Set it in your environment or .env file."
+            )
+
         self.client = OpenAI(
             api_key=settings.GROQ_API_KEY,
             base_url="https://api.groq.com/openai/v1",

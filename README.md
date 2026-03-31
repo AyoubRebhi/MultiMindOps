@@ -1,221 +1,117 @@
-# 🚀 DevSecOps AI Platform
+# DevSecOps AI Platform
 
-## 📌 Overview
+## Overview
 
-DevSecOps AI Platform is an intelligent platform designed to automate and orchestrate DevSecOps workflows using AI-powered agents.
+DevSecOps AI Platform is a prototype that uses AI agents to analyze a repository,
+prepare a DevSecOps plan, and generate infrastructure artifacts after user review.
 
-The system leverages a **multi-agent architecture** to analyze user requests, generate execution plans, and simulate DevOps pipelines including CI/CD, containerization, security scanning, deployment, and monitoring.
+The application currently includes:
 
----
+- a FastAPI backend
+- a Streamlit frontend
+- a LangGraph-based orchestration layer
+- PostgreSQL persistence for tasks, logs, plans, and results
 
-## 🧠 Architecture
+## Architecture
 
-The platform follows a modular architecture:
-
-```
+```text
 devsecops-ai-platform/
-│
-├── backend/              # FastAPI backend
-│   ├── app/
-│   │   ├── api/          # API routes
-│   │   ├── core/         # Configurations
-│   │   ├── database/     # DB setup
-│   │   ├── models/       # SQLAlchemy models
-│   │   ├── schemas/      # Pydantic schemas
-│   │   ├── services/     # Business logic
-│   │   └── main.py       # Entry point
-│
-├── agents/               # AI Agents system
-│   ├── base_agent.py
-│   ├── planner_agent.py
-│   ├── orchestrator_agent.py
-│
-├── infrastructure/       # Docker configuration
-│   └── docker-compose.yml
-│
-├── .env.example
-├── requirements.txt
-└── README.md
+|-- backend/                 FastAPI application
+|   |-- app/
+|   |   |-- api/             API routes
+|   |   |-- core/            settings and app factory
+|   |   |-- database/        SQLAlchemy setup
+|   |   |-- models/          database models
+|   |   |-- schemas/         request and response schemas
+|   |   |-- services/        business logic and integrations
+|   |   `-- main.py          ASGI entry point
+|-- frontend/                Streamlit user interface
+|-- agents/                  planner, analysis, and infrastructure agents
+|-- prompts/                 system prompts used by agents
+|-- infrastructure/          Docker Compose setup
+`-- workspace/               temporary cloned repositories
 ```
 
----
+## Runtime flow
 
-## ⚙️ Tech Stack
+1. The user submits a prompt from the Streamlit frontend.
+2. The backend optionally clones and scans a GitHub repository.
+3. The orchestrator builds repository context and asks the planner for a plan.
+4. The frontend shows the required artifacts for user approval.
+5. The backend generates only the approved artifacts and stores the result.
+
+## Main components
 
 ### Backend
 
-* FastAPI
-* SQLAlchemy
-* PostgreSQL
-* Pydantic
+- Entry point: `backend.app.main:app`
+- App factory: `backend/app/core/app_factory.py`
+- Task routes: `backend/app/api/routes/tasks.py`
 
-### DevOps
+### Agents
 
-* Docker
-* Docker Compose
+- `OrchestratorAgent`: drives the workflow
+- `CodebaseAnalysisAgent`: clones, scans, and parses repositories
+- `PlannerAgent`: creates the execution plan
+- `InfrastructureAgent`: generates infrastructure artifacts
 
-### AI / Agents (Sprint 1)
+### Database
 
-* Rule-based Planner Agent
-* Orchestrator Agent
+The project is configured for PostgreSQL.
 
----
+The `tasks` table stores:
 
-## 🤖 Multi-Agent System
+- task metadata
+- execution status
+- generated plan
+- workflow logs
+- final result
+- error details
 
-### 🔹 Planner Agent
+## API endpoints
 
-Transforms user prompts into structured DevOps execution plans.
+- `GET /`
+- `GET /health/`
+- `POST /tasks/`
+- `GET /tasks/`
+- `GET /tasks/{task_id}`
+- `POST /tasks/plan-preview`
+- `POST /tasks/generate`
 
-Example output:
+## Configuration
 
-* CI/CD pipeline generation
-* Dockerfile creation
-* Kubernetes manifests
-* Security scanning steps
-* Deployment and monitoring
+Environment variables are loaded from `.env`.
 
----
+Important variables:
 
-### 🔹 Orchestrator Agent
+- `DATABASE_URL`
+- `GROQ_API_KEY`
+- `GROQ_MODEL`
 
-Coordinates agents and manages execution flow:
+Do not hardcode secrets in source files. Use local environment variables or `.env`.
 
-* Receives user request
-* Calls Planner Agent
-* Returns structured result
+## Local run
 
----
+### Backend
 
-## 🗄️ Database
-
-PostgreSQL is used for persistent storage.
-
-### Table: `tasks`
-
-| Field         | Description                      |
-| ------------- | -------------------------------- |
-| id            | Unique task ID (UUID)            |
-| prompt        | User request                     |
-| status        | Task status                      |
-| plan          | Generated execution plan (JSONB) |
-| logs          | Execution logs (JSONB)           |
-| result        | Final result (JSONB)             |
-| error_message | Error details                    |
-| created_at    | Timestamp                        |
-| updated_at    | Timestamp                        |
-
----
-
-## 🔌 API Endpoints
-
-### Root
-
-```
-GET /
+```bash
+uvicorn backend.app.main:app --reload
 ```
 
-### Health Check
+### Frontend
 
-```
-GET /health/
-```
-
-### Create Task
-
-```
-POST /tasks/
+```bash
+streamlit run frontend/app.py
 ```
 
-Request:
-
-```json
-{
-  "prompt": "Deploy a FastAPI app with Docker and CI/CD"
-}
-```
-
----
-
-### Get Task
-
-```
-GET /tasks/{task_id}
-```
-
----
-
-### List Tasks
-
-```
-GET /tasks/
-```
-
----
-
-## 🐳 Docker Usage
-
-### Build & Run
+### Docker
 
 ```bash
 docker compose -f infrastructure/docker-compose.yml up --build
 ```
 
----
+## Notes
 
-### Services
-
-* Backend → http://localhost:8000
-* PostgreSQL → port 5432
-
----
-
-## 🧪 Testing
-
-### Swagger UI
-
-```
-http://localhost:8000/docs
-```
-
----
-
-### Example Request
-
-```bash
-curl -X POST http://127.0.0.1:8000/tasks/ \
--H "Content-Type: application/json" \
--d '{"prompt":"Deploy FastAPI with Docker and Kubernetes"}'
-```
-
----
-
-## 📊 Features (Sprint 1)
-
-* FastAPI backend
-* PostgreSQL integration
-* Task management system
-* Multi-agent orchestration
-* Execution plan generation
-* JSONB logging system
-* Dockerized infrastructure
-
----
-
-## 🚧 Future Improvements
-
-* Integration with LLMs (OpenAI / LangChain)
-* CI/CD pipeline generation
-* Security agent (DevSecOps scanning)
-* Kubernetes deployment automation
-* Monitoring and alerting
-* Frontend dashboard
-
----
-
-## 👨‍💻 Author
-
-Ayoub Rebhi
-DevSecOps AI Platform — PFE Project
-
----
+- Repository analysis only accepts `github.com` URLs.
+- Private repositories require a GitHub token at request time.
+- Cloned repositories are stored temporarily under `workspace/repos`.
