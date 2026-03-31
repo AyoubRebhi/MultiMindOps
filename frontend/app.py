@@ -4,11 +4,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 
+from frontend.components.artifact_editor import render_artifact_editor
 from frontend.components.artifact_review import render_artifact_review
 from frontend.components.repository_input import render_repository_input
 from frontend.components.task_logs import render_task_logs
 from frontend.components.task_result import render_task_result
-from frontend.utils.api_clients import generate_artifacts, preview_plan
+from frontend.utils.api_clients import (
+    generate_artifacts,
+    preview_plan,
+    review_generated_artifacts,
+)
 
 st.set_page_config(page_title="DevSecOps AI Platform", layout="wide")
 st.title("DevSecOps AI Platform - Sprint 2 Prototype")
@@ -66,3 +71,17 @@ if st.session_state.task_response:
     task = st.session_state.task_response
     render_task_logs(task.get("logs", []))
     render_task_result(task)
+
+    human_review = (task.get("result") or {}).get("human_review") or {}
+    if human_review.get("status") == "awaiting_review":
+        reviewed_artifacts, review_notes, approve_clicked = render_artifact_editor(task)
+
+        if approve_clicked:
+            with st.spinner("Saving human review..."):
+                updated_task = review_generated_artifacts(
+                    task_id=task["id"],
+                    reviewed_artifacts=reviewed_artifacts,
+                    review_notes=review_notes,
+                )
+                st.session_state.task_response = updated_task
+                st.rerun()

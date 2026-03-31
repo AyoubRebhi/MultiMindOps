@@ -86,6 +86,35 @@ def _render_validation_section(validation: dict):
             st.error(artifact)
 
 
+def _render_human_review_section(human_review: dict):
+    st.subheader("Human Review Status")
+
+    status = human_review.get("status", "unknown")
+    if status == "awaiting_review":
+        st.info("Waiting for human approval or corrections.")
+    elif status == "approved_with_changes":
+        st.warning("Approved after manual corrections.")
+    elif status == "approved":
+        st.success("Approved without manual changes.")
+    else:
+        st.info(f"Review status: {status}")
+
+    changed_artifacts = human_review.get("changed_artifacts", [])
+    if changed_artifacts:
+        st.markdown("### Manually updated artifacts")
+        for artifact in changed_artifacts:
+            st.write(f"- {artifact}")
+
+    review_notes = human_review.get("review_notes")
+    if review_notes:
+        st.markdown("### Review notes")
+        st.write(review_notes)
+
+    reviewed_at = human_review.get("reviewed_at")
+    if reviewed_at:
+        st.caption(f"Reviewed at: {reviewed_at}")
+
+
 def _render_plan_section(plan: dict):
     st.subheader("Execution Plan")
 
@@ -167,6 +196,10 @@ def render_task_result(task: dict):
     validation = result.get("validation") or {}
     if validation:
         _render_validation_section(validation)
+
+    human_review = result.get("human_review") or {}
+    if human_review:
+        _render_human_review_section(human_review)
 
     plan = result.get("plan") or task.get("plan") or {}
     if plan:

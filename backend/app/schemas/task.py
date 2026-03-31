@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -24,6 +24,11 @@ class GenerateArtifactsRequest(BaseModel):
     repository_visibility: str = "public"
     github_token: Optional[str] = None
     approved_artifacts: List[str] = []
+
+
+class ReviewArtifactsRequest(BaseModel):
+    reviewed_artifacts: Dict[str, str]
+    review_notes: Optional[str] = None
 
 
 class PlanPreviewResponse(BaseModel):

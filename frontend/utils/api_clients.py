@@ -49,3 +49,21 @@ def generate_artifacts(
     response = requests.post(f"{API_BASE}/tasks/generate", json=payload, timeout=300)
     response.raise_for_status()
     return response.json()
+
+
+def review_generated_artifacts(
+    task_id: str,
+    reviewed_artifacts: dict[str, str],
+    review_notes: str | None = None,
+):
+    payload = {
+        "reviewed_artifacts": reviewed_artifacts,
+        "review_notes": review_notes,
+    }
+    response = requests.post(
+        f"{API_BASE}/tasks/{task_id}/review",
+        json=payload,
+        timeout=300,
+    )
+    response.raise_for_status()
+    return response.json()

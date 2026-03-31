@@ -9,6 +9,7 @@ from backend.app.schemas.task import (
     GenerateArtifactsRequest,
     PlanPreviewRequest,
     PlanPreviewResponse,
+    ReviewArtifactsRequest,
 )
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
@@ -115,9 +116,68 @@ def generate_artifacts(payload: GenerateArtifactsRequest, db: Session = Depends(
         if workflow_state.get("result"):
             TaskService.save_result(db, task, workflow_state["result"])
 
-        TaskService.update_task_status(db, task, workflow_state.get("status", "completed"))
+        if workflow_state.get("result", {}).get("infrastructure", {}).get("artifacts"):
+            TaskService.initialize_human_review(db, task)
+            TaskService.append_log(
+                db,
+                task,
+                "human_review",
+                "Artifacts saved and waiting for human approval",
+            )
+        else:
+            TaskService.update_task_status(db, task, workflow_state.get("status", "completed"))
         return task
 
     except Exception as e:
         TaskService.save_error(db, task, str(e))
         raise HTTPException(status_code=500, detail=f"Artifact generation failed: {str(e)}")
+
+
+@router.post("/{task_id}/review", response_model=TaskResponse)
+def review_artifacts(
+    task_id: str,
+    payload: ReviewArtifactsRequest,
+    db: Session = Depends(get_db),
+):
+    task = TaskService.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    result = task.result or {}
+    human_review = result.get("human_review") or {}
+    infrastructure = result.get("infrastructure") or {}
+    original_artifacts = (
+        human_review.get("original_artifacts")
+        or infrastructure.get("artifacts")
+        or {}
+    )
+
+    if not original_artifacts:
+        raise HTTPException(
+            status_code=400,
+            detail="No generated artifacts are available for review on this task.",
+        )
+
+    if not payload.reviewed_artifacts:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one artifact must be provided for review.",
+        )
+
+    try:
+        TaskService.apply_human_review(
+            db,
+            task,
+            reviewed_artifacts=payload.reviewed_artifacts,
+            review_notes=payload.review_notes,
+        )
+        TaskService.append_log(
+            db,
+            task,
+            "human_review_completed",
+            "User approved the generated artifacts after review",
+        )
+        return task
+    except Exception as e:
+        TaskService.save_error(db, task, str(e))
+        raise HTTPException(status_code=500, detail=f"Artifact review failed: {str(e)}")

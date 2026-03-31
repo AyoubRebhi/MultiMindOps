@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -57,6 +58,69 @@ class TaskService:
     @staticmethod
     def save_result(db: Session, task: Task, result: dict) -> Task:
         task.result = result
+        db.commit()
+        db.refresh(task)
+        return task
+
+    @staticmethod
+    def initialize_human_review(db: Session, task: Task) -> Task:
+        result = dict(task.result or {})
+        infrastructure = dict(result.get("infrastructure") or {})
+        artifacts = dict(infrastructure.get("artifacts") or {})
+
+        if not artifacts:
+            return task
+
+        result["status"] = "awaiting_human_review"
+        result["human_review"] = {
+            "status": "awaiting_review",
+            "original_artifacts": artifacts,
+            "reviewed_artifacts": artifacts,
+            "changed_artifacts": [],
+            "review_notes": None,
+            "reviewed_at": None,
+        }
+
+        task.result = result
+        task.status = "awaiting_human_review"
+        db.commit()
+        db.refresh(task)
+        return task
+
+    @staticmethod
+    def apply_human_review(
+        db: Session,
+        task: Task,
+        reviewed_artifacts: dict[str, str],
+        review_notes: str | None = None,
+    ) -> Task:
+        result = dict(task.result or {})
+        infrastructure = dict(result.get("infrastructure") or {})
+        human_review = dict(result.get("human_review") or {})
+        original_artifacts = dict(human_review.get("original_artifacts") or {})
+
+        changed_artifacts = sorted(
+            artifact_name
+            for artifact_name in set(original_artifacts) | set(reviewed_artifacts)
+            if original_artifacts.get(artifact_name) != reviewed_artifacts.get(artifact_name)
+        )
+
+        infrastructure["artifacts"] = reviewed_artifacts
+        result["infrastructure"] = infrastructure
+        result["status"] = (
+            "human_approved_with_changes" if changed_artifacts else "human_approved"
+        )
+        result["human_review"] = {
+            "status": "approved_with_changes" if changed_artifacts else "approved",
+            "original_artifacts": original_artifacts,
+            "reviewed_artifacts": reviewed_artifacts,
+            "changed_artifacts": changed_artifacts,
+            "review_notes": review_notes,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        task.result = result
+        task.status = result["status"]
         db.commit()
         db.refresh(task)
         return task
