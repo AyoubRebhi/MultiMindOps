@@ -84,6 +84,30 @@ class OrchestratorAgent(BaseAgent):
 
         logs = list(state.get("logs", []))
         security_result = analysis.get("security")
+        repository_analysis = analysis.get("repository_analysis") or {}
+        cache_status = repository_analysis.get("cache_status")
+
+        if cache_status == "reused":
+            logs.append(
+                {
+                    "step": "repository_registry",
+                    "message": "Existing repository analysis reused from cache",
+                }
+            )
+        elif cache_status == "recomputed_after_change":
+            logs.append(
+                {
+                    "step": "repository_registry",
+                    "message": "Repository changed since last analysis; analysis recomputed",
+                }
+            )
+        elif cache_status == "new_analysis":
+            logs.append(
+                {
+                    "step": "repository_registry",
+                    "message": "Repository analyzed for the first time and persisted",
+                }
+            )
 
         if security_result and security_result.get("status") == "blocked":
             logs.append(
@@ -128,6 +152,7 @@ class OrchestratorAgent(BaseAgent):
         return {
             **state,
             "repository_security": security_result,
+            "repository_analysis": repository_analysis,
             "repo_summary": analysis.get("repo_summary"),
             "file_tree": analysis.get("file_tree"),
             "important_files": analysis.get("important_files"),
@@ -296,6 +321,7 @@ class OrchestratorAgent(BaseAgent):
             "agent": self.name,
             "status": result_status,
             "repository_security": security_result,
+            "repository_analysis": state.get("repository_analysis"),
             "repo_summary": state.get("repo_summary"),
             "plan": state.get("plan"),
             "infrastructure": state.get("infra"),
@@ -361,6 +387,7 @@ class OrchestratorAgent(BaseAgent):
             "status": "pending",
             "logs": [],
             "repository_security": None,
+            "repository_analysis": None,
             "repo_summary": None,
             "file_tree": None,
             "important_files": None,
@@ -389,6 +416,7 @@ class OrchestratorAgent(BaseAgent):
             "status": "pending",
             "logs": [],
             "repository_security": None,
+            "repository_analysis": None,
             "repo_summary": None,
             "file_tree": None,
             "important_files": None,

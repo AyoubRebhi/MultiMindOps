@@ -160,7 +160,10 @@ class RepositorySecurityService:
 
             # High-confidence secrets
             for pattern in self.HIGH_CONFIDENCE_SECRET_PATTERNS:
-                if re.search(pattern, content, flags=re.IGNORECASE):
+                for match in re.finditer(pattern, content, flags=re.IGNORECASE):
+                    matched_value = match.group(0)
+                    if self._is_placeholder_secret(matched_value):
+                        continue
                     high_confidence_secret_hits.append({
                         "file": rel_path,
                         "pattern": pattern,
@@ -168,7 +171,10 @@ class RepositorySecurityService:
 
             # Generic secret-like patterns
             for pattern in self.SECRET_PATTERNS:
-                if re.search(pattern, content, flags=re.IGNORECASE):
+                for match in re.finditer(pattern, content, flags=re.IGNORECASE):
+                    matched_value = match.group(0)
+                    if self._is_placeholder_secret(matched_value):
+                        continue
                     secret_hits.append({
                         "file": rel_path,
                         "pattern": pattern,
@@ -269,6 +275,27 @@ class RepositorySecurityService:
                 "context": "low_risk_area" if self._is_low_risk_path(file_path) else "normal_area",
             })
         return filtered
+
+    @staticmethod
+    def _is_placeholder_secret(matched_value: str) -> bool:
+        normalized = matched_value.strip().strip("'\"").lower()
+        placeholder_markers = [
+            "xxxxxxxx",
+            "your_",
+            "example",
+            "placeholder",
+            "changeme",
+            "replace_me",
+        ]
+        if any(marker in normalized for marker in placeholder_markers):
+            return True
+
+        if normalized.startswith("ghp_"):
+            suffix = normalized[4:]
+            if suffix and len(set(suffix)) == 1:
+                return True
+
+        return False
 
     @staticmethod
     def _deduplicate_hits(hits: List[Dict[str, str]]) -> List[Dict[str, str]]:
