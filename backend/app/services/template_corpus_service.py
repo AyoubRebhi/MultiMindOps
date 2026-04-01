@@ -12,6 +12,17 @@ class SimpleHashEmbeddingFunction:
     def __call__(self, input: list[str]) -> list[list[float]]:
         return [self._embed(text) for text in input]
 
+    @staticmethod
+    def name() -> str:
+        return "simple_hash_embedding"
+
+    def get_config(self) -> dict[str, Any]:
+        return {"dimensions": self.dimensions}
+
+    @classmethod
+    def build_from_config(cls, config: dict[str, Any]) -> "SimpleHashEmbeddingFunction":
+        return cls(dimensions=int(config.get("dimensions", 128)))
+
     def _embed(self, text: str) -> list[float]:
         vector = [0.0] * self.dimensions
         tokens = re.findall(r"[a-zA-Z0-9_./:-]+", text.lower())
