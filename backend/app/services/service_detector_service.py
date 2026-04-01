@@ -17,14 +17,24 @@ class ServiceDetectorService:
 
         backend_entrypoint = self._find_backend_entrypoint(file_tree, key_files_content)
         if backend_entrypoint:
+            backend_framework = self._detect_framework(
+                backend_entrypoint,
+                key_files_content,
+                stack,
+            )
             services.append(
                 self._build_service(
                     name="backend",
                     service_type="api",
-                    framework=self._detect_framework(backend_entrypoint, key_files_content, stack),
+                    framework=backend_framework,
                     language=self._detect_language(backend_entrypoint),
                     entrypoint=backend_entrypoint,
-                    run_command=self._infer_run_command("backend", backend_entrypoint, commands),
+                    run_command=self._infer_run_command(
+                        "backend",
+                        backend_entrypoint,
+                        commands,
+                        backend_framework,
+                    ),
                     port=self._infer_port("backend", commands, backend_entrypoint),
                     environment_variables=environment_variables,
                     infrastructure_dependencies=infrastructure_dependencies,
@@ -33,14 +43,24 @@ class ServiceDetectorService:
 
         frontend_entrypoint = self._find_frontend_entrypoint(file_tree, key_files_content)
         if frontend_entrypoint:
+            frontend_framework = self._detect_framework(
+                frontend_entrypoint,
+                key_files_content,
+                stack,
+            )
             services.append(
                 self._build_service(
                     name="frontend",
                     service_type="web_ui",
-                    framework=self._detect_framework(frontend_entrypoint, key_files_content, stack),
+                    framework=frontend_framework,
                     language=self._detect_language(frontend_entrypoint),
                     entrypoint=frontend_entrypoint,
-                    run_command=self._infer_run_command("frontend", frontend_entrypoint, commands),
+                    run_command=self._infer_run_command(
+                        "frontend",
+                        frontend_entrypoint,
+                        commands,
+                        frontend_framework,
+                    ),
                     port=self._infer_port("frontend", commands, frontend_entrypoint),
                     environment_variables=environment_variables,
                     infrastructure_dependencies=infrastructure_dependencies,
@@ -144,11 +164,20 @@ class ServiceDetectorService:
             path
             for path in file_tree
             if path.endswith(("/app.py", "/app.tsx", "/app.jsx", "/main.tsx", "/main.jsx"))
-            or path in {"frontend/app.py", "frontend/app.tsx", "frontend/app.jsx", "package.json"}
+            or path in {
+                "frontend/app.py",
+                "frontend/app.tsx",
+                "frontend/app.jsx",
+                "package.json",
+                "frontend/package.json",
+            }
+            or path.endswith("/package.json")
         ]
         for candidate in candidates:
             content = key_files_content.get(candidate, "").lower()
             if "streamlit" in content or candidate.startswith("frontend/"):
+                return candidate
+            if candidate.endswith("/package.json") and "frontend" in candidate.lower():
                 return candidate
         return next((path for path in candidates if "frontend" in path.lower()), None)
 
@@ -215,13 +244,32 @@ class ServiceDetectorService:
             return "TypeScript"
         return "Unknown"
 
-    def _infer_run_command(self, service_name: str, entrypoint: str, commands: list[dict[str, Any]]) -> str | None:
-        matching_commands = [item["command"] for item in commands if item.get("service") == service_name]
+    def _infer_run_command(
+        self,
+        service_name: str,
+        entrypoint: str,
+        commands: list[dict[str, Any]],
+        framework: str | None = None,
+    ) -> str | None:
+        matching_commands = [item for item in commands if item.get("service") == service_name]
+        if service_name == "frontend":
+            preferred_frontend = next(
+                (
+                    item["command"]
+                    for item in matching_commands
+                    if item.get("script_name") in {"start", "dev"}
+                ),
+                None,
+            )
+            if preferred_frontend:
+                return preferred_frontend
         if matching_commands:
-            return matching_commands[0]
+            return matching_commands[0]["command"]
         if service_name == "backend":
             if entrypoint.endswith(".java"):
                 return "./mvnw spring-boot:run"
+            if framework == "Flask":
+                return f"python {Path(entrypoint).name}"
             module = entrypoint.replace("/", ".").replace(".py", "")
             return f"uvicorn {module}:app --host 0.0.0.0 --port 8000"
         if service_name == "frontend":

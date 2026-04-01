@@ -10,6 +10,9 @@ class InfrastructureArtifactBuilderService:
             "docker_compose": self.build_docker_compose(mapped_context),
             "env_example": self.build_env_example(mapped_context),
             "kubernetes_manifests": self.build_kubernetes_manifests(mapped_context),
+            "kubernetes_deployment": self.build_kubernetes_deployment(mapped_context),
+            "kubernetes_service": self.build_kubernetes_service(mapped_context),
+            "kubernetes_configmap": self.build_kubernetes_configmap(mapped_context),
             "terraform_main": self.build_terraform_main(mapped_context),
             "terraform_variables": self.build_terraform_variables(mapped_context),
             "terraform_outputs": self.build_terraform_outputs(mapped_context),
@@ -61,13 +64,15 @@ class InfrastructureArtifactBuilderService:
         port = main_service.get("port") or 8000
         run_command = main_service.get("run_command") or "python app.py"
         cmd = self._command_to_docker_cmd(run_command)
+        copy_instruction = self._python_dependency_copy_line(build_context, dependency_file)
+        install_instruction = self._python_install_line(dependency_file)
         lines = [
             "FROM python:3.11-slim",
             "",
             "WORKDIR /app",
             "",
-            f"COPY {dependency_file} ./{dependency_file.split('/')[-1]}" if build_context == "." else f"COPY {Path(dependency_file).name} ./{Path(dependency_file).name}",
-            f"RUN pip install --no-cache-dir -r {dependency_file.split('/')[-1]}",
+            copy_instruction,
+            install_instruction,
             "",
             "COPY . .",
             "",
@@ -185,50 +190,91 @@ class InfrastructureArtifactBuilderService:
     def build_kubernetes_manifests(self, mapped_context: dict[str, Any]) -> str:
         if not mapped_context.get("artifact_expectations", {}).get("needs_kubernetes"):
             return ""
+        parts = [
+            self.build_kubernetes_deployment(mapped_context),
+            self.build_kubernetes_service(mapped_context),
+            self.build_kubernetes_configmap(mapped_context),
+        ]
+        return "\n---\n".join(part for part in parts if part.strip())
+
+    def build_kubernetes_deployment(self, mapped_context: dict[str, Any]) -> str:
+        if not mapped_context.get("artifact_expectations", {}).get("needs_kubernetes"):
+            return ""
         main_service = mapped_context.get("main_service") or {}
         port = main_service.get("port") or 8000
         name = main_service.get("name") or "app"
-        return "\n---\n".join(
+        lines = [
+            "apiVersion: apps/v1",
+            "kind: Deployment",
+            "metadata:",
+            f"  name: {name}",
+            "spec:",
+            "  replicas: 1",
+            "  selector:",
+            "    matchLabels:",
+            f"      app: {name}",
+            "  template:",
+            "    metadata:",
+            "      labels:",
+            f"        app: {name}",
+            "    spec:",
+            "      containers:",
+            f"        - name: {name}",
+            f"          image: {name}:latest",
+            "          ports:",
+            f"            - containerPort: {port}",
+        ]
+        env_template = mapped_context.get("environment_template") or []
+        if env_template:
+            lines.extend(
+                [
+                    "          envFrom:",
+                    "            - configMapRef:",
+                    f"                name: {name}-config",
+                ]
+            )
+        return "\n".join(lines)
+
+    def build_kubernetes_service(self, mapped_context: dict[str, Any]) -> str:
+        if not mapped_context.get("artifact_expectations", {}).get("needs_kubernetes"):
+            return ""
+        main_service = mapped_context.get("main_service") or {}
+        port = main_service.get("port") or 8000
+        name = main_service.get("name") or "app"
+        return "\n".join(
             [
-                "\n".join(
-                    [
-                        "apiVersion: apps/v1",
-                        "kind: Deployment",
-                        "metadata:",
-                        f"  name: {name}",
-                        "spec:",
-                        "  replicas: 1",
-                        "  selector:",
-                        "    matchLabels:",
-                        f"      app: {name}",
-                        "  template:",
-                        "    metadata:",
-                        "      labels:",
-                        f"        app: {name}",
-                        "    spec:",
-                        "      containers:",
-                        f"        - name: {name}",
-                        f"          image: {name}:latest",
-                        "          ports:",
-                        f"            - containerPort: {port}",
-                    ]
-                ),
-                "\n".join(
-                    [
-                        "apiVersion: v1",
-                        "kind: Service",
-                        "metadata:",
-                        f"  name: {name}",
-                        "spec:",
-                        "  selector:",
-                        f"    app: {name}",
-                        "  ports:",
-                        f"    - port: {port}",
-                        f"      targetPort: {port}",
-                    ]
-                ),
+                "apiVersion: v1",
+                "kind: Service",
+                "metadata:",
+                f"  name: {name}",
+                "spec:",
+                "  selector:",
+                f"    app: {name}",
+                "  ports:",
+                "    - name: http",
+                f"      port: {port}",
+                f"      targetPort: {port}",
+                "  type: ClusterIP",
             ]
         )
+
+    def build_kubernetes_configmap(self, mapped_context: dict[str, Any]) -> str:
+        if not mapped_context.get("artifact_expectations", {}).get("needs_kubernetes"):
+            return ""
+        env_template = mapped_context.get("environment_template") or []
+        if not env_template:
+            return ""
+        name = (mapped_context.get("main_service") or {}).get("name") or "app"
+        lines = [
+            "apiVersion: v1",
+            "kind: ConfigMap",
+            "metadata:",
+            f"  name: {name}-config",
+            "data:",
+        ]
+        for item in env_template:
+            lines.append(f'  {item["name"]}: ""')
+        return "\n".join(lines)
 
     def build_terraform_main(self, mapped_context: dict[str, Any]) -> str:
         if not mapped_context.get("artifact_expectations", {}).get("needs_terraform"):
@@ -340,3 +386,23 @@ class InfrastructureArtifactBuilderService:
         if "streamlit run" in normalized:
             return 'CMD ["sh", "-c", "' + normalized.replace('"', '\\"') + '"]'
         return 'CMD ["sh", "-c", "' + normalized.replace('"', '\\"') + '"]'
+
+    def _python_dependency_copy_line(
+        self,
+        build_context: str,
+        dependency_file: str,
+    ) -> str:
+        file_name = Path(dependency_file).name
+        if build_context == ".":
+            return f"COPY {dependency_file} ./{file_name}"
+        return f"COPY {file_name} ./{file_name}"
+
+    def _python_install_line(self, dependency_file: str) -> str:
+        file_name = Path(dependency_file).name
+        if file_name.endswith(".txt"):
+            return f"RUN pip install --no-cache-dir -r {file_name}"
+        if file_name == "pyproject.toml":
+            return "RUN pip install --no-cache-dir ."
+        if file_name == "package.json":
+            return "RUN echo \"Frontend dependencies managed separately\""
+        return f"RUN pip install --no-cache-dir -r {file_name}"

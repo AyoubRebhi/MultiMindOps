@@ -18,6 +18,9 @@ class TemplateRetrievalService:
         "docker_compose": "docker_compose",
         "env_example": "env_example",
         "kubernetes_manifests": "kubernetes",
+        "kubernetes_deployment": "kubernetes",
+        "kubernetes_service": "kubernetes",
+        "kubernetes_configmap": "kubernetes",
         "terraform_main": "terraform",
         "terraform_variables": "terraform",
         "terraform_outputs": "terraform",
@@ -92,11 +95,15 @@ class TemplateRetrievalService:
 
             result = collection.query(
                 query_texts=[query_text],
-                n_results=rag_config.top_k,
+                n_results=max(rag_config.top_k * 2, rag_config.top_k),
                 where=where_filter,
                 include=["documents", "metadatas", "distances"],
             )
-            items = self._normalize_results(result)
+            items = self._rank_templates(
+                self._normalize_results(result),
+                mapped_context,
+                artifact_type,
+            )[: rag_config.top_k]
             if items:
                 retrievals[artifact_key] = {
                     "artifact_type": artifact_type,
@@ -158,3 +165,53 @@ class TemplateRetrievalService:
                 }
             )
         return items
+
+    def _rank_templates(
+        self,
+        templates: list[dict[str, Any]],
+        mapped_context: dict[str, Any],
+        artifact_type: str,
+    ) -> list[dict[str, Any]]:
+        framework = ((mapped_context.get("main_service") or {}).get("framework") or "").lower()
+        language = ((mapped_context.get("main_service") or {}).get("language") or "").lower()
+        dependencies = {
+            item["name"].lower()
+            for item in mapped_context.get("infrastructure_dependencies") or []
+        }
+
+        scored = []
+        for template in templates:
+            metadata = template.get("metadata") or {}
+            template_framework = str(metadata.get("framework") or "").lower()
+            template_language = str(metadata.get("language") or "").lower()
+            template_dependencies = {
+                item.strip().lower()
+                for item in str(metadata.get("dependencies") or "").split(",")
+                if item.strip()
+            }
+
+            score = 0
+            if framework and framework in template_framework:
+                score += 4
+            elif framework and template_framework not in {"", "generic"}:
+                score -= 3
+
+            if language and language in template_language:
+                score += 3
+            elif language and template_language not in {"", "generic"}:
+                score -= 2
+
+            if dependencies:
+                overlap = len(dependencies & template_dependencies)
+                score += overlap * 2
+                if template_dependencies and overlap == 0:
+                    score -= 1
+
+            if artifact_type == "security":
+                score += 1
+
+            scored.append((score, template))
+
+        scored.sort(key=lambda item: (item[0], -(item[1].get("distance") or 0)), reverse=True)
+        filtered = [template for score, template in scored if score >= 0]
+        return filtered or [template for _, template in scored[:1]]

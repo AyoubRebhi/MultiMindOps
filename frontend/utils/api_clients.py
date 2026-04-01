@@ -47,7 +47,12 @@ def generate_artifacts(
         "approved_artifacts": approved_artifacts,
     }
     response = requests.post(f"{API_BASE}/tasks/generate", json=payload, timeout=300)
-    response.raise_for_status()
+    if not response.ok:
+        try:
+            detail = response.json()
+        except Exception:
+            detail = response.text
+        raise Exception(f"Backend error {response.status_code}: {detail}")
     return response.json()
 
 
@@ -65,5 +70,10 @@ def review_generated_artifacts(
         json=payload,
         timeout=300,
     )
-    response.raise_for_status()
+    if not response.ok:
+        try:
+            detail = response.json()
+        except Exception:
+            detail = response.text
+        raise Exception(f"Backend error {response.status_code}: {detail}")
     return response.json()

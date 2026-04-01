@@ -250,6 +250,21 @@ class OrchestratorAgent(BaseAgent):
             "kubernetes_manifests": (
                 (artifact_targets.get("kubernetes") or ["kubernetes/app.yaml"])[0]
             ),
+            "kubernetes_deployment": self._find_target_path(
+                artifact_targets.get("kubernetes") or [],
+                "deployment.yaml",
+            )
+            or "kubernetes/deployment.yaml",
+            "kubernetes_service": self._find_target_path(
+                artifact_targets.get("kubernetes") or [],
+                "service.yaml",
+            )
+            or "kubernetes/service.yaml",
+            "kubernetes_configmap": self._find_target_path(
+                artifact_targets.get("kubernetes") or [],
+                "configmap.yaml",
+            )
+            or "kubernetes/configmap.yaml",
             "terraform_main": self._find_target_path(
                 artifact_targets.get("terraform") or [],
                 "main.tf",

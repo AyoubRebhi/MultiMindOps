@@ -95,8 +95,10 @@ Do not hardcode secrets in source files. Use local environment variables or `.en
 ### Backend
 
 ```bash
-uvicorn backend.app.main:app --reload
+python backend/run_dev.py
 ```
+
+This dev launcher keeps auto-reload enabled but excludes volatile runtime folders such as `workspace/repos` and `rag/chroma`, which prevents repository cloning or Chroma indexing from restarting the API mid-request.
 
 ### Frontend
 

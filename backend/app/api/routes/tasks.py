@@ -1,3 +1,5 @@
+import traceback
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -50,6 +52,7 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
         TaskService.update_task_status(db, task, workflow_state.get("status", "completed"))
 
     except Exception as e:
+        traceback.print_exc()
         TaskService.save_error(db, task, str(e))
         raise HTTPException(status_code=500, detail=f"Task processing failed: {str(e)}")
 
@@ -86,6 +89,7 @@ def plan_preview(payload: PlanPreviewRequest):
             "logs": state.get("logs", []),
         }
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Plan preview failed: {type(e).__name__}: {str(e)}"
@@ -129,6 +133,7 @@ def generate_artifacts(payload: GenerateArtifactsRequest, db: Session = Depends(
         return task
 
     except Exception as e:
+        traceback.print_exc()
         TaskService.save_error(db, task, str(e))
         raise HTTPException(status_code=500, detail=f"Artifact generation failed: {str(e)}")
 
@@ -179,5 +184,6 @@ def review_artifacts(
         )
         return task
     except Exception as e:
+        traceback.print_exc()
         TaskService.save_error(db, task, str(e))
         raise HTTPException(status_code=500, detail=f"Artifact review failed: {str(e)}")

@@ -8,3 +8,5 @@ python-dotenv
 langchain
 langgraph
 chromadb
+openai
+PyYAML

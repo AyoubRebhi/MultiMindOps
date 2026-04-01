@@ -12,6 +12,14 @@ class SimpleHashEmbeddingFunction:
     def __call__(self, input: list[str]) -> list[list[float]]:
         return [self._embed(text) for text in input]
 
+    def embed_query(self, input: list[str] | str) -> list[list[float]] | list[float]:
+        if isinstance(input, str):
+            return self._embed(input)
+        return [self._embed(text) for text in input]
+
+    def embed_documents(self, input: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in input]
+
     @staticmethod
     def name() -> str:
         return "simple_hash_embedding"

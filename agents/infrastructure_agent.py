@@ -36,19 +36,20 @@ class InfrastructureAgent(BaseAgent):
             mapped_context,
             self._requested_artifact_keys(mapped_context),
         )
+        compact_plan = self._compact_plan(plan)
+        compact_context = self._compact_mapped_context(mapped_context)
+        compact_rag = self._compact_rag_result(rag_result)
+        compact_fallback = self._compact_fallback_hints(fallback_artifacts)
 
         user_prompt = f"""
 User task:
 {prompt}
 
 Execution plan:
-{plan}
-
-Infrastructure context:
-{infrastructure_context or {}}
+{compact_plan}
 
 Mapped infrastructure context:
-{mapped_context}
+{compact_context}
 
 Repository context is the source of truth.
 Retrieved templates are guidance only and must be adapted to the repository.
@@ -57,10 +58,10 @@ Always adapt paths, ports, commands, variables, dependencies, and build context.
 Never inject real secrets.
 
 RAG retrieval result:
-{rag_result}
+{compact_rag}
 
 Deterministic artifact hints:
-{fallback_artifacts}
+{compact_fallback}
 
 Approved artifacts to generate:
 {approved_artifacts or []}
@@ -128,6 +129,33 @@ Approved artifacts to generate:
             fallback_used = fallback_used or artifact_fallback_used
             if fallback_reason:
                 fallback_reasons["kubernetes_manifests"] = fallback_reason
+            artifacts["kubernetes_deployment"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="kubernetes_deployment",
+                generated=artifacts.get("kubernetes_deployment"),
+                fallback=fallback_artifacts.get("kubernetes_deployment", ""),
+                rag_result=rag_result,
+            )
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["kubernetes_deployment"] = fallback_reason
+            artifacts["kubernetes_service"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="kubernetes_service",
+                generated=artifacts.get("kubernetes_service"),
+                fallback=fallback_artifacts.get("kubernetes_service", ""),
+                rag_result=rag_result,
+            )
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["kubernetes_service"] = fallback_reason
+            artifacts["kubernetes_configmap"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="kubernetes_configmap",
+                generated=artifacts.get("kubernetes_configmap"),
+                fallback=fallback_artifacts.get("kubernetes_configmap", ""),
+                rag_result=rag_result,
+            )
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["kubernetes_configmap"] = fallback_reason
 
         if mapped_context.get("artifact_expectations", {}).get("needs_terraform"):
             artifacts["terraform_main"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
@@ -161,7 +189,7 @@ Approved artifacts to generate:
         response["artifacts"] = artifacts
         response["context_used"] = mapped_context
         response["rag"] = {
-            **rag_result,
+            **compact_rag,
             "template_ids_used": rag_result.get("template_ids", []),
             "generated_with_rag": bool(rag_result.get("retrievals")),
             "fallback_used": fallback_used,
@@ -219,7 +247,14 @@ Approved artifacts to generate:
         if expectations.get("needs_env_example"):
             keys.append("env_example")
         if expectations.get("needs_kubernetes"):
-            keys.append("kubernetes_manifests")
+            keys.extend(
+                [
+                    "kubernetes_manifests",
+                    "kubernetes_deployment",
+                    "kubernetes_service",
+                    "kubernetes_configmap",
+                ]
+            )
         if expectations.get("needs_terraform"):
             keys.extend(["terraform_main", "terraform_variables", "terraform_outputs"])
         keys.append("security_notes")
@@ -248,6 +283,18 @@ Approved artifacts to generate:
             "kubernetes_manifests": (
                 (artifact_targets.get("kubernetes") or ["kubernetes/app.yaml"])[0]
             ),
+            "kubernetes_deployment": (
+                self._find_target_path(artifact_targets.get("kubernetes") or [], "deployment.yaml")
+                or "kubernetes/deployment.yaml"
+            ),
+            "kubernetes_service": (
+                self._find_target_path(artifact_targets.get("kubernetes") or [], "service.yaml")
+                or "kubernetes/service.yaml"
+            ),
+            "kubernetes_configmap": (
+                self._find_target_path(artifact_targets.get("kubernetes") or [], "configmap.yaml")
+                or "kubernetes/configmap.yaml"
+            ),
             "terraform_main": (
                 self._find_target_path(artifact_targets.get("terraform") or [], "main.tf")
                 or "terraform/main.tf"
@@ -274,3 +321,105 @@ Approved artifacts to generate:
 
     def _find_target_path(self, targets: List[str], filename: str) -> str | None:
         return next((target for target in targets if target.lower().endswith(filename.lower())), None)
+
+    def _compact_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "steps": (plan.get("steps") or [])[:8],
+            "required_artifacts": plan.get("required_artifacts", []),
+            "approved_artifacts": plan.get("approved_artifacts", []),
+            "estimated_complexity": plan.get("estimated_complexity"),
+        }
+
+    def _compact_mapped_context(self, mapped_context: Dict[str, Any]) -> Dict[str, Any]:
+        runtime = mapped_context.get("runtime") or {}
+        return {
+            "project_type": mapped_context.get("project_type"),
+            "build_context": mapped_context.get("build_context"),
+            "service_root": mapped_context.get("service_root"),
+            "artifact_targets": mapped_context.get("artifact_targets"),
+            "artifact_expectations": mapped_context.get("artifact_expectations"),
+            "main_service": mapped_context.get("main_service"),
+            "services": [
+                {
+                    "name": service.get("name"),
+                    "type": service.get("type"),
+                    "framework": service.get("framework"),
+                    "language": service.get("language"),
+                    "entrypoint": service.get("entrypoint"),
+                    "run_command": service.get("run_command"),
+                    "port": service.get("port"),
+                    "dependencies": service.get("dependencies"),
+                    "environment_variables": service.get("environment_variables"),
+                }
+                for service in (mapped_context.get("services") or [])[:4]
+            ],
+            "environment_template": (mapped_context.get("environment_template") or [])[:20],
+            "infrastructure_dependencies": mapped_context.get("infrastructure_dependencies", []),
+            "infrastructure_needs": mapped_context.get("infrastructure_needs", []),
+            "runtime": {
+                "languages": runtime.get("languages", []),
+                "frameworks": runtime.get("frameworks", []),
+                "package_managers": runtime.get("package_managers", []),
+                "dependency_files": runtime.get("dependency_files", [])[:8],
+                "python_version": runtime.get("python_version"),
+                "java_version": runtime.get("java_version"),
+                "node_version": runtime.get("node_version"),
+                "system_dependencies": runtime.get("system_dependencies", [])[:5],
+            },
+            "commands": [
+                {
+                    "command": command.get("command"),
+                    "service": command.get("service"),
+                    "source_file": command.get("source_file"),
+                }
+                for command in (mapped_context.get("commands") or [])[:8]
+            ],
+        }
+
+    def _compact_rag_result(self, rag_result: Dict[str, Any]) -> Dict[str, Any]:
+        compact_retrievals: Dict[str, Any] = {}
+        for artifact_key, retrieval in (rag_result.get("retrievals") or {}).items():
+            templates = []
+            for template in (retrieval.get("templates") or [])[:1]:
+                templates.append(
+                    {
+                        "id": template.get("id"),
+                        "metadata": {
+                            "artifact_type": (template.get("metadata") or {}).get("artifact_type"),
+                            "language": (template.get("metadata") or {}).get("language"),
+                            "framework": (template.get("metadata") or {}).get("framework"),
+                            "dependencies": (template.get("metadata") or {}).get("dependencies"),
+                            "description": (template.get("metadata") or {}).get("description"),
+                        },
+                        "content_preview": self._truncate_text(
+                            template.get("content", ""),
+                            600,
+                        ),
+                    }
+                )
+            if templates:
+                compact_retrievals[artifact_key] = templates
+
+        return {
+            "enabled": rag_result.get("enabled"),
+            "available": rag_result.get("available"),
+            "reason": rag_result.get("reason"),
+            "template_ids": rag_result.get("template_ids", []),
+            "retrievals": compact_retrievals,
+        }
+
+    def _compact_fallback_hints(self, fallback_artifacts: Dict[str, str]) -> Dict[str, Any]:
+        return {
+            key: {
+                "available": bool(str(value or "").strip()),
+                "preview": self._truncate_text(value, 220) if str(value or "").strip() else "",
+            }
+            for key, value in fallback_artifacts.items()
+            if str(value or "").strip()
+        }
+
+    def _truncate_text(self, value: str, limit: int) -> str:
+        text = (value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + "..."
