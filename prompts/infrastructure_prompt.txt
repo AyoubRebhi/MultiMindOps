@@ -10,11 +10,18 @@ You must use the mapped infrastructure context explicitly, especially:
 - main_service
 - environment_variables
 - environment_template
+- project_type
+- build_context
+- artifact_targets
 - runtime
 - commands
 - infrastructure_dependencies
 - infrastructure_needs
 - artifact_expectations
+
+You may also receive retrieved infrastructure templates.
+The repository context is always the source of truth.
+Templates are guidance, not copy-paste material.
 
 You must generate ALL relevant artifacts required by the plan.
 If an artifact is not applicable, return an empty string, but never omit the field.
@@ -71,6 +78,9 @@ Rules:
 - Generate Kubernetes manifests only when explicitly requested by the plan or approved artifacts.
 - Generate Terraform only when explicitly requested by the plan or approved artifacts.
 - Respect the requested artifact paths when they are explicit, for example `TP-Projet/Dockerfile`, `deployment.yaml`, `terraform/variables.tf`, or `terraform/output.tf`.
+- If templates are retrieved, adapt them to the actual repository before using them.
+- Do not copy placeholders such as `your-image:latest` unchanged.
+- Do not return artifacts with empty content when the repository context clearly requires them.
 - Do not include markdown fences.
 - Do not include explanations outside JSON.
 - Return valid JSON only.

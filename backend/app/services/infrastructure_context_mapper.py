@@ -17,6 +17,7 @@ class InfrastructureContextMapper:
         commands = context.get("commands") or []
         infra_dependencies = context.get("infrastructure_dependencies") or []
         infra_needs = context.get("infrastructure_needs") or []
+        project_summary = context.get("project_summary") or {}
         requested_artifacts = approved_artifacts or plan.get("approved_artifacts") or plan.get("required_artifacts", [])
 
         container_services = [
@@ -39,6 +40,7 @@ class InfrastructureContextMapper:
             "main_service": main_service,
             "service_root": service_root,
             "build_context": service_root or ".",
+            "project_type": project_summary.get("project_type"),
             "runtime": runtime,
             "commands": commands,
             "environment_variables": env_vars,

@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama3-8b-8192"
 
+    RAG_ENABLED: bool = False
+    RAG_CHROMA_PATH: str = "rag/chroma"
+    RAG_COLLECTION_NAME: str = "infra_templates"
+    RAG_TOP_K: int = 3
+    RAG_CORPUS_PATH: str = "rag/corpus"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

@@ -202,6 +202,23 @@ class OrchestratorAgent(BaseAgent):
                 "message": "Infrastructure artifacts generated",
             }
         )
+        rag_info = infra.get("rag") or {}
+        if rag_info:
+            logs.append(
+                {
+                    "step": "rag",
+                    "message": (
+                        "RAG "
+                        + ("enabled" if rag_info.get("enabled") else "disabled")
+                        + f"; templates used: {len(rag_info.get('template_ids_used', []))}; "
+                        + (
+                            "fallback triggered"
+                            if rag_info.get("fallback_used")
+                            else "no fallback needed"
+                        )
+                    ),
+                }
+            )
 
         return {
             **state,

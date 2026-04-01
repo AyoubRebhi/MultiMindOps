@@ -25,6 +25,7 @@ class ArtifactQualityValidator:
         required_artifacts = approved_artifacts or plan.get("approved_artifacts") or plan.get("required_artifacts", [])
         artifacts = infra.get("artifacts", {}) or {}
         generated_artifacts = infra.get("generated_artifacts", []) or []
+        rag_info = infra.get("rag") or {}
 
         missing_artifacts = [
             artifact for artifact in required_artifacts
@@ -46,6 +47,9 @@ class ArtifactQualityValidator:
             "missing_artifacts": missing_artifacts,
             "quality_issues": quality_issues,
             "warnings": warnings,
+            "generated_with_rag": bool(rag_info.get("generated_with_rag")),
+            "fallback_used": bool(rag_info.get("fallback_used")),
+            "template_ids_used": rag_info.get("template_ids_used", []),
         }
 
     def _collect_quality_issues(self, mapped: dict[str, Any], artifacts: dict[str, str], generated_artifacts: list[str]) -> list[str]:
@@ -78,6 +82,8 @@ class ArtifactQualityValidator:
         dockerfile = artifacts.get("dockerfile", "")
         if dockerfile and any(service.get("framework") == "FastAPI" for service in services) and 'python", "app.py' in dockerfile:
             issues.append("Dockerfile uses a generic python app.py command despite FastAPI detection")
+        if dockerfile and any(service.get("framework") == "Spring Boot" for service in services) and "python" in dockerfile.lower():
+            issues.append("Dockerfile is inconsistent with detected Spring Boot runtime")
 
         env_example = artifacts.get("env_example", "")
         if env_template:
@@ -92,6 +98,8 @@ class ArtifactQualityValidator:
                     issues.append(f"docker-compose.yml does not reference detected variable {item['name']}")
             if any(secret_word in docker_compose.lower() for secret_word in ("password: postgres", "groq_api_key: gsk_")):
                 issues.append("docker-compose.yml appears to contain hardcoded secrets")
+        if "your-image:latest" in "\n".join(artifacts.values()).lower():
+            issues.append("Generated artifacts still contain raw template placeholders such as your-image:latest")
 
         return sorted(set(issues))
 

@@ -6,6 +6,7 @@ from backend.app.services.infrastructure_artifact_builder_service import (
     InfrastructureArtifactBuilderService,
 )
 from backend.app.services.infrastructure_context_mapper import InfrastructureContextMapper
+from backend.app.services.template_retrieval_service import TemplateRetrievalService
 
 
 class InfrastructureAgent(BaseAgent):
@@ -15,6 +16,7 @@ class InfrastructureAgent(BaseAgent):
         self.prompt_template = prompt_template
         self.context_mapper = InfrastructureContextMapper()
         self.artifact_builder = InfrastructureArtifactBuilderService()
+        self.template_retrieval = TemplateRetrievalService()
 
     def run(
         self,
@@ -30,6 +32,10 @@ class InfrastructureAgent(BaseAgent):
             approved_artifacts=approved_artifacts,
         )
         fallback_artifacts = self.artifact_builder.build_fallback_artifacts(mapped_context)
+        rag_result = self.template_retrieval.retrieve_for_context(
+            mapped_context,
+            self._requested_artifact_keys(mapped_context),
+        )
 
         user_prompt = f"""
 User task:
@@ -43,6 +49,15 @@ Infrastructure context:
 
 Mapped infrastructure context:
 {mapped_context}
+
+Repository context is the source of truth.
+Retrieved templates are guidance only and must be adapted to the repository.
+Never copy templates blindly.
+Always adapt paths, ports, commands, variables, dependencies, and build context.
+Never inject real secrets.
+
+RAG retrieval result:
+{rag_result}
 
 Deterministic artifact hints:
 {fallback_artifacts}
@@ -58,51 +73,100 @@ Approved artifacts to generate:
             max_tokens=2200,
         )
         artifacts = response.setdefault("artifacts", {})
+        fallback_reasons: dict[str, str] = {}
+        fallback_used = False
 
         if mapped_context.get("artifact_expectations", {}).get("needs_env_example"):
-            artifacts["env_example"] = self._choose_best_artifact(
+            artifacts["env_example"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="env_example",
                 generated=artifacts.get("env_example"),
                 fallback=fallback_artifacts.get("env_example", ""),
+                rag_result=rag_result,
             )
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["env_example"] = fallback_reason
 
-        artifacts["dockerignore"] = self._choose_best_artifact(
+        artifacts["dockerignore"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+            artifact_key="dockerignore",
             generated=artifacts.get("dockerignore"),
             fallback=fallback_artifacts.get("dockerignore", ""),
+            rag_result=rag_result,
         )
+        fallback_used = fallback_used or artifact_fallback_used
+        if fallback_reason:
+            fallback_reasons["dockerignore"] = fallback_reason
 
-        artifacts["dockerfile"] = self._choose_best_artifact(
+        artifacts["dockerfile"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+            artifact_key="dockerfile",
             generated=artifacts.get("dockerfile"),
             fallback=fallback_artifacts.get("dockerfile", ""),
+            rag_result=rag_result,
         )
+        fallback_used = fallback_used or artifact_fallback_used
+        if fallback_reason:
+            fallback_reasons["dockerfile"] = fallback_reason
 
         if mapped_context.get("artifact_expectations", {}).get("needs_docker_compose"):
-            artifacts["docker_compose"] = self._choose_best_artifact(
+            artifacts["docker_compose"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="docker_compose",
                 generated=artifacts.get("docker_compose"),
                 fallback=fallback_artifacts.get("docker_compose", ""),
+                rag_result=rag_result,
             )
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["docker_compose"] = fallback_reason
 
         if mapped_context.get("artifact_expectations", {}).get("needs_kubernetes"):
-            artifacts["kubernetes_manifests"] = self._choose_best_artifact(
+            artifacts["kubernetes_manifests"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="kubernetes_manifests",
                 generated=artifacts.get("kubernetes_manifests"),
                 fallback=fallback_artifacts.get("kubernetes_manifests", ""),
+                rag_result=rag_result,
             )
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["kubernetes_manifests"] = fallback_reason
 
         if mapped_context.get("artifact_expectations", {}).get("needs_terraform"):
-            artifacts["terraform_main"] = self._choose_best_artifact(
+            artifacts["terraform_main"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="terraform_main",
                 generated=artifacts.get("terraform_main"),
                 fallback=fallback_artifacts.get("terraform_main", ""),
+                rag_result=rag_result,
             )
-            artifacts["terraform_variables"] = self._choose_best_artifact(
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["terraform_main"] = fallback_reason
+            artifacts["terraform_variables"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="terraform_variables",
                 generated=artifacts.get("terraform_variables"),
                 fallback=fallback_artifacts.get("terraform_variables", ""),
+                rag_result=rag_result,
             )
-            artifacts["terraform_outputs"] = self._choose_best_artifact(
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["terraform_variables"] = fallback_reason
+            artifacts["terraform_outputs"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+                artifact_key="terraform_outputs",
                 generated=artifacts.get("terraform_outputs"),
                 fallback=fallback_artifacts.get("terraform_outputs", ""),
+                rag_result=rag_result,
             )
+            fallback_used = fallback_used or artifact_fallback_used
+            if fallback_reason:
+                fallback_reasons["terraform_outputs"] = fallback_reason
 
         response["artifacts"] = artifacts
         response["context_used"] = mapped_context
+        response["rag"] = {
+            **rag_result,
+            "template_ids_used": rag_result.get("template_ids", []),
+            "generated_with_rag": bool(rag_result.get("retrievals")),
+            "fallback_used": fallback_used,
+            "fallback_reasons": fallback_reasons,
+        }
         response["generated_artifacts"] = self._recompute_generated_artifacts(
             response.get("generated_artifacts", []),
             artifacts,
@@ -110,10 +174,34 @@ Approved artifacts to generate:
         )
         return response
 
-    def _choose_best_artifact(self, generated: str | None, fallback: str) -> str:
-        if not generated or self._looks_generic(generated):
-            return fallback
-        return generated
+    def _choose_best_artifact(
+        self,
+        *,
+        artifact_key: str,
+        generated: str | None,
+        fallback: str,
+        rag_result: Dict[str, Any],
+    ) -> tuple[str, bool, str | None]:
+        if not str(generated or "").strip():
+            return fallback, True, self._fallback_reason(artifact_key, rag_result, "empty_generation")
+        if self._looks_generic(generated):
+            return fallback, True, self._fallback_reason(artifact_key, rag_result, "generic_generation")
+        return generated, False, None
+
+    def _fallback_reason(
+        self,
+        artifact_key: str,
+        rag_result: Dict[str, Any],
+        base_reason: str,
+    ) -> str:
+        retrievals = rag_result.get("retrievals") or {}
+        if not rag_result.get("enabled"):
+            return f"{base_reason}:rag_disabled"
+        if not rag_result.get("available"):
+            return f"{base_reason}:{rag_result.get('reason', 'rag_unavailable')}"
+        if artifact_key not in retrievals:
+            return f"{base_reason}:no_relevant_templates"
+        return f"{base_reason}:template_guidance_insufficient"
 
     def _looks_generic(self, content: str) -> bool:
         lowered = content.lower()
@@ -121,8 +209,21 @@ Approved artifacts to generate:
             'cmd ["python", "app.py"]',
             "env_var=example",
             "your-image:latest",
+            "lorem ipsum",
         ]
         return any(marker in lowered for marker in generic_markers)
+
+    def _requested_artifact_keys(self, mapped_context: Dict[str, Any]) -> List[str]:
+        expectations = mapped_context.get("artifact_expectations") or {}
+        keys = ["dockerfile", "dockerignore", "docker_compose"]
+        if expectations.get("needs_env_example"):
+            keys.append("env_example")
+        if expectations.get("needs_kubernetes"):
+            keys.append("kubernetes_manifests")
+        if expectations.get("needs_terraform"):
+            keys.extend(["terraform_main", "terraform_variables", "terraform_outputs"])
+        keys.append("security_notes")
+        return keys
 
     def _recompute_generated_artifacts(
         self,

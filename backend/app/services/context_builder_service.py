@@ -31,6 +31,7 @@ class ContextBuilderService:
         }
 
         infrastructure_context = {
+            "project_summary": summary,
             "existing_devops_files": [
                 path for path in important_files
                 if any(
