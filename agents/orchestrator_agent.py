@@ -7,6 +7,7 @@ from agents.codebase_analysis_agent import CodebaseAnalysisAgent
 from agents.infrastructure_agent import InfrastructureAgent
 from agents.planner_agent import PlannerAgent
 from agents.state import OrchestratorState
+from backend.app.services.artifact_quality_validator import ArtifactQualityValidator
 
 
 class OrchestratorAgent(BaseAgent):
@@ -49,6 +50,7 @@ class OrchestratorAgent(BaseAgent):
         self.infrastructure_agent = InfrastructureAgent(
             prompt_template=infrastructure_prompt
         )
+        self.artifact_quality_validator = ArtifactQualityValidator()
         self.graph = self._build_graph()
 
     def _initialize_node(self, state: OrchestratorState) -> OrchestratorState:
@@ -206,23 +208,50 @@ class OrchestratorAgent(BaseAgent):
             "infra": infra,
             "logs": logs,
         }
+
     def _filter_generated_artifacts(self, state: OrchestratorState) -> OrchestratorState:
         approved = set(state.get("approved_artifacts") or [])
         infra = state.get("infra") or {}
+        artifact_targets = ((infra.get("context_used") or {}).get("artifact_targets") or {})
 
         artifacts = infra.get("artifacts", {})
-        generated = infra.get("generated_artifacts", [])
 
         artifact_key_to_file = {
-            "dockerfile": "Dockerfile",
+            "dockerfile": artifact_targets.get("dockerfile") or "Dockerfile",
             "dockerignore": ".dockerignore",
-            "docker_compose": "docker-compose.yml",
-            "env_example": ".env.example",
+            "docker_compose": artifact_targets.get("docker_compose") or "docker-compose.yml",
+            "env_example": (
+                (artifact_targets.get("env_files") or [".env.example"])[0]
+                if artifact_targets.get("env_files")
+                else ".env.example"
+            ),
             "build_script": "scripts/build.sh",
             "deploy_script": "scripts/deploy.sh",
             "test_script": "scripts/test.sh",
             "security_scan_config": ".github/workflows/security-scan.yml",
             "readme_snippet": "README_infrastructure.md",
+            "kubernetes_manifests": (
+                (artifact_targets.get("kubernetes") or ["kubernetes/app.yaml"])[0]
+            ),
+            "terraform_main": self._find_target_path(
+                artifact_targets.get("terraform") or [],
+                "main.tf",
+            )
+            or "terraform/main.tf",
+            "terraform_variables": self._find_target_path(
+                artifact_targets.get("terraform") or [],
+                "variables.tf",
+            )
+            or "terraform/variables.tf",
+            "terraform_outputs": self._find_target_path(
+                artifact_targets.get("terraform") or [],
+                "output.tf",
+            )
+            or self._find_target_path(
+                artifact_targets.get("terraform") or [],
+                "outputs.tf",
+            )
+            or "terraform/output.tf",
         }
 
         filtered_artifacts = {}
@@ -230,58 +259,72 @@ class OrchestratorAgent(BaseAgent):
 
         for key, content in artifacts.items():
             file_name = artifact_key_to_file.get(key)
-            if file_name and file_name in approved:
+            if (
+                file_name
+                and str(content or "").strip()
+                and self._artifact_matches_requested(file_name, approved)
+            ):
                 filtered_artifacts[key] = content
                 filtered_generated.append(file_name)
 
         # si le LLM a déclaré generated_artifacts, on peut aussi intersecter proprement
-        filtered_generated = sorted(set(filtered_generated) & approved)
+        filtered_generated = sorted(
+            file_name
+            for file_name in set(filtered_generated)
+            if self._artifact_matches_requested(file_name, approved)
+        )
 
         infra["artifacts"] = filtered_artifacts
         infra["generated_artifacts"] = filtered_generated
 
         logs = list(state.get("logs", []))
-        logs.append({
-            "step": "artifact_filtering",
-            "message": f"{len(filtered_generated)} artifacts kept after filtering"
-        })
+        logs.append(
+            {
+                "step": "artifact_filtering",
+                "message": f"{len(filtered_generated)} artifacts kept after filtering",
+            }
+        )
 
         return {
             **state,
             "infra": infra,
             "logs": logs,
         }
+
     def _artifact_validation_node(self, state: OrchestratorState) -> OrchestratorState:
         plan = state.get("plan") or {}
         infra = state.get("infra") or {}
-
-        required_artifacts = plan.get("approved_artifacts") or plan.get("required_artifacts", [])
-        generated_artifacts = infra.get("generated_artifacts", [])
-
-        missing_artifacts = [
-            artifact
-            for artifact in required_artifacts
-            if artifact not in generated_artifacts
-        ]
-
-        validation_status = "valid" if not missing_artifacts else "partial"
-
-        validation = {
-            "status": validation_status,
-            "required_artifacts": required_artifacts,
-            "generated_artifacts": generated_artifacts,
-            "missing_artifacts": missing_artifacts,
-        }
+        infrastructure_context = (state.get("agent_context") or {}).get(
+            "infrastructure_context"
+        )
+        validation = self.artifact_quality_validator.validate(
+            prompt=state["prompt"],
+            plan=plan,
+            infra=infra,
+            infrastructure_context=infrastructure_context,
+            approved_artifacts=state.get("approved_artifacts"),
+        )
 
         logs = list(state.get("logs", []))
-        if missing_artifacts:
+        if validation.get("missing_artifacts"):
             logs.append(
                 {
                     "step": "artifact_validation",
-                    "message": f"Missing artifacts detected: {', '.join(missing_artifacts)}",
+                    "message": "Missing artifacts detected: "
+                    + ", ".join(validation["missing_artifacts"]),
                 }
             )
-        else:
+        if validation.get("quality_issues"):
+            logs.append(
+                {
+                    "step": "artifact_validation",
+                    "message": "Artifact quality issues detected: "
+                    + "; ".join(validation["quality_issues"]),
+                }
+            )
+        if not validation.get("missing_artifacts") and not validation.get(
+            "quality_issues"
+        ):
             logs.append(
                 {
                     "step": "artifact_validation",
@@ -294,6 +337,23 @@ class OrchestratorAgent(BaseAgent):
             "validation": validation,
             "logs": logs,
         }
+
+    def _artifact_matches_requested(
+        self, generated_artifact: str, requested_artifacts: set[str]
+    ) -> bool:
+        if not requested_artifacts:
+            return True
+        for requested_artifact in requested_artifacts:
+            if requested_artifact == generated_artifact:
+                return True
+            if "*" in requested_artifact:
+                prefix = requested_artifact.split("*", 1)[0]
+                if generated_artifact.startswith(prefix):
+                    return True
+        return False
+
+    def _find_target_path(self, targets: list[str], filename: str) -> str | None:
+        return next((target for target in targets if target.lower().endswith(filename.lower())), None)
 
     def _finalize_node(self, state: OrchestratorState) -> OrchestratorState:
         logs = list(state.get("logs", []))
@@ -313,6 +373,9 @@ class OrchestratorAgent(BaseAgent):
         if security_result.get("status") == "blocked":
             final_status = "blocked"
             result_status = "blocked"
+        elif validation.get("status") == "invalid":
+            final_status = "invalid"
+            result_status = "invalid"
         elif validation.get("status") == "partial":
             final_status = "partial_success"
             result_status = "partial_success"

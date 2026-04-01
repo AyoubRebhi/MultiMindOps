@@ -2,14 +2,37 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from backend.app.services.chunking_service import ChunkingService
+from backend.app.services.command_detector_service import CommandDetectorService
+from backend.app.services.environment_variable_extractor_service import EnvironmentVariableExtractorService
+from backend.app.services.infra_dependency_detector_service import InfraDependencyDetectorService
+from backend.app.services.runtime_detector_service import RuntimeDetectorService
+from backend.app.services.service_detector_service import ServiceDetectorService
 
 
 class RepositoryParserService:
+    IGNORED_DIRS = {
+        ".git",
+        "venv",
+        ".history",
+        "workspace",
+        "__pycache__",
+        "node_modules",
+    }
+
     IMPORTANT_FILES = {
         "README.md",
         "requirements.txt",
+        "requirements-backend.txt",
         "package.json",
         "pyproject.toml",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "mvnw",
+        "mvnw.cmd",
+        "application.properties",
+        "application.yml",
+        "application.yaml",
         "Dockerfile",
         "docker-compose.yml",
         "docker-compose.yaml",
@@ -30,10 +53,16 @@ class RepositoryParserService:
         "frontend",
         "agents",
         "scripts",
+        "src",
     }
 
     def __init__(self):
         self.chunking_service = ChunkingService()
+        self.environment_variable_extractor = EnvironmentVariableExtractorService()
+        self.command_detector = CommandDetectorService()
+        self.runtime_detector = RuntimeDetectorService()
+        self.infra_dependency_detector = InfraDependencyDetectorService()
+        self.service_detector = ServiceDetectorService()
 
     def parse_repository(self, repo_path: str) -> Dict[str, Any]:
         repo = Path(repo_path)
@@ -45,6 +74,31 @@ class RepositoryParserService:
         key_entrypoints = self._extract_key_entrypoints(file_tree)
         key_files_content = self._read_key_files(repo, important_files)
         chunks = self.chunking_service.build_chunks(repo_path, important_files)
+        environment_variables = self.environment_variable_extractor.extract(repo_path, file_tree)
+        commands = self.command_detector.detect(repo_path, file_tree)
+        runtime = self.runtime_detector.detect(repo_path, file_tree, stack)
+        infrastructure_dependencies = self.infra_dependency_detector.detect(
+            file_tree=file_tree,
+            key_files_content=key_files_content,
+            environment_variables=environment_variables,
+            runtime=runtime,
+            commands=commands,
+        )
+        services = self.service_detector.detect(
+            file_tree=file_tree,
+            stack=stack,
+            key_files_content=key_files_content,
+            commands=commands,
+            environment_variables=environment_variables,
+            infrastructure_dependencies=infrastructure_dependencies,
+        )
+        enriched_entrypoints = sorted(
+            set(key_entrypoints + [service["entrypoint"] for service in services if service.get("entrypoint")])
+        )
+        infrastructure_needs = sorted(
+            set(stack.get("devops_tools", []))
+            | {item["name"] for item in infrastructure_dependencies}
+        )
 
         return {
             "repo_path": str(repo),
@@ -52,22 +106,39 @@ class RepositoryParserService:
             "important_files": important_files,
             "categorized_files": categorized_files,
             "detected_stack": stack,
-            "key_entrypoints": key_entrypoints,
+            "key_entrypoints": enriched_entrypoints,
             "key_files_content": key_files_content,
             "chunks": chunks,
+            "services": services,
+            "environment_variables": environment_variables,
+            "commands": commands,
+            "runtime": runtime,
+            "infrastructure_dependencies": infrastructure_dependencies,
+            "infrastructure_needs": infrastructure_needs,
             "project_summary": self._build_project_summary(
                 stack=stack,
                 categorized_files=categorized_files,
-                key_entrypoints=key_entrypoints,
+                key_entrypoints=enriched_entrypoints,
                 important_files=important_files,
+                services=services,
+                environment_variables=environment_variables,
+                infrastructure_needs=infrastructure_needs,
+                runtime=runtime,
             ),
         }
+
+    def _should_ignore_path(self, repo: Path, path: Path) -> bool:
+        try:
+            relative_parts = path.relative_to(repo).parts
+        except ValueError:
+            relative_parts = path.parts
+        return any(part in self.IGNORED_DIRS for part in relative_parts)
 
     def _build_file_tree(self, repo: Path, max_files: int = 250) -> List[str]:
         file_tree: List[str] = []
 
         for path in repo.rglob("*"):
-            if ".git" in path.parts:
+            if self._should_ignore_path(repo, path):
                 continue
             if path.is_file():
                 file_tree.append(str(path.relative_to(repo)).replace("\\", "/"))
@@ -80,10 +151,11 @@ class RepositoryParserService:
         found: List[str] = []
 
         for path in repo.rglob("*"):
-            if ".git" in path.parts:
+            if self._should_ignore_path(repo, path):
                 continue
 
             rel_path = str(path.relative_to(repo)).replace("\\", "/")
+            rel_parts = Path(rel_path).parts
 
             if path.is_dir() and path.name in self.IMPORTANT_DIRS:
                 found.append(rel_path)
@@ -91,7 +163,7 @@ class RepositoryParserService:
             if path.is_file():
                 if path.name in self.IMPORTANT_FILES:
                     found.append(rel_path)
-                elif any(part in self.IMPORTANT_DIRS for part in path.parts):
+                elif any(part in self.IMPORTANT_DIRS for part in rel_parts):
                     found.append(rel_path)
                 elif rel_path.startswith(".github/workflows/"):
                     found.append(rel_path)
@@ -162,24 +234,32 @@ class RepositoryParserService:
         if any(f.endswith(".java") for f in lower_files):
             languages.append("Java")
 
-        if "requirements.txt" in lower_files or "pyproject.toml" in lower_files:
+        if any(f.endswith("requirements.txt") for f in lower_files) or any(
+            f.endswith("pyproject.toml") for f in lower_files
+        ):
             package_managers.append("pip")
-        if "package.json" in lower_files:
+        if any(f.endswith("package.json") for f in lower_files):
             package_managers.append("npm/yarn")
-        if "pom.xml" in lower_files:
+        if any(f.endswith("pom.xml") for f in lower_files):
             package_managers.append("maven")
-        if "build.gradle" in lower_files:
+        if any(f.endswith("build.gradle") or f.endswith("build.gradle.kts") for f in lower_files):
             package_managers.append("gradle")
 
         framework_markers = self._read_small_framework_markers(repo, file_tree)
 
         if "fastapi" in framework_markers:
             frameworks.append("FastAPI")
+        if "streamlit" in framework_markers:
+            frameworks.append("Streamlit")
         if "flask" in framework_markers:
             frameworks.append("Flask")
         if "django" in framework_markers:
             frameworks.append("Django")
-        if "springboot" in framework_markers or "spring-boot" in framework_markers:
+        if (
+            "springboot" in framework_markers
+            or "spring-boot" in framework_markers
+            or "@springbootapplication" in framework_markers
+        ):
             frameworks.append("Spring Boot")
         if "react" in framework_markers:
             frameworks.append("React")
@@ -211,7 +291,22 @@ class RepositoryParserService:
 
         candidate_files = [
             f for f in file_tree
-            if f.endswith(("requirements.txt", "pyproject.toml", "package.json", "main.py", "app.py", "__init__.py"))
+            if f.endswith((
+                "requirements.txt",
+                "requirements-backend.txt",
+                "pyproject.toml",
+                "package.json",
+                "pom.xml",
+                "build.gradle",
+                "build.gradle.kts",
+                "application.properties",
+                "application.yml",
+                "application.yaml",
+                "main.py",
+                "app.py",
+                "app_factory.py",
+                "__init__.py",
+            ))
         ][:20]
 
         for rel_path in candidate_files:
@@ -252,7 +347,7 @@ class RepositoryParserService:
 
         return sorted(set(entrypoint_candidates))[:20]
 
-    def _read_key_files(self, repo: Path, important_files: List[str], max_chars: int = 1000) -> Dict[str, str]:
+    def _read_key_files(self, repo: Path, important_files: List[str], max_chars: int = 2500) -> Dict[str, str]:
         contents: Dict[str, str] = {}
 
         priority_files = [
@@ -269,8 +364,9 @@ class RepositoryParserService:
 
         selected_files = []
         for pf in priority_files:
-            if pf in important_files:
-                selected_files.append(pf)
+            for rel_path in important_files:
+                if rel_path == pf or rel_path.endswith(f"/{pf}"):
+                    selected_files.append(rel_path)
 
         for rel_path in important_files:
             if rel_path not in selected_files and len(selected_files) < 10:
@@ -295,9 +391,13 @@ class RepositoryParserService:
         categorized_files: Dict[str, List[str]],
         key_entrypoints: List[str],
         important_files: List[str],
+        services: List[Dict[str, Any]],
+        environment_variables: List[Dict[str, Any]],
+        infrastructure_needs: List[str],
+        runtime: Dict[str, Any],
     ) -> Dict[str, Any]:
         return {
-            "project_type": self._infer_project_type(stack),
+            "project_type": self._infer_project_type(stack, services),
             "stack": stack,
             "has_backend": any("backend" in f.lower() for f in important_files),
             "has_frontend": any("frontend" in f.lower() for f in important_files),
@@ -310,14 +410,24 @@ class RepositoryParserService:
             "infra_files": categorized_files["infra_files"],
             "ci_cd_files": categorized_files["ci_cd_files"],
             "deployment_files": categorized_files["deployment_files"],
+            "services": services,
+            "environment_variables": environment_variables,
+            "infrastructure_needs": infrastructure_needs,
+            "runtime": runtime,
         }
 
-    def _infer_project_type(self, stack: Dict[str, Any]) -> str:
+    def _infer_project_type(self, stack: Dict[str, Any], services: List[Dict[str, Any]]) -> str:
         frameworks = stack.get("frameworks", [])
         languages = stack.get("languages", [])
+        service_types = {service.get("type") for service in services}
+
+        if {"api", "web_ui"}.issubset(service_types):
+            return "multi_service_application"
 
         if "FastAPI" in frameworks:
             return "FastAPI backend"
+        if "Streamlit" in frameworks:
+            return "Streamlit application"
         if "Flask" in frameworks:
             return "Flask backend"
         if "Django" in frameworks:

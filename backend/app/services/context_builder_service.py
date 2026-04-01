@@ -10,6 +10,12 @@ class ContextBuilderService:
         chunks = parsed_repo.get("chunks") or []
         key_entrypoints = parsed_repo.get("key_entrypoints") or []
         categorized_files = parsed_repo.get("categorized_files") or {}
+        services = parsed_repo.get("services") or []
+        environment_variables = parsed_repo.get("environment_variables") or []
+        commands = parsed_repo.get("commands") or []
+        runtime = parsed_repo.get("runtime") or {}
+        infrastructure_dependencies = parsed_repo.get("infrastructure_dependencies") or []
+        infrastructure_needs = parsed_repo.get("infrastructure_needs") or []
 
         planner_context = {
             "project_summary": summary,
@@ -18,6 +24,10 @@ class ContextBuilderService:
             "key_entrypoints": key_entrypoints,
             "ci_cd_files": categorized_files.get("ci_cd_files", []),
             "infra_files": categorized_files.get("infra_files", []),
+            "services": services,
+            "environment_variables": environment_variables,
+            "commands": commands[:15],
+            "infrastructure_needs": infrastructure_needs,
         }
 
         infrastructure_context = {
@@ -33,6 +43,12 @@ class ContextBuilderService:
             "infra_files": categorized_files.get("infra_files", []),
             "deployment_files": categorized_files.get("deployment_files", []),
             "key_files_content": key_files,
+            "services": services,
+            "environment_variables": environment_variables,
+            "commands": commands,
+            "runtime": runtime,
+            "infrastructure_dependencies": infrastructure_dependencies,
+            "infrastructure_needs": infrastructure_needs,
             "relevant_chunks": [
                 chunk for chunk in chunks
                 if chunk.get("category") in {"infrastructure", "deployment", "dependencies", "source_code"}
@@ -44,6 +60,8 @@ class ContextBuilderService:
             "dependency_files": categorized_files.get("dependency_files", []),
             "ci_cd_files": categorized_files.get("ci_cd_files", []),
             "infra_files": categorized_files.get("infra_files", []),
+            "services": services,
+            "environment_variables": environment_variables,
             "relevant_chunks": [
                 chunk for chunk in chunks
                 if chunk.get("category") in {"dependencies", "infrastructure", "ci_cd", "source_code"}
@@ -56,6 +74,8 @@ class ContextBuilderService:
             "deployment_files": categorized_files.get("deployment_files", []),
             "key_entrypoints": key_entrypoints,
             "key_files_content": key_files,
+            "services": services,
+            "commands": commands,
             "relevant_chunks": [
                 chunk for chunk in chunks
                 if chunk.get("category") in {"ci_cd", "deployment", "dependencies", "source_code"}

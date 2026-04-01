@@ -11,7 +11,7 @@ from backend.app.services.repository_security_service import RepositorySecurityS
 
 
 class CodebaseAnalysisAgent(BaseAgent):
-    ANALYSIS_VERSION = "2026-03-31-analysis-cache-v2"
+    ANALYSIS_VERSION = "2026-03-31-analysis-cache-v4"
 
     def __init__(self):
         super().__init__(name="CodebaseAnalysisAgent")
