@@ -18,6 +18,10 @@ class InfrastructureContextMapper:
         infra_dependencies = context.get("infrastructure_dependencies") or []
         infra_needs = context.get("infrastructure_needs") or []
         project_summary = context.get("project_summary") or {}
+        sanitized_env_context = context.get("sanitized_env_context") or {}
+        env_files = context.get("env_files") or []
+        env_fingerprint = context.get("env_fingerprint")
+        uploaded_env_provided = context.get("uploaded_env_provided", False)
         requested_artifacts = approved_artifacts or plan.get("approved_artifacts") or plan.get("required_artifacts", [])
 
         container_services = [
@@ -45,6 +49,10 @@ class InfrastructureContextMapper:
             "commands": commands,
             "environment_variables": env_vars,
             "environment_template": env_template,
+            "env_files": env_files,
+            "env_fingerprint": env_fingerprint,
+            "sanitized_env_context": sanitized_env_context,
+            "uploaded_env_provided": uploaded_env_provided,
             "infrastructure_dependencies": infra_dependencies,
             "infrastructure_needs": infra_needs,
             "artifact_targets": artifact_targets,
@@ -70,6 +78,11 @@ class InfrastructureContextMapper:
                 "service": item.get("service"),
                 "required": item.get("required", False),
                 "default": item.get("default"),
+                "existing_in_env": item.get("existing_in_env", False),
+                "has_value": item.get("has_value", False),
+                "is_sensitive": item.get("is_sensitive", False),
+                "sanitized_value": item.get("sanitized_value"),
+                "used_for_generation": item.get("used_for_generation", True),
             }
 
         dependency_names = {item["name"] for item in infra_dependencies}

@@ -10,6 +10,7 @@ You must use the mapped infrastructure context explicitly, especially:
 - main_service
 - environment_variables
 - environment_template
+- sanitized_env_context
 - project_type
 - build_context
 - artifact_targets
@@ -75,6 +76,7 @@ Rules:
 - Include vulnerability scanning configuration when relevant.
 - Include secret handling recommendations.
 - Generate `.env.example` from detected environment variables only, never from guessed secrets.
+- Treat `sanitized_env_context` as a safe inventory of existing `.env` keys and statuses, never as a source of real secret values.
 - Use `${VAR_NAME}` references in `docker-compose.yml`, never hardcoded secrets.
 - If FastAPI is detected, prefer `uvicorn` over generic `python app.py`.
 - If backend and frontend are both detected, reflect them explicitly when `docker-compose.yml` is generated.

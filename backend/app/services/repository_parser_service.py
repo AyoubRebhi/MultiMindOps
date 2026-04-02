@@ -3,6 +3,8 @@ from typing import Any, Dict, List
 
 from backend.app.services.chunking_service import ChunkingService
 from backend.app.services.command_detector_service import CommandDetectorService
+from backend.app.services.env_file_detector_service import EnvFileDetectorService
+from backend.app.services.env_sanitizer_service import EnvSanitizerService
 from backend.app.services.environment_variable_extractor_service import EnvironmentVariableExtractorService
 from backend.app.services.infra_dependency_detector_service import InfraDependencyDetectorService
 from backend.app.services.runtime_detector_service import RuntimeDetectorService
@@ -58,13 +60,19 @@ class RepositoryParserService:
 
     def __init__(self):
         self.chunking_service = ChunkingService()
+        self.env_file_detector = EnvFileDetectorService()
+        self.env_sanitizer = EnvSanitizerService()
         self.environment_variable_extractor = EnvironmentVariableExtractorService()
         self.command_detector = CommandDetectorService()
         self.runtime_detector = RuntimeDetectorService()
         self.infra_dependency_detector = InfraDependencyDetectorService()
         self.service_detector = ServiceDetectorService()
 
-    def parse_repository(self, repo_path: str) -> Dict[str, Any]:
+    def parse_repository(
+        self,
+        repo_path: str,
+        uploaded_env: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
         repo = Path(repo_path)
 
         file_tree = self._build_file_tree(repo)
@@ -74,7 +82,20 @@ class RepositoryParserService:
         key_entrypoints = self._extract_key_entrypoints(file_tree)
         key_files_content = self._read_key_files(repo, important_files)
         chunks = self.chunking_service.build_chunks(repo_path, important_files)
-        environment_variables = self.environment_variable_extractor.extract(repo_path, file_tree)
+        env_files = self.env_file_detector.detect(file_tree)
+        secure_env = self.env_sanitizer.extract(
+            repo_path,
+            env_files,
+            uploaded_env=uploaded_env,
+        )
+        code_environment_variables = self.environment_variable_extractor.extract(
+            repo_path,
+            file_tree,
+        )
+        environment_variables = self._merge_environment_variables(
+            code_environment_variables,
+            secure_env.get("env_variables") or [],
+        )
         commands = self.command_detector.detect(repo_path, file_tree)
         runtime = self.runtime_detector.detect(repo_path, file_tree, stack)
         infrastructure_dependencies = self.infra_dependency_detector.detect(
@@ -113,8 +134,13 @@ class RepositoryParserService:
             "environment_variables": environment_variables,
             "commands": commands,
             "runtime": runtime,
+            "env_files": secure_env.get("env_files") or [],
+            "env_fingerprint": secure_env.get("env_fingerprint"),
+            "sanitized_env_context": secure_env.get("sanitized_env_context") or {},
+            "uploaded_env_provided": bool(uploaded_env),
             "infrastructure_dependencies": infrastructure_dependencies,
             "infrastructure_needs": infrastructure_needs,
+            "_runtime_env_security": secure_env.get("runtime_security") or {},
             "project_summary": self._build_project_summary(
                 stack=stack,
                 categorized_files=categorized_files,
@@ -122,6 +148,10 @@ class RepositoryParserService:
                 important_files=important_files,
                 services=services,
                 environment_variables=environment_variables,
+                env_files=secure_env.get("env_files") or [],
+                sanitized_env_context=secure_env.get("sanitized_env_context") or {},
+                env_fingerprint=secure_env.get("env_fingerprint"),
+                uploaded_env_provided=bool(uploaded_env),
                 infrastructure_needs=infrastructure_needs,
                 runtime=runtime,
             ),
@@ -393,6 +423,10 @@ class RepositoryParserService:
         important_files: List[str],
         services: List[Dict[str, Any]],
         environment_variables: List[Dict[str, Any]],
+        env_files: List[Dict[str, Any]],
+        sanitized_env_context: Dict[str, Any],
+        env_fingerprint: str | None,
+        uploaded_env_provided: bool,
         infrastructure_needs: List[str],
         runtime: Dict[str, Any],
     ) -> Dict[str, Any]:
@@ -412,6 +446,10 @@ class RepositoryParserService:
             "deployment_files": categorized_files["deployment_files"],
             "services": services,
             "environment_variables": environment_variables,
+            "env_files": env_files,
+            "env_fingerprint": env_fingerprint,
+            "sanitized_env_context": sanitized_env_context,
+            "uploaded_env_provided": uploaded_env_provided,
             "infrastructure_needs": infrastructure_needs,
             "runtime": runtime,
         }
@@ -441,3 +479,56 @@ class RepositoryParserService:
         if languages:
             return f"{languages[0]} application"
         return "Unknown project type"
+
+    def _merge_environment_variables(
+        self,
+        code_variables: List[Dict[str, Any]],
+        env_variables: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        merged: Dict[str, Dict[str, Any]] = {}
+
+        for item in code_variables + env_variables:
+            existing = merged.get(item["name"])
+            if not existing:
+                merged[item["name"]] = dict(item)
+                continue
+
+            existing["required"] = existing.get("required") or item.get("required")
+            existing["existing_in_env"] = existing.get("existing_in_env") or item.get(
+                "existing_in_env"
+            )
+            existing["has_value"] = existing.get("has_value") or item.get("has_value")
+            existing["is_sensitive"] = existing.get("is_sensitive") or item.get(
+                "is_sensitive"
+            )
+            existing["used_for_generation"] = existing.get(
+                "used_for_generation"
+            ) or item.get("used_for_generation")
+            existing["env_source"] = self._merge_env_source(
+                existing.get("env_source"),
+                item.get("env_source"),
+            )
+            if existing.get("default") is None and item.get("default") is not None:
+                existing["default"] = item["default"]
+            if existing.get("sanitized_value") is None and item.get("sanitized_value") is not None:
+                existing["sanitized_value"] = item["sanitized_value"]
+            if existing.get("value_hash") is None and item.get("value_hash") is not None:
+                existing["value_hash"] = item["value_hash"]
+            if existing.get("source_file") == item.get("source_file"):
+                continue
+            if item.get("existing_in_env"):
+                existing["source_file"] = item.get("source_file")
+                existing["line_number"] = item.get("line_number")
+
+        return sorted(
+            merged.values(),
+            key=lambda item: (item.get("service", "application"), item["name"]),
+        )
+
+    def _merge_env_source(self, left: str | None, right: str | None) -> str | None:
+        sources = {item for item in (left, right) if item}
+        if not sources:
+            return None
+        if len(sources) == 1:
+            return next(iter(sources))
+        return "merged"

@@ -162,8 +162,7 @@ class EnvironmentVariableExtractorService:
         compose_pattern = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(?:(:-|-)([^}]*))?\}")
         dotenv_pattern = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.*)$")
         allow_dotenv_pattern = (
-            file_name.startswith(".env")
-            or file_name in {"docker-compose.yml", "docker-compose.yaml", "Dockerfile"}
+            file_name in {"docker-compose.yml", "docker-compose.yaml", "Dockerfile"}
             or file_name.endswith((".yml", ".yaml", ".toml"))
         )
 
@@ -211,6 +210,12 @@ class EnvironmentVariableExtractorService:
             "default": self._sanitize_default(name, category, default),
             "service": self._infer_service(source_file),
             "category": category,
+            "existing_in_env": False,
+            "has_value": default is not None,
+            "is_sensitive": self._is_sensitive_name(name, category),
+            "value_hash": None,
+            "sanitized_value": self._sanitize_default(name, category, default),
+            "used_for_generation": True,
         }
 
     def _deduplicate(self, detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -299,3 +304,19 @@ class EnvironmentVariableExtractorService:
                 return None
             return value
         return value
+
+    def _is_sensitive_name(self, env_name: str, category: str) -> bool:
+        if category == "secret":
+            return True
+        upper_name = env_name.upper()
+        return upper_name in {
+            "DATABASE_URL",
+            "BROKER_URL",
+            "CACHE_URL",
+            "REDIS_URL",
+            "API_KEY",
+            "JWT_SECRET",
+            "ACCESS_TOKEN",
+            "REFRESH_TOKEN",
+            "PRIVATE_KEY",
+        }

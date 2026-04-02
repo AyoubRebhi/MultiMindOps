@@ -1,4 +1,5 @@
 from typing import Any
+import re
 
 from backend.app.services.infrastructure_context_mapper import InfrastructureContextMapper
 
@@ -15,6 +16,7 @@ class ArtifactQualityValidator:
         infra: dict[str, Any],
         infrastructure_context: dict[str, Any] | None,
         approved_artifacts: list[str] | None = None,
+        env_security_runtime: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         mapped = self.mapper.map(
             prompt=prompt,
@@ -31,7 +33,12 @@ class ArtifactQualityValidator:
             artifact for artifact in required_artifacts
             if not self._is_artifact_generated(artifact, generated_artifacts)
         ]
-        quality_issues = self._collect_quality_issues(mapped, artifacts, generated_artifacts)
+        quality_issues = self._collect_quality_issues(
+            mapped,
+            artifacts,
+            generated_artifacts,
+            env_security_runtime or {},
+        )
         warnings = self._collect_warnings(mapped, artifacts)
 
         status = "valid"
@@ -52,12 +59,21 @@ class ArtifactQualityValidator:
             "template_ids_used": rag_info.get("template_ids_used", []),
         }
 
-    def _collect_quality_issues(self, mapped: dict[str, Any], artifacts: dict[str, str], generated_artifacts: list[str]) -> list[str]:
+    def _collect_quality_issues(
+        self,
+        mapped: dict[str, Any],
+        artifacts: dict[str, str],
+        generated_artifacts: list[str],
+        env_security_runtime: dict[str, Any],
+    ) -> list[str]:
         issues = []
         env_template = mapped.get("environment_template") or []
         services = mapped.get("services") or []
         infra_dependencies = {item["name"] for item in mapped.get("infrastructure_dependencies") or []}
         artifact_targets = mapped.get("artifact_targets") or {}
+        combined_artifact_text = "\n".join(
+            str(content or "") for content in artifacts.values()
+        )
 
         for artifact_name, content in artifacts.items():
             if not str(content or "").strip():
@@ -100,6 +116,56 @@ class ArtifactQualityValidator:
                 issues.append("docker-compose.yml appears to contain hardcoded secrets")
         if "your-image:latest" in "\n".join(artifacts.values()).lower():
             issues.append("Generated artifacts still contain raw template placeholders such as your-image:latest")
+        for sensitive_value in env_security_runtime.get("sensitive_values", []):
+            if sensitive_value and len(sensitive_value) >= 4 and sensitive_value in combined_artifact_text:
+                issues.append(
+                    "A sensitive value from a detected .env file appears in generated artifacts"
+                )
+                break
+        for item in env_template:
+            if not item.get("is_sensitive"):
+                continue
+            pattern = f"{item['name']}="
+            if pattern in artifacts.get("env_example", ""):
+                line = next(
+                    (
+                        candidate
+                        for candidate in artifacts.get("env_example", "").splitlines()
+                        if candidate.startswith(pattern)
+                    ),
+                    "",
+                )
+                if line.strip() != pattern:
+                    issues.append(
+                        f".env.example appears to assign a concrete value to sensitive variable {item['name']}"
+                    )
+            if self._has_hardcoded_sensitive_assignment(
+                artifacts.get("docker_compose", ""),
+                item["name"],
+            ):
+                issues.append(
+                    f"docker-compose.yml appears to hardcode sensitive variable {item['name']}"
+                )
+            if self._has_hardcoded_sensitive_assignment(
+                artifacts.get("kubernetes_configmap", ""),
+                item["name"],
+            ) or self._has_hardcoded_sensitive_assignment(
+                artifacts.get("kubernetes_manifests", ""),
+                item["name"],
+            ):
+                issues.append(
+                    f"Kubernetes manifests appear to expose sensitive variable {item['name']} in clear text"
+                )
+            if self._has_hardcoded_sensitive_assignment(
+                artifacts.get("terraform_main", ""),
+                item["name"],
+            ) or self._has_hardcoded_sensitive_assignment(
+                artifacts.get("terraform_variables", ""),
+                item["name"],
+            ):
+                issues.append(
+                    f"Terraform artifacts appear to assign a concrete value to sensitive variable {item['name']}"
+                )
 
         return sorted(set(issues))
 
@@ -128,4 +194,33 @@ class ArtifactQualityValidator:
                 return True
             if any(item.endswith(lowered) for item in normalized_generated):
                 return True
+        return False
+
+    def _has_hardcoded_sensitive_assignment(self, artifact_content: str, variable_name: str) -> bool:
+        if not str(artifact_content or "").strip():
+            return False
+
+        patterns = [
+            rf"^\s*{re.escape(variable_name)}\s*=\s*(.+)$",
+            rf"^\s*{re.escape(variable_name)}\s*:\s*(.+)$",
+            rf"^\s*-\s*{re.escape(variable_name)}\s*=\s*(.+)$",
+        ]
+
+        for line in artifact_content.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            for pattern in patterns:
+                match = re.match(pattern, line)
+                if not match:
+                    continue
+                assigned_value = match.group(1).strip().strip('"').strip("'")
+                if not assigned_value:
+                    continue
+                if assigned_value in {"${" + variable_name + "}", variable_name}:
+                    continue
+                if "${" in assigned_value or "valueFrom:" in stripped:
+                    continue
+                return True
+
         return False

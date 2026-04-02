@@ -14,6 +14,10 @@ class ContextBuilderService:
         environment_variables = parsed_repo.get("environment_variables") or []
         commands = parsed_repo.get("commands") or []
         runtime = parsed_repo.get("runtime") or {}
+        env_files = parsed_repo.get("env_files") or []
+        env_fingerprint = parsed_repo.get("env_fingerprint")
+        sanitized_env_context = parsed_repo.get("sanitized_env_context") or {}
+        uploaded_env_provided = parsed_repo.get("uploaded_env_provided", False)
         infrastructure_dependencies = parsed_repo.get("infrastructure_dependencies") or []
         infrastructure_needs = parsed_repo.get("infrastructure_needs") or []
 
@@ -26,6 +30,9 @@ class ContextBuilderService:
             "infra_files": categorized_files.get("infra_files", []),
             "services": services,
             "environment_variables": environment_variables,
+            "env_files": env_files,
+            "env_fingerprint": env_fingerprint,
+            "uploaded_env_provided": uploaded_env_provided,
             "commands": commands[:15],
             "infrastructure_needs": infrastructure_needs,
         }
@@ -48,6 +55,10 @@ class ContextBuilderService:
             "environment_variables": environment_variables,
             "commands": commands,
             "runtime": runtime,
+            "env_files": env_files,
+            "env_fingerprint": env_fingerprint,
+            "sanitized_env_context": sanitized_env_context,
+            "uploaded_env_provided": uploaded_env_provided,
             "infrastructure_dependencies": infrastructure_dependencies,
             "infrastructure_needs": infrastructure_needs,
             "relevant_chunks": [
@@ -63,6 +74,9 @@ class ContextBuilderService:
             "infra_files": categorized_files.get("infra_files", []),
             "services": services,
             "environment_variables": environment_variables,
+            "env_files": env_files,
+            "env_fingerprint": env_fingerprint,
+            "uploaded_env_provided": uploaded_env_provided,
             "relevant_chunks": [
                 chunk for chunk in chunks
                 if chunk.get("category") in {"dependencies", "infrastructure", "ci_cd", "source_code"}
@@ -77,6 +91,9 @@ class ContextBuilderService:
             "key_files_content": key_files,
             "services": services,
             "commands": commands,
+            "env_files": env_files,
+            "env_fingerprint": env_fingerprint,
+            "uploaded_env_provided": uploaded_env_provided,
             "relevant_chunks": [
                 chunk for chunk in chunks
                 if chunk.get("category") in {"ci_cd", "deployment", "dependencies", "source_code"}

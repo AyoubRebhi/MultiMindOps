@@ -1,5 +1,7 @@
 import streamlit as st
 
+from frontend.components.env_security_summary import render_env_security_summary
+
 
 def _render_security_section(repository_security: dict):
     st.subheader("Repository Security")
@@ -85,6 +87,27 @@ def _render_validation_section(validation: dict):
         for artifact in missing_artifacts:
             st.error(artifact)
 
+    if validation.get("generated_with_rag") or validation.get("fallback_used"):
+        st.markdown("### Generation telemetry")
+        col1, col2 = st.columns(2)
+        col1.metric("Generated with RAG", "Yes" if validation.get("generated_with_rag") else "No")
+        col2.metric("Fallback used", "Yes" if validation.get("fallback_used") else "No")
+
+    quality_issues = validation.get("quality_issues", [])
+    if quality_issues:
+        st.markdown("### Quality issues")
+        for issue in quality_issues:
+            if "sensitive" in issue.lower() or ".env" in issue.lower() or "clear text" in issue.lower():
+                st.error(issue)
+            else:
+                st.warning(issue)
+
+    warnings = validation.get("warnings", [])
+    if warnings:
+        st.markdown("### Validation warnings")
+        for warning in warnings:
+            st.warning(warning)
+
 
 def _render_human_review_section(human_review: dict):
     st.subheader("Human Review Status")
@@ -139,7 +162,7 @@ def _render_plan_section(plan: dict):
             st.write(f"- {artifact}")
 
 
-def _render_infrastructure_section(infrastructure: dict):
+def _render_infrastructure_section(infrastructure: dict, sensitive_variable_names: set[str]):
     st.subheader("Infrastructure Result")
 
     summary = infrastructure.get("summary")
@@ -165,9 +188,65 @@ def _render_infrastructure_section(infrastructure: dict):
         for artifact_name, artifact_content in artifacts.items():
             with st.expander(f"{artifact_name}", expanded=False):
                 if artifact_content:
-                    st.code(artifact_content)
+                    st.code(
+                        _sanitize_artifact_content_for_display(
+                            artifact_content,
+                            sensitive_variable_names,
+                        )
+                    )
                 else:
                     st.write("Empty / not generated")
+
+
+def _render_repository_analysis_section(result: dict):
+    repo_summary = result.get("repo_summary") or {}
+    repository_analysis = result.get("repository_analysis") or {}
+    analysis_metadata = (
+        ((repository_analysis.get("decision") or {}).get("latest_analysis") or {}).get("analysis_metadata")
+        or {}
+    )
+
+    if not repo_summary and not repository_analysis:
+        return
+
+    st.subheader("Repository Analysis")
+
+    cache_status = repository_analysis.get("cache_status")
+    if cache_status:
+        st.info(f"Analysis cache status: {cache_status}")
+
+    services = repo_summary.get("services") or []
+    key_entrypoints = repo_summary.get("key_entrypoints") or []
+    infrastructure_needs = repo_summary.get("infrastructure_needs") or []
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Detected services", len(services))
+    col2.metric("Entrypoints", len(key_entrypoints))
+    col3.metric("Infra needs", len(infrastructure_needs))
+
+    render_env_security_summary(
+        env_files=repo_summary.get("env_files"),
+        sanitized_env_context=repo_summary.get("sanitized_env_context"),
+        analysis_metadata=analysis_metadata,
+    )
+
+    if services:
+        st.markdown("### Detected services")
+        st.dataframe(
+            [
+                {
+                    "Name": service.get("name", "unknown"),
+                    "Type": service.get("type", "unknown"),
+                    "Framework": service.get("framework", "unknown"),
+                    "Language": service.get("language", "unknown"),
+                    "Entrypoint": service.get("entrypoint", ""),
+                    "Port": service.get("port", ""),
+                }
+                for service in services
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def render_task_result(task: dict):
@@ -188,6 +267,7 @@ def render_task_result(task: dict):
     st.write(f"**Prompt:** {task.get('prompt', 'N/A')}")
 
     result = task.get("result") or {}
+    sensitive_variable_names = _collect_sensitive_variable_names(result)
 
     repository_security = result.get("repository_security") or {}
     if repository_security:
@@ -196,6 +276,8 @@ def render_task_result(task: dict):
     validation = result.get("validation") or {}
     if validation:
         _render_validation_section(validation)
+
+    _render_repository_analysis_section(result)
 
     human_review = result.get("human_review") or {}
     if human_review:
@@ -207,7 +289,82 @@ def render_task_result(task: dict):
 
     infrastructure = result.get("infrastructure") or {}
     if infrastructure:
-        _render_infrastructure_section(infrastructure)
+        _render_infrastructure_section(infrastructure, sensitive_variable_names)
 
     with st.expander("Raw task JSON", expanded=False):
-        st.json(task)
+        st.json(_sanitize_task_for_display(task, sensitive_variable_names))
+
+
+def _sanitize_task_for_display(value, sensitive_variable_names: set[str]):
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, nested_value in value.items():
+            lowered = str(key).lower()
+            if lowered == "env_security_runtime":
+                sanitized[key] = {
+                    "sensitive_values": "[hidden]",
+                    "all_values": "[hidden]",
+                }
+                continue
+            if lowered in {"artifacts", "original_artifacts", "reviewed_artifacts"} and isinstance(nested_value, dict):
+                sanitized[key] = {
+                    artifact_key: _sanitize_artifact_content_for_display(
+                        artifact_value,
+                        sensitive_variable_names,
+                    )
+                    for artifact_key, artifact_value in nested_value.items()
+                }
+                continue
+            sanitized[key] = _sanitize_task_for_display(
+                nested_value,
+                sensitive_variable_names,
+            )
+        return sanitized
+
+    if isinstance(value, list):
+        return [_sanitize_task_for_display(item, sensitive_variable_names) for item in value]
+
+    return value
+
+
+def _collect_sensitive_variable_names(result: dict) -> set[str]:
+    variables = (
+        ((result.get("repo_summary") or {}).get("sanitized_env_context") or {}).get("variables")
+        or []
+    )
+    return {
+        str(item.get("name")).upper()
+        for item in variables
+        if item.get("is_sensitive") and item.get("name")
+    }
+
+
+def _sanitize_artifact_content_for_display(
+    content: str,
+    sensitive_variable_names: set[str],
+) -> str:
+    text = str(content or "")
+    if not text or not sensitive_variable_names:
+        return text
+
+    sanitized_lines = []
+    for line in text.splitlines():
+        updated_line = line
+        stripped = line.strip()
+        for variable_name in sensitive_variable_names:
+            for prefix in (
+                f"{variable_name}=",
+                f"{variable_name}:",
+                f"- {variable_name}=",
+            ):
+                if stripped.startswith(prefix):
+                    separator = "=" if "=" in prefix else ":"
+                    left = updated_line.split(separator, 1)[0]
+                    updated_line = f"{left}{separator} [REDACTED]"
+                    break
+            else:
+                continue
+            break
+        sanitized_lines.append(updated_line)
+
+    return "\n".join(sanitized_lines)

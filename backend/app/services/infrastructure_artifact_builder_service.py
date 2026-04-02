@@ -26,7 +26,14 @@ class InfrastructureArtifactBuilderService:
         sections: dict[str, list[str]] = {}
         for item in env_template:
             category = item.get("category", "app")
-            sections.setdefault(category, []).append(f"{item['name']}=")
+            value = item.get("sanitized_value")
+            if item.get("is_sensitive"):
+                rendered = f"{item['name']}="
+            elif value is not None:
+                rendered = f"{item['name']}={value}"
+            else:
+                rendered = f"{item['name']}="
+            sections.setdefault(category, []).append(rendered)
 
         lines = []
         for category in ("app", "database", "cache", "queue", "external_api", "deployment", "secret"):
@@ -273,7 +280,11 @@ class InfrastructureArtifactBuilderService:
             "data:",
         ]
         for item in env_template:
-            lines.append(f'  {item["name"]}: ""')
+            if item.get("is_sensitive"):
+                continue
+            value = item.get("sanitized_value")
+            rendered = value if value is not None else ""
+            lines.append(f'  {item["name"]}: "{rendered}"')
         return "\n".join(lines)
 
     def build_terraform_main(self, mapped_context: dict[str, Any]) -> str:

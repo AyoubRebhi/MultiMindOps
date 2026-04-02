@@ -1,7 +1,10 @@
+from pathlib import Path
 from typing import Any, Dict
 
 from agents.base_agent import BaseAgent
 from backend.app.services.context_builder_service import ContextBuilderService
+from backend.app.services.env_file_detector_service import EnvFileDetectorService
+from backend.app.services.env_sanitizer_service import EnvSanitizerService
 from backend.app.services.execution_trace_service import ExecutionTraceService
 from backend.app.services.github_service import GitHubService
 from backend.app.services.repository_fingerprint_service import RepositoryFingerprintService
@@ -11,7 +14,7 @@ from backend.app.services.repository_security_service import RepositorySecurityS
 
 
 class CodebaseAnalysisAgent(BaseAgent):
-    ANALYSIS_VERSION = "2026-03-31-analysis-cache-v4"
+    ANALYSIS_VERSION = "2026-04-01-analysis-cache-v6"
 
     def __init__(self):
         super().__init__(name="CodebaseAnalysisAgent")
@@ -19,6 +22,8 @@ class CodebaseAnalysisAgent(BaseAgent):
         self.security_service = RepositorySecurityService()
         self.repository_parser = RepositoryParserService()
         self.context_builder = ContextBuilderService()
+        self.env_file_detector = EnvFileDetectorService()
+        self.env_sanitizer = EnvSanitizerService()
         self.fingerprint_service = RepositoryFingerprintService()
         self.registry_service = RepositoryRegistryService()
         self.trace_service = ExecutionTraceService()
@@ -42,6 +47,7 @@ class CodebaseAnalysisAgent(BaseAgent):
         repo_url: str,
         repository_visibility: str = "public",
         github_token: str | None = None,
+        uploaded_env: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         repo_identity = self.fingerprint_service.build_identity(repo_url)
         cache_decision = {
@@ -80,6 +86,57 @@ class CodebaseAnalysisAgent(BaseAgent):
             "reason": cache_decision["reason"],
             "latest_analysis": self._summarize_cached_analysis(cache_decision.get("latest_analysis")),
         }
+        env_security_runtime = None
+        current_repo_path: str | None = None
+        current_env_snapshot: Dict[str, Any] | None = None
+
+        if cache_decision["status"] == "unchanged" and latest_analysis:
+            latest_metadata = latest_analysis.get("analysis_metadata") or {}
+            latest_env_fingerprint = latest_metadata.get("env_fingerprint")
+            latest_env_detected = bool(latest_metadata.get("env_detected"))
+            latest_env_file_count = int(latest_metadata.get("env_file_count") or 0)
+
+            current_repo_path = self.github_service.clone_repository(
+                repo_url=repo_url,
+                repository_visibility=repository_visibility,
+                github_token=github_token,
+            )
+            current_env_snapshot = self._build_env_snapshot(
+                current_repo_path,
+                uploaded_env=uploaded_env,
+            )
+            env_security_runtime = current_env_snapshot.get("runtime_security")
+            current_env_fingerprint = current_env_snapshot.get("env_fingerprint")
+            current_env_files = current_env_snapshot.get("env_files") or []
+            current_env_detected = bool(current_env_files)
+            current_env_file_count = len(current_env_files)
+
+            if latest_env_detected != current_env_detected:
+                cache_decision = {
+                    "status": "changed",
+                    "reason": "env_presence_changed",
+                    "latest_analysis": latest_analysis,
+                }
+            elif latest_env_fingerprint != current_env_fingerprint:
+                cache_decision = {
+                    "status": "changed",
+                    "reason": "env_fingerprint_changed",
+                    "latest_analysis": latest_analysis,
+                }
+            elif latest_env_file_count != current_env_file_count:
+                cache_decision = {
+                    "status": "changed",
+                    "reason": "env_file_count_changed",
+                    "latest_analysis": latest_analysis,
+                }
+
+            cache_decision_summary = {
+                "status": cache_decision["status"],
+                "reason": cache_decision["reason"],
+                "latest_analysis": self._summarize_cached_analysis(
+                    cache_decision.get("latest_analysis")
+                ),
+            }
 
         if cache_decision["status"] == "unchanged" and latest_analysis:
             reused_record = self.registry_service.mark_reused(
@@ -90,6 +147,7 @@ class CodebaseAnalysisAgent(BaseAgent):
                     details={
                         "reason": cache_decision["reason"],
                         "commit_sha": repo_identity.get("commit_sha"),
+                        "env_verification": self._summarize_env_snapshot(current_env_snapshot),
                     },
                 ),
             ) or latest_analysis
@@ -102,9 +160,13 @@ class CodebaseAnalysisAgent(BaseAgent):
                 "record_id": reused_record.get("id"),
                 "execution_trace": reused_record.get("execution_trace", []),
             }
+            analysis_output["env_security_runtime"] = env_security_runtime or {
+                "sensitive_values": [],
+                "all_values": [],
+            }
             return analysis_output
 
-        repo_path = self.github_service.clone_repository(
+        repo_path = current_repo_path or self.github_service.clone_repository(
             repo_url=repo_url,
             repository_visibility=repository_visibility,
             github_token=github_token,
@@ -177,12 +239,25 @@ class CodebaseAnalysisAgent(BaseAgent):
             }
             return analysis_output
 
-        parsed_repo = self.repository_parser.parse_repository(repo_path)
+        parsed_repo = self.repository_parser.parse_repository(
+            repo_path,
+            uploaded_env=uploaded_env,
+        )
         agent_context = self.context_builder.build_agent_context(parsed_repo)
+        env_security_runtime = parsed_repo.pop("_runtime_env_security", None) or {
+            "sensitive_values": [],
+            "all_values": [],
+        }
         content_fingerprint = self.fingerprint_service.build_content_fingerprint(
             repo_path=repo_path,
-            candidate_files=parsed_repo.get("important_files") or parsed_repo.get("file_tree") or [],
+            candidate_files=(
+                (parsed_repo.get("important_files") or parsed_repo.get("file_tree") or [])
+                + [item["path"] for item in (parsed_repo.get("env_files") or [])]
+            ),
         )
+        env_fingerprint = parsed_repo.get("env_fingerprint")
+        env_files = parsed_repo.get("env_files") or []
+        sanitized_env_context = parsed_repo.get("sanitized_env_context") or {}
 
         execution_trace.append(
             self.trace_service.build_trace_entry(
@@ -192,6 +267,24 @@ class CodebaseAnalysisAgent(BaseAgent):
                     "important_files_count": len(parsed_repo.get("important_files") or []),
                     "key_entrypoints_count": len(parsed_repo.get("key_entrypoints") or []),
                     "content_fingerprint": content_fingerprint,
+                },
+            )
+        )
+        execution_trace.append(
+            self.trace_service.build_trace_entry(
+                step="env_file_processing",
+                status="sanitized" if env_files else "not_detected",
+                details={
+                    "env_detected": bool(env_files),
+                    "env_source": sanitized_env_context.get("source", "none"),
+                    "uploaded_env_provided": bool(uploaded_env),
+                    "env_hash_stored": bool(env_fingerprint),
+                    "env_file_count": len(env_files),
+                    "variables_extracted": len(sanitized_env_context.get("variables") or []),
+                    "sensitive_variables_count": sanitized_env_context.get(
+                        "sensitive_variables_count",
+                        0,
+                    ),
                 },
             )
         )
@@ -221,8 +314,18 @@ class CodebaseAnalysisAgent(BaseAgent):
                 "analysis_version": self.ANALYSIS_VERSION,
                 "cache_decision": cache_decision_summary,
                 "repository_visibility": repository_visibility,
+                "env_detected": bool(env_files),
+                "env_source": sanitized_env_context.get("source", "none"),
+                "env_fingerprint": env_fingerprint,
+                "env_file_count": len(env_files),
+                "uploaded_env_provided": bool(uploaded_env),
                 "reused_components": [],
-                "recomputed_components": ["security_scan", "repository_parsing", "context_building"],
+                "recomputed_components": [
+                    "security_scan",
+                    "repository_parsing",
+                    "env_file_processing",
+                    "context_building",
+                ],
             },
             execution_trace=execution_trace,
             execution_stats={"llm_calls": 0, "cache_hit": False},
@@ -244,5 +347,37 @@ class CodebaseAnalysisAgent(BaseAgent):
             "record_id": stored_record["id"],
             "execution_trace": stored_record.get("execution_trace", []),
         }
+        analysis_output["env_security_runtime"] = env_security_runtime
 
         return analysis_output
+
+    def _build_env_snapshot(
+        self,
+        repo_path: str,
+        uploaded_env: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        file_tree = self.repository_parser._build_file_tree(Path(repo_path))
+        env_files = self.env_file_detector.detect(file_tree)
+        return self.env_sanitizer.extract(
+            repo_path,
+            env_files,
+            uploaded_env=uploaded_env,
+        )
+
+    def _summarize_env_snapshot(
+        self,
+        snapshot: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
+        snapshot = snapshot or {}
+        sanitized_context = snapshot.get("sanitized_env_context") or {}
+        return {
+            "env_detected": bool(snapshot.get("env_files")),
+            "env_source": (snapshot.get("sanitized_env_context") or {}).get("source", "none"),
+            "env_hash_stored": bool(snapshot.get("env_fingerprint")),
+            "env_file_count": len(snapshot.get("env_files") or []),
+            "variables_extracted": len(sanitized_context.get("variables") or []),
+            "sensitive_variables_count": sanitized_context.get(
+                "sensitive_variables_count",
+                0,
+            ),
+        }

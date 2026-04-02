@@ -1,6 +1,7 @@
+import json
 import traceback
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from agents.orchestrator_agent import OrchestratorAgent
@@ -13,7 +14,10 @@ from backend.app.schemas.task import (
     PlanPreviewResponse,
     ReviewArtifactsRequest,
 )
+from backend.app.services.uploaded_env_file_service import UploadedEnvFileService
+
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
+uploaded_env_service = UploadedEnvFileService()
 
 
 def get_db():
@@ -25,7 +29,8 @@ def get_db():
 
 
 @router.post("/", response_model=TaskResponse)
-def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
+async def create_task(request: Request, db: Session = Depends(get_db)):
+    payload, uploaded_env_input = await _parse_task_request(request, TaskCreate)
     task = TaskService.create_task(db, payload.prompt)
 
     try:
@@ -37,6 +42,7 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
             repo_url=payload.repo_url,
             repository_visibility=payload.repository_visibility,
             github_token=payload.github_token,
+            uploaded_env_input=uploaded_env_input,
         )
 
         for log in workflow_state.get("logs", []):
@@ -71,7 +77,8 @@ def get_task(task_id: str, db: Session = Depends(get_db)):
     return task
 
 @router.post("/plan-preview", response_model=PlanPreviewResponse)
-def plan_preview(payload: PlanPreviewRequest):
+async def plan_preview(request: Request):
+    payload, uploaded_env_input = await _parse_task_request(request, PlanPreviewRequest)
     try:
         orchestrator = OrchestratorAgent()
         state = orchestrator.run_plan_preview(
@@ -79,6 +86,7 @@ def plan_preview(payload: PlanPreviewRequest):
             repo_url=payload.repo_url,
             repository_visibility=payload.repository_visibility,
             github_token=payload.github_token,
+            uploaded_env_input=uploaded_env_input,
         )
 
         return {
@@ -95,7 +103,12 @@ def plan_preview(payload: PlanPreviewRequest):
             detail=f"Plan preview failed: {type(e).__name__}: {str(e)}"
         ) 
 @router.post("/generate", response_model=TaskResponse)
-def generate_artifacts(payload: GenerateArtifactsRequest, db: Session = Depends(get_db)):
+async def generate_artifacts(request: Request, db: Session = Depends(get_db)):
+    payload, uploaded_env_input = await _parse_task_request(
+        request,
+        GenerateArtifactsRequest,
+        include_approved_artifacts=True,
+    )
     task = TaskService.create_task(db, payload.prompt)
 
     try:
@@ -108,6 +121,7 @@ def generate_artifacts(payload: GenerateArtifactsRequest, db: Session = Depends(
             repository_visibility=payload.repository_visibility,
             github_token=payload.github_token,
             approved_artifacts=payload.approved_artifacts,
+            uploaded_env_input=uploaded_env_input,
         )
 
         for log in workflow_state.get("logs", []):
@@ -187,3 +201,51 @@ def review_artifacts(
         traceback.print_exc()
         TaskService.save_error(db, task, str(e))
         raise HTTPException(status_code=500, detail=f"Artifact review failed: {str(e)}")
+
+
+async def _parse_task_request(
+    request: Request,
+    model_class,
+    *,
+    include_approved_artifacts: bool = False,
+):
+    content_type = request.headers.get("content-type", "")
+
+    if "application/json" in content_type:
+        payload_data = await request.json()
+        return model_class(**payload_data), None
+
+    form = await request.form()
+    payload_data = {
+        "prompt": (form.get("prompt") or "").strip(),
+        "repo_url": _normalize_optional(form.get("repo_url")),
+        "repository_visibility": _normalize_optional(form.get("repository_visibility")) or "public",
+        "github_token": _normalize_optional(form.get("github_token")),
+    }
+
+    if include_approved_artifacts:
+        approved_artifacts = [
+            str(item)
+            for item in form.getlist("approved_artifacts")
+            if str(item).strip()
+        ]
+        if not approved_artifacts and form.get("approved_artifacts"):
+            try:
+                approved_artifacts = json.loads(str(form.get("approved_artifacts")))
+            except Exception:
+                approved_artifacts = [str(form.get("approved_artifacts"))]
+        payload_data["approved_artifacts"] = approved_artifacts
+
+    uploaded_env_input = None
+    env_file = form.get("env_file")
+    if getattr(env_file, "filename", None):
+        uploaded_env_input = await uploaded_env_service.build_input_from_upload(env_file)
+
+    return model_class(**payload_data), uploaded_env_input
+
+
+def _normalize_optional(value):
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None

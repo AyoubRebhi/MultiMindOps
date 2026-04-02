@@ -27,7 +27,7 @@ if "task_response" not in st.session_state:
 if "form_data" not in st.session_state:
     st.session_state.form_data = None
 
-prompt, repo_url, repository_visibility, github_token, submitted = render_repository_input()
+prompt, repo_url, repository_visibility, github_token, uploaded_env_file, submitted = render_repository_input()
 
 if submitted:
     try:
@@ -37,6 +37,7 @@ if submitted:
                 repo_url=repo_url,
                 repository_visibility=repository_visibility,
                 github_token=github_token,
+                uploaded_env_file=uploaded_env_file,
             )
             st.session_state.preview_response = preview
             st.session_state.form_data = {
@@ -44,6 +45,7 @@ if submitted:
                 "repo_url": repo_url,
                 "repository_visibility": repository_visibility,
                 "github_token": github_token,
+                "uploaded_env_file": uploaded_env_file,
             }
             st.session_state.task_response = None
     except Exception as exc:
@@ -86,6 +88,7 @@ if st.session_state.preview_response:
                     repository_visibility=form_data.get("repository_visibility", "public"),
                     github_token=form_data.get("github_token"),
                     approved_artifacts=approved_artifacts,
+                    uploaded_env_file=form_data.get("uploaded_env_file"),
                 )
                 st.session_state.task_response = result
 

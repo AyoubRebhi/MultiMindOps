@@ -7,6 +7,7 @@ class OrchestratorState(TypedDict, total=False):
     repository_visibility: Optional[str]
     github_token: Optional[str]
     approved_artifacts: Optional[List[str]]
+    uploaded_env_input: Optional[Dict[str, Any]]
 
     status: str
     logs: List[Dict[str, str]]
@@ -21,6 +22,7 @@ class OrchestratorState(TypedDict, total=False):
     categorized_files: Optional[Dict[str, Any]]
     chunks: Optional[List[Dict[str, Any]]]
     agent_context: Optional[Dict[str, Any]]
+    env_security_runtime: Optional[Dict[str, Any]]
 
     plan: Optional[Dict[str, Any]]
     infra: Optional[Dict[str, Any]]

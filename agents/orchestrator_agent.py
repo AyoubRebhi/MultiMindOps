@@ -82,6 +82,7 @@ class OrchestratorAgent(BaseAgent):
             repo_url=state["repo_url"],  # type: ignore[index]
             repository_visibility=state.get("repository_visibility", "public"),
             github_token=state.get("github_token"),
+            uploaded_env=state.get("uploaded_env_input"),
         )
 
         logs = list(state.get("logs", []))
@@ -162,6 +163,7 @@ class OrchestratorAgent(BaseAgent):
             "categorized_files": analysis.get("categorized_files"),
             "chunks": analysis.get("chunks"),
             "agent_context": analysis.get("agent_context"),
+            "env_security_runtime": analysis.get("env_security_runtime"),
             "logs": logs,
         }
 
@@ -335,6 +337,7 @@ class OrchestratorAgent(BaseAgent):
             infra=infra,
             infrastructure_context=infrastructure_context,
             approved_artifacts=state.get("approved_artifacts"),
+            env_security_runtime=state.get("env_security_runtime"),
         )
 
         logs = list(state.get("logs", []))
@@ -473,12 +476,14 @@ class OrchestratorAgent(BaseAgent):
         repo_url: str | None = None,
         repository_visibility: str = "public",
         github_token: str | None = None,
+        uploaded_env_input: dict | None = None,
     ) -> dict:
         initial_state: OrchestratorState = {
             "prompt": prompt,
             "repo_url": repo_url,
             "repository_visibility": repository_visibility,
             "github_token": github_token,
+            "uploaded_env_input": uploaded_env_input,
             "status": "pending",
             "logs": [],
             "repository_security": None,
@@ -487,6 +492,7 @@ class OrchestratorAgent(BaseAgent):
             "file_tree": None,
             "important_files": None,
             "agent_context": None,
+            "env_security_runtime": None,
             "plan": None,
             "infra": None,
             "validation": None,
@@ -501,12 +507,14 @@ class OrchestratorAgent(BaseAgent):
         repo_url: str | None = None,
         repository_visibility: str = "public",
         github_token: str | None = None,
+        uploaded_env_input: dict | None = None,
     ) -> dict:
         state: OrchestratorState = {
             "prompt": prompt,
             "repo_url": repo_url,
             "repository_visibility": repository_visibility,
             "github_token": github_token,
+            "uploaded_env_input": uploaded_env_input,
             "approved_artifacts": None,
             "status": "pending",
             "logs": [],
@@ -516,6 +524,7 @@ class OrchestratorAgent(BaseAgent):
             "file_tree": None,
             "important_files": None,
             "agent_context": None,
+            "env_security_runtime": None,
             "plan": None,
             "infra": None,
             "validation": None,
@@ -549,12 +558,14 @@ class OrchestratorAgent(BaseAgent):
         repo_url: str | None = None,
         repository_visibility: str = "public",
         github_token: str | None = None,
+        uploaded_env_input: dict | None = None,
     ) -> dict:
         preview_state = self.run_plan_preview(
             prompt=prompt,
             repo_url=repo_url,
             repository_visibility=repository_visibility,
             github_token=github_token,
+            uploaded_env_input=uploaded_env_input,
         )
 
         if preview_state.get("status") == "blocked":

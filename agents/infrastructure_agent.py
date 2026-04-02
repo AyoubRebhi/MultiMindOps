@@ -332,6 +332,7 @@ Approved artifacts to generate:
 
     def _compact_mapped_context(self, mapped_context: Dict[str, Any]) -> Dict[str, Any]:
         runtime = mapped_context.get("runtime") or {}
+        sanitized_env_context = mapped_context.get("sanitized_env_context") or {}
         return {
             "project_type": mapped_context.get("project_type"),
             "build_context": mapped_context.get("build_context"),
@@ -354,6 +355,27 @@ Approved artifacts to generate:
                 for service in (mapped_context.get("services") or [])[:4]
             ],
             "environment_template": (mapped_context.get("environment_template") or [])[:20],
+            "sanitized_env_context": {
+                "env_detected": sanitized_env_context.get("env_detected", False),
+                "env_fingerprint": sanitized_env_context.get("env_fingerprint"),
+                "files": [
+                    {
+                        "path": item.get("path"),
+                        "variable_count": item.get("variable_count"),
+                        "sensitive_variables_count": item.get("sensitive_variables_count"),
+                    }
+                    for item in (sanitized_env_context.get("files") or [])[:5]
+                ],
+                "variable_names": (sanitized_env_context.get("variable_names") or [])[:25],
+                "sensitive_variables_count": sanitized_env_context.get(
+                    "sensitive_variables_count",
+                    0,
+                ),
+                "used_for_generation_count": sanitized_env_context.get(
+                    "used_for_generation_count",
+                    0,
+                ),
+            },
             "infrastructure_dependencies": mapped_context.get("infrastructure_dependencies", []),
             "infrastructure_needs": mapped_context.get("infrastructure_needs", []),
             "runtime": {
