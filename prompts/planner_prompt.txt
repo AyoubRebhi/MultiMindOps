@@ -20,6 +20,9 @@ Rules:
 - Tailor the plan to the existing project structure.
 - If the task implies file generation, list all expected files in required_artifacts.
 - required_artifacts must contain concrete file names or paths when possible.
+- For CI/CD, support GitHub Actions only.
+- Allowed CI/CD artifacts are only files under `.github/workflows/` ending with `.yml` or `.yaml`.
+- Never propose `Jenkinsfile`, `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/config.yml`, `scripts/build.sh`, or `scripts/deploy.sh` as CI/CD artifacts.
 - Example artifacts can include:
   - Dockerfile
   - .dockerignore

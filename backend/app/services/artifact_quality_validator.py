@@ -1,12 +1,14 @@
 from typing import Any
 import re
 
+from backend.app.services.artifact_contract_service import ArtifactContractService
 from backend.app.services.infrastructure_context_mapper import InfrastructureContextMapper
 
 
 class ArtifactQualityValidator:
     def __init__(self):
         self.mapper = InfrastructureContextMapper()
+        self.contract_service = ArtifactContractService()
 
     def validate(
         self,
@@ -47,13 +49,38 @@ class ArtifactQualityValidator:
         if missing_artifacts and len(missing_artifacts) == len(required_artifacts or missing_artifacts):
             status = "invalid"
 
+        canonical_contract = self.contract_service.build_contract(
+            repo_summary=(infrastructure_context or {}).get("project_summary"),
+            categorized_files={},
+            key_entrypoints=((infrastructure_context or {}).get("project_summary") or {}).get(
+                "key_entrypoints"
+            )
+            or [],
+            plan=plan,
+            infrastructure={
+                "generated_artifacts": generated_artifacts,
+                "artifacts": artifacts,
+                "context_used": mapped,
+            },
+            validation={
+                "status": status,
+                "required_artifacts": required_artifacts,
+                "artifact_statuses": [],
+            },
+        )
+
         return {
             "status": status,
-            "required_artifacts": required_artifacts,
-            "generated_artifacts": generated_artifacts,
-            "missing_artifacts": missing_artifacts,
+            "required_artifacts": canonical_contract["required_artifacts"],
+            "requested_artifacts": canonical_contract["requested_artifacts"],
+            "generated_artifacts": canonical_contract["generated_artifacts"],
+            "missing_artifacts": canonical_contract["missing_artifacts"],
             "quality_issues": quality_issues,
             "warnings": warnings,
+            "artifact_groups": canonical_contract["artifact_groups"],
+            "artifact_group_status": canonical_contract["artifact_group_status"],
+            "artifact_statuses": canonical_contract["artifact_statuses"],
+            "artifact_family_statuses": canonical_contract["artifact_family_statuses"],
             "generated_with_rag": bool(rag_info.get("generated_with_rag")),
             "fallback_used": bool(rag_info.get("fallback_used")),
             "template_ids_used": rag_info.get("template_ids_used", []),
@@ -71,6 +98,8 @@ class ArtifactQualityValidator:
         services = mapped.get("services") or []
         infra_dependencies = {item["name"] for item in mapped.get("infrastructure_dependencies") or []}
         artifact_targets = mapped.get("artifact_targets") or {}
+        artifact_expectations = mapped.get("artifact_expectations") or {}
+        needs_env_example = bool(artifact_expectations.get("needs_env_example"))
         combined_artifact_text = "\n".join(
             str(content or "") for content in artifacts.values()
         )
@@ -79,7 +108,7 @@ class ArtifactQualityValidator:
             if not str(content or "").strip():
                 issues.append(f"{artifact_name} was returned but is empty")
 
-        if env_template and not self._has_generated_path(
+        if needs_env_example and env_template and not self._has_generated_path(
             generated_artifacts,
             artifact_targets.get("env_files") or [".env.example", ".env"],
         ):
@@ -102,7 +131,7 @@ class ArtifactQualityValidator:
             issues.append("Dockerfile is inconsistent with detected Spring Boot runtime")
 
         env_example = artifacts.get("env_example", "")
-        if env_template:
+        if needs_env_example and env_template:
             for item in env_template:
                 if item["name"] not in env_example:
                     issues.append(f".env.example is missing detected variable {item['name']}")
@@ -126,7 +155,7 @@ class ArtifactQualityValidator:
             if not item.get("is_sensitive"):
                 continue
             pattern = f"{item['name']}="
-            if pattern in artifacts.get("env_example", ""):
+            if needs_env_example and pattern in artifacts.get("env_example", ""):
                 line = next(
                     (
                         candidate

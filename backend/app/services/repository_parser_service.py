@@ -41,7 +41,6 @@ class RepositoryParserService:
         "main.py",
         "app.py",
         "manage.py",
-        "Jenkinsfile",
     }
 
     IMPORTANT_DIRS = {
@@ -219,11 +218,7 @@ class RepositoryParserService:
             ):
                 infra_files.append(file_path)
 
-            if (
-                lower.startswith(".github/workflows/")
-                or "jenkinsfile" in lower
-                or ".gitlab-ci" in lower
-            ):
+            if lower.startswith(".github/workflows/") and lower.endswith((".yml", ".yaml")):
                 ci_cd_files.append(file_path)
 
             if "deploy" in lower or "helm" in lower or "release" in lower:
@@ -302,8 +297,6 @@ class RepositoryParserService:
             devops_tools.append("Docker Compose")
         if any(f.startswith(".github/workflows/") for f in lower_files):
             devops_tools.append("GitHub Actions")
-        if any("jenkinsfile" in f for f in lower_files):
-            devops_tools.append("Jenkins")
         if any(f.startswith("k8s/") or f.startswith("kubernetes/") for f in lower_files):
             devops_tools.append("Kubernetes")
         if any(f.endswith(".tf") or f.startswith("terraform/") for f in lower_files):

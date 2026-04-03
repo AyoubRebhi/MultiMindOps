@@ -7,6 +7,8 @@ from agents.codebase_analysis_agent import CodebaseAnalysisAgent
 from agents.infrastructure_agent import InfrastructureAgent
 from agents.planner_agent import PlannerAgent
 from agents.state import OrchestratorState
+from backend.app.agents import CICDAgent
+from backend.app.services.artifact_contract_service import ArtifactContractService
 from backend.app.services.artifact_quality_validator import ArtifactQualityValidator
 
 
@@ -50,7 +52,9 @@ class OrchestratorAgent(BaseAgent):
         self.infrastructure_agent = InfrastructureAgent(
             prompt_template=infrastructure_prompt
         )
+        self.cicd_agent = CICDAgent()
         self.artifact_quality_validator = ArtifactQualityValidator()
+        self.artifact_contract_service = ArtifactContractService()
         self.graph = self._build_graph()
 
     def _initialize_node(self, state: OrchestratorState) -> OrchestratorState:
@@ -373,6 +377,83 @@ class OrchestratorAgent(BaseAgent):
             "logs": logs,
         }
 
+    def _cicd_node(self, state: OrchestratorState) -> OrchestratorState:
+        plan = state.get("plan") or {}
+        infra = state.get("infra") or {}
+        validation = state.get("validation") or {}
+        categorized_files = state.get("categorized_files") or {}
+
+        base_contract = self.artifact_contract_service.build_contract(
+            repo_summary=state.get("repo_summary"),
+            categorized_files=categorized_files,
+            key_entrypoints=state.get("key_entrypoints"),
+            plan=plan,
+            infrastructure=infra,
+            validation=validation,
+        )
+
+        cicd_handoff = {
+            "repo_url": (
+                (((state.get("repository_analysis") or {}).get("identity") or {}).get("normalized_url"))
+                or state.get("repo_url")
+            ),
+            "repository_visibility": state.get("repository_visibility") or "public",
+            "branch": (
+                (((state.get("repository_analysis") or {}).get("identity") or {}).get("branch"))
+                or "main"
+            ),
+            "repo_summary": state.get("repo_summary") or {},
+            "categorized_files": categorized_files,
+            "ci_cd_files": categorized_files.get("ci_cd_files") or [],
+            "deployment_files": categorized_files.get("deployment_files") or [],
+            "key_entrypoints": state.get("key_entrypoints") or [],
+            "artifact_groups": base_contract.get("artifact_groups") or {},
+            "artifact_targets": base_contract.get("artifact_targets") or {},
+            "requested_artifacts": (
+                state.get("approved_artifacts")
+                or plan.get("approved_artifacts")
+                or plan.get("required_artifacts")
+                or []
+            ),
+            "artifact_statuses": base_contract.get("artifact_statuses") or [],
+            "execution_policy": base_contract.get("execution_policy") or {},
+            "prototype_scope": base_contract.get("prototype_scope") or "artifact_generation_only",
+        }
+
+        cicd = self.cicd_agent.run(
+            handoff_context=cicd_handoff,
+            github_token=state.get("github_token"),
+        )
+        verified_categorized_files = dict(categorized_files)
+        verified_categorized_files["ci_cd_files"] = (
+            ((cicd.get("handoff_context") or {}).get("ci_cd_files")) or []
+        )
+
+        logs = list(state.get("logs", []))
+        logs.append(
+            {
+                "step": "cicd",
+                "message": "CI/CD artifacts evaluated",
+            }
+        )
+        cicd_validation = cicd.get("validation") or {}
+        if cicd_validation.get("status"):
+            logs.append(
+                {
+                    "step": "cicd_validation",
+                    "message": (
+                        f"CICD validation status: {cicd_validation.get('status')}"
+                    ),
+                }
+            )
+
+        return {
+            **state,
+            "cicd": cicd,
+            "categorized_files": verified_categorized_files,
+            "logs": logs,
+        }
+
     def _artifact_matches_requested(
         self, generated_artifact: str, requested_artifacts: set[str]
     ) -> bool:
@@ -399,8 +480,55 @@ class OrchestratorAgent(BaseAgent):
             }
         )
 
-        validation = state.get("validation") or {}
+        infra_validation = state.get("validation") or {}
+        cicd = state.get("cicd") or {}
+        cicd_validation = cicd.get("validation") or {}
         security_result = state.get("repository_security") or {}
+
+        merged_requested = sorted(
+            set(
+                (state.get("approved_artifacts") or [])
+                or ((state.get("plan") or {}).get("approved_artifacts") or [])
+                or ((state.get("plan") or {}).get("required_artifacts") or [])
+            )
+            | set(cicd.get("requested_artifacts") or [])
+        )
+        merged_targets = self._merge_artifact_targets(
+            (((state.get("infra") or {}).get("context_used") or {}).get("artifact_targets") or {}),
+            cicd.get("artifact_targets") or {},
+        )
+        merged_statuses = (
+            (infra_validation.get("artifact_statuses") or [])
+            + (cicd.get("artifact_statuses") or [])
+        )
+        final_contract = self.artifact_contract_service.build_contract(
+            repo_summary=state.get("repo_summary"),
+            categorized_files=state.get("categorized_files"),
+            key_entrypoints=state.get("key_entrypoints"),
+            plan=state.get("plan"),
+            infrastructure={
+                "generated_artifacts": sorted(
+                    set((state.get("infra") or {}).get("generated_artifacts") or [])
+                    | set(cicd.get("generated_artifacts") or [])
+                ),
+                "artifacts": (state.get("infra") or {}).get("artifacts") or {},
+                "context_used": {
+                    "requested_artifacts": merged_requested,
+                    "artifact_targets": merged_targets,
+                },
+            },
+            validation={
+                "required_artifacts": merged_requested,
+            },
+            artifact_statuses=merged_statuses,
+            artifact_targets=merged_targets,
+            requested_artifacts=merged_requested,
+        )
+        final_validation = self._build_final_validation(
+            infra_validation=infra_validation,
+            cicd_validation=cicd_validation,
+            final_contract=final_contract,
+        )
 
         final_status = "completed"
         result_status = "success"
@@ -408,23 +536,29 @@ class OrchestratorAgent(BaseAgent):
         if security_result.get("status") == "blocked":
             final_status = "blocked"
             result_status = "blocked"
-        elif validation.get("status") == "invalid":
+        elif final_validation.get("status") == "invalid":
             final_status = "invalid"
             result_status = "invalid"
-        elif validation.get("status") == "partial":
+        elif final_validation.get("status") == "partial":
             final_status = "partial_success"
             result_status = "partial_success"
 
         result = {
             "agent": self.name,
             "status": result_status,
+            "prototype_scope": "artifact_generation_only",
+            "execution_policy": self.artifact_contract_service.default_execution_policy(),
             "repository_security": security_result,
             "repository_analysis": state.get("repository_analysis"),
-            "repo_summary": state.get("repo_summary"),
+            "repo_summary": final_contract["handoff_context"]["repo_summary"],
+            "categorized_files": final_contract["handoff_context"]["categorized_files"],
+            "key_entrypoints": state.get("key_entrypoints"),
             "plan": state.get("plan"),
             "infrastructure": state.get("infra"),
-            "validation": validation,
+            "cicd": cicd,
+            "validation": final_validation,
         }
+        result["artifact_contract"] = final_contract
 
         return {
             **state,
@@ -432,6 +566,60 @@ class OrchestratorAgent(BaseAgent):
             "result": result,
             "logs": logs,
         }
+
+    def _build_final_validation(
+        self,
+        *,
+        infra_validation: dict,
+        cicd_validation: dict,
+        final_contract: dict,
+    ) -> dict:
+        quality_issues = sorted(
+            set(infra_validation.get("quality_issues") or [])
+            | set(cicd_validation.get("issues") or [])
+        )
+        warnings = sorted(
+            set(infra_validation.get("warnings") or [])
+            | set(cicd_validation.get("warnings") or [])
+        )
+        required_artifacts = final_contract.get("required_artifacts") or []
+        missing_artifacts = final_contract.get("missing_artifacts") or []
+
+        status = "valid"
+        if missing_artifacts or quality_issues:
+            status = "partial"
+        if required_artifacts and len(missing_artifacts) == len(required_artifacts):
+            status = "invalid"
+
+        return {
+            "status": status,
+            "required_artifacts": required_artifacts,
+            "requested_artifacts": final_contract.get("requested_artifacts") or [],
+            "generated_artifacts": final_contract.get("generated_artifacts") or [],
+            "missing_artifacts": missing_artifacts,
+            "quality_issues": quality_issues,
+            "warnings": warnings,
+            "artifact_groups": final_contract.get("artifact_groups") or {},
+            "artifact_group_status": final_contract.get("artifact_group_status") or {},
+            "artifact_statuses": final_contract.get("artifact_statuses") or [],
+            "artifact_family_statuses": final_contract.get("artifact_family_statuses") or [],
+            "generated_with_rag": bool(infra_validation.get("generated_with_rag")),
+            "fallback_used": bool(infra_validation.get("fallback_used")),
+            "template_ids_used": infra_validation.get("template_ids_used", []),
+        }
+
+    def _merge_artifact_targets(self, left: dict, right: dict) -> dict:
+        merged = self.artifact_contract_service.normalize_artifact_targets(left or {})
+        right = self.artifact_contract_service.normalize_artifact_targets(right or {})
+        for key, value in right.items():
+            if key not in merged:
+                merged[key] = value
+                continue
+            if isinstance(merged[key], list) and isinstance(value, list):
+                merged[key] = sorted(set(merged[key]) | set(value))
+            elif not merged[key]:
+                merged[key] = value
+        return merged
 
     def _build_graph(self):
         workflow = StateGraph(OrchestratorState)
@@ -441,6 +629,7 @@ class OrchestratorAgent(BaseAgent):
         workflow.add_node("planner", self._planner_node)
         workflow.add_node("infrastructure", self._infrastructure_node)
         workflow.add_node("artifact_validation", self._artifact_validation_node)
+        workflow.add_node("cicd", self._cicd_node)
         workflow.add_node("finalize", self._finalize_node)
 
         workflow.add_edge(START, "initialize")
@@ -465,7 +654,8 @@ class OrchestratorAgent(BaseAgent):
 
         workflow.add_edge("planner", "infrastructure")
         workflow.add_edge("infrastructure", "artifact_validation")
-        workflow.add_edge("artifact_validation", "finalize")
+        workflow.add_edge("artifact_validation", "cicd")
+        workflow.add_edge("cicd", "finalize")
         workflow.add_edge("finalize", END)
 
         return workflow.compile()
@@ -495,6 +685,7 @@ class OrchestratorAgent(BaseAgent):
             "env_security_runtime": None,
             "plan": None,
             "infra": None,
+            "cicd": None,
             "validation": None,
             "result": None,
             "error_message": None,
@@ -527,6 +718,7 @@ class OrchestratorAgent(BaseAgent):
             "env_security_runtime": None,
             "plan": None,
             "infra": None,
+            "cicd": None,
             "validation": None,
             "result": None,
             "error_message": None,
@@ -580,6 +772,7 @@ class OrchestratorAgent(BaseAgent):
         preview_state = self._infrastructure_node(preview_state)
         preview_state = self._filter_generated_artifacts(preview_state)
         preview_state = self._artifact_validation_node(preview_state)
+        preview_state = self._cicd_node(preview_state)
         preview_state = self._finalize_node(preview_state)
 
         return preview_state

@@ -5,6 +5,7 @@ from backend.app.services.llm_service import LLMService
 from backend.app.services.infrastructure_artifact_builder_service import (
     InfrastructureArtifactBuilderService,
 )
+from backend.app.services.artifact_contract_service import ArtifactContractService
 from backend.app.services.infrastructure_context_mapper import InfrastructureContextMapper
 from backend.app.services.template_retrieval_service import TemplateRetrievalService
 
@@ -16,6 +17,7 @@ class InfrastructureAgent(BaseAgent):
         self.prompt_template = prompt_template
         self.context_mapper = InfrastructureContextMapper()
         self.artifact_builder = InfrastructureArtifactBuilderService()
+        self.artifact_contract = ArtifactContractService()
         self.template_retrieval = TemplateRetrievalService()
 
     def run(
@@ -199,6 +201,11 @@ Approved artifacts to generate:
             response.get("generated_artifacts", []),
             artifacts,
             mapped_context,
+        )
+        response["requested_artifacts"] = mapped_context.get("requested_artifacts", [])
+        response["artifact_targets"] = mapped_context.get("artifact_targets") or {}
+        response["artifact_groups"] = self.artifact_contract.group_artifacts(
+            response.get("generated_artifacts", [])
         )
         return response
 

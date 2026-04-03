@@ -86,6 +86,29 @@ def review_generated_artifacts(
     return response.json()
 
 
+def view_artifact_file(
+    view_url: str,
+    *,
+    github_token: str | None = None,
+):
+    headers = {}
+    if github_token:
+        headers["X-GitHub-Token"] = github_token
+
+    response = requests.get(
+        f"{API_BASE}{view_url}",
+        headers=headers,
+        timeout=60,
+    )
+    if not response.ok:
+        try:
+            detail = response.json()
+        except Exception:
+            detail = response.text
+        raise Exception(f"Backend error {response.status_code}: {detail}")
+    return response.json()
+
+
 def _build_task_form_data(
     *,
     prompt: str,

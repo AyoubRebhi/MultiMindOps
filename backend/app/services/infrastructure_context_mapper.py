@@ -22,6 +22,9 @@ class InfrastructureContextMapper:
         env_files = context.get("env_files") or []
         env_fingerprint = context.get("env_fingerprint")
         uploaded_env_provided = context.get("uploaded_env_provided", False)
+        uploaded_env_files = [
+            item for item in env_files if str(item.get("source") or "").lower() == "uploaded"
+        ]
         requested_artifacts = approved_artifacts or plan.get("approved_artifacts") or plan.get("required_artifacts", [])
 
         container_services = [
@@ -36,6 +39,7 @@ class InfrastructureContextMapper:
         env_template = self._build_env_template(env_vars, infra_dependencies)
         service_root = self._infer_service_root(main_service)
         artifact_targets = self._build_artifact_targets(requested_artifacts, service_root)
+        env_target_paths = artifact_targets["env_files"] or [".env.example"]
 
         return {
             "prompt": prompt,
@@ -53,11 +57,14 @@ class InfrastructureContextMapper:
             "env_fingerprint": env_fingerprint,
             "sanitized_env_context": sanitized_env_context,
             "uploaded_env_provided": uploaded_env_provided,
+            "uploaded_env_files": uploaded_env_files,
+            "env_source_of_truth": "uploaded" if uploaded_env_files else sanitized_env_context.get("source", "none"),
+            "resolved_env_artifact_paths": env_target_paths if uploaded_env_files else [],
             "infrastructure_dependencies": infra_dependencies,
             "infrastructure_needs": infra_needs,
             "artifact_targets": artifact_targets,
             "artifact_expectations": {
-                "needs_env_example": bool(env_template) or bool(artifact_targets["env_files"]),
+                "needs_env_example": (bool(env_template) or bool(artifact_targets["env_files"])) and not bool(uploaded_env_files),
                 "needs_dockerfile": bool(container_services),
                 "needs_docker_compose": len(container_services) > 1 or bool(infra_dependencies),
                 "needs_kubernetes": bool(artifact_targets["kubernetes"]),
