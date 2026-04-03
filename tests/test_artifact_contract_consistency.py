@@ -71,6 +71,50 @@ class ArtifactContractConsistencyTests(unittest.TestCase):
         self.assertNotIn(".env.example", contract["generated_artifacts"])
         self.assertEqual(self._status_for(contract["artifact_statuses"], "Dockerfile"), "generated")
 
+    def test_uploaded_env_overrides_accidental_generated_env_status(self):
+        contract = self.contract_service.build_contract(
+            repo_summary={
+                "project_type": "FastAPI backend",
+                "runtime": {"languages": ["Python"], "frameworks": ["FastAPI"]},
+                "services": [{"name": "backend", "type": "api"}],
+            },
+            categorized_files={},
+            key_entrypoints=["backend/app/main.py"],
+            plan={"approved_artifacts": [".env.example", "Dockerfile"]},
+            infrastructure={
+                "generated_artifacts": ["Dockerfile", ".env.example"],
+                "artifacts": {
+                    "dockerfile": "FROM python:3.11-slim\n",
+                    "env_example": "APP_ENV=dev\n",
+                },
+                "context_used": {
+                    "requested_artifacts": [".env.example", "Dockerfile"],
+                    "artifact_targets": {
+                        "dockerfile": "Dockerfile",
+                        "env_files": [".env.example"],
+                    },
+                    "uploaded_env_provided": True,
+                    "uploaded_env_files": [
+                        {
+                            "path": "uploaded/.env.example.test",
+                            "source": "uploaded",
+                            "file_hash": "abc123",
+                        }
+                    ],
+                    "resolved_env_artifact_paths": [".env.example"],
+                    "env_source_of_truth": "uploaded",
+                },
+            },
+            validation={"required_artifacts": [".env.example", "Dockerfile"]},
+        )
+
+        env_status = next(item for item in contract["artifact_statuses"] if item["path"] == ".env.example")
+        self.assertEqual(env_status["status"], "detected")
+        self.assertEqual(env_status["source"], "uploaded")
+        self.assertFalse(env_status["generated"])
+        self.assertNotIn(".env.example", contract["generated_artifacts"])
+        self.assertNotIn(".env.example", contract["missing_artifacts"])
+
     def test_jenkinsfile_does_not_satisfy_cicd_contract(self):
         contract = self.contract_service.build_contract(
             repo_summary={"project_type": "FastAPI backend"},

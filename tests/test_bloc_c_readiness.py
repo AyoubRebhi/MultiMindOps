@@ -302,6 +302,74 @@ class BlocCReadinessTests(unittest.TestCase):
             any(".env.example should be generated" in issue for issue in validation["quality_issues"])
         )
         self.assertNotIn(".env.example", contract["missing_artifacts"])
+        self.assertNotIn(".env.example", contract["generated_artifacts"])
+
+    def test_uploaded_env_keeps_env_example_out_of_final_generated_contract(self):
+        context = self._build_infrastructure_context(
+            project_type="FastAPI backend",
+            services=[
+                {
+                    "name": "backend",
+                    "type": "api",
+                    "framework": "FastAPI",
+                    "language": "Python",
+                    "entrypoint": "backend/app/main.py",
+                    "run_command": "uvicorn backend.app.main:app --host 0.0.0.0 --port 8000",
+                    "port": 8000,
+                    "dependencies": [],
+                    "environment_variables": ["APP_ENV", "GROQ_API_KEY"],
+                }
+            ],
+            environment_variables=[
+                self._env_var("APP_ENV", "deployment", "backend", sensitive=False),
+                self._env_var("GROQ_API_KEY", "external_api", "backend", sensitive=True),
+            ],
+            dependencies=[],
+            requested_artifacts=["Dockerfile", ".env.example"],
+        )
+        context["uploaded_env_provided"] = True
+        context["env_files"] = [
+            {
+                "path": "uploaded/.env.example.test",
+                "name": ".env.example.test",
+                "source": "uploaded",
+                "file_hash": "abc123",
+                "variable_count": 2,
+                "sensitive_variables_count": 1,
+            }
+        ]
+        context["sanitized_env_context"]["source"] = "uploaded"
+        context["project_summary"]["sanitized_env_context"]["source"] = "uploaded"
+
+        mapped = self.mapper.map(
+            prompt="Generate infra",
+            plan={"approved_artifacts": ["Dockerfile", ".env.example"]},
+            infrastructure_context=context,
+        )
+        artifacts = {
+            "dockerfile": self.builder.build_dockerfile(mapped),
+            "env_example": self.builder.build_env_example(mapped),
+        }
+        contract = self.contract_service.build_contract(
+            repo_summary=context["project_summary"],
+            categorized_files={"infra_files": [], "ci_cd_files": [], "deployment_files": []},
+            key_entrypoints=context["project_summary"]["key_entrypoints"],
+            plan={"approved_artifacts": ["Dockerfile", ".env.example"]},
+            infrastructure={
+                "generated_artifacts": ["Dockerfile"],
+                "artifacts": artifacts,
+                "context_used": mapped,
+            },
+            validation={"required_artifacts": ["Dockerfile", ".env.example"]},
+        )
+
+        self.assertFalse(mapped["artifact_expectations"]["needs_env_example"])
+        self.assertEqual(
+            next(item for item in contract["artifact_statuses"] if item["path"] == ".env.example")["source"],
+            "uploaded",
+        )
+        self.assertNotIn(".env.example", contract["generated_artifacts"])
+        self.assertNotIn(".env.example", contract["missing_artifacts"])
 
     def test_github_actions_templates_are_available_from_local_rag(self):
         templates = self.template_service.list_templates()

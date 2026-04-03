@@ -236,6 +236,9 @@ class OrchestratorAgent(BaseAgent):
         approved = set(state.get("approved_artifacts") or [])
         infra = state.get("infra") or {}
         artifact_targets = ((infra.get("context_used") or {}).get("artifact_targets") or {})
+        context_used = (infra.get("context_used") or {})
+        uploaded_env_paths = set(context_used.get("resolved_env_artifact_paths") or [])
+        env_source_of_truth = context_used.get("env_source_of_truth")
 
         artifacts = infra.get("artifacts", {})
 
@@ -300,6 +303,7 @@ class OrchestratorAgent(BaseAgent):
             if (
                 file_name
                 and str(content or "").strip()
+                and not (env_source_of_truth == "uploaded" and file_name in uploaded_env_paths)
                 and self._artifact_matches_requested(file_name, approved)
             ):
                 filtered_artifacts[key] = content
@@ -309,6 +313,7 @@ class OrchestratorAgent(BaseAgent):
         filtered_generated = sorted(
             file_name
             for file_name in set(filtered_generated)
+            if not (env_source_of_truth == "uploaded" and file_name in uploaded_env_paths)
             if self._artifact_matches_requested(file_name, approved)
         )
 

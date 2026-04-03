@@ -189,6 +189,7 @@ Approved artifacts to generate:
                 fallback_reasons["terraform_outputs"] = fallback_reason
 
         response["artifacts"] = artifacts
+        self._strip_uploaded_env_artifact(response["artifacts"], mapped_context)
         response["context_used"] = mapped_context
         response["rag"] = {
             **compact_rag,
@@ -273,6 +274,9 @@ Approved artifacts to generate:
         artifacts: Dict[str, str],
         mapped_context: Dict[str, Any],
     ) -> List[str]:
+        if mapped_context.get("env_source_of_truth") == "uploaded":
+            artifacts.pop("env_example", None)
+
         artifact_targets = mapped_context.get("artifact_targets") or {}
         key_to_file = {
             "dockerfile": artifact_targets.get("dockerfile") or "Dockerfile",
@@ -325,6 +329,15 @@ Approved artifacts to generate:
             if str(artifacts.get(key) or "").strip():
                 generated.add(file_name)
         return sorted(generated)
+
+    def _strip_uploaded_env_artifact(
+        self,
+        artifacts: Dict[str, str],
+        mapped_context: Dict[str, Any],
+    ) -> None:
+        if mapped_context.get("env_source_of_truth") != "uploaded":
+            return
+        artifacts.pop("env_example", None)
 
     def _find_target_path(self, targets: List[str], filename: str) -> str | None:
         return next((target for target in targets if target.lower().endswith(filename.lower())), None)

@@ -17,6 +17,7 @@ class ArtifactContractService:
     FINAL_STATUSES = ("generated", "reused", "detected", "skipped", "pending", "missing")
     PRESENT_STATUSES = {"generated", "reused", "detected"}
     STATUS_PRIORITY = {
+        "uploaded": 6,
         "generated": 5,
         "reused": 4,
         "detected": 3,
@@ -682,8 +683,8 @@ class ArtifactContractService:
             merged[entry["path"]] = entry
             return
 
-        current_priority = self.STATUS_PRIORITY.get(current["status"], 0)
-        new_priority = self.STATUS_PRIORITY.get(entry["status"], 0)
+        current_priority = self._status_priority(current)
+        new_priority = self._status_priority(entry)
         chosen = dict(entry if new_priority > current_priority else current)
 
         chosen["required"] = bool(current.get("required")) or bool(entry.get("required"))
@@ -692,6 +693,9 @@ class ArtifactContractService:
         chosen["group"] = chosen.get("group") or self.classify_artifact(chosen["path"])
         chosen["family"] = chosen.get("family") or self.classify_family(chosen["path"])
         chosen["source"] = chosen.get("source") or current.get("source") or entry.get("source")
+        if chosen["source"] == "uploaded" and chosen["family"] == "env":
+            chosen["status"] = "detected"
+            chosen["generated"] = False
         merged[entry["path"]] = chosen
 
     def _is_present_status(self, status: Any) -> bool:
@@ -793,3 +797,8 @@ class ArtifactContractService:
         if status in {"reused", "detected"}:
             return "existing"
         return "planned"
+
+    def _status_priority(self, entry: dict[str, Any]) -> int:
+        if entry.get("source") == "uploaded" and entry.get("family") == "env":
+            return self.STATUS_PRIORITY["uploaded"]
+        return self.STATUS_PRIORITY.get(str(entry.get("status") or ""), 0)
