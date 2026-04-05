@@ -4,9 +4,10 @@ import re
 from typing import Any, Callable, Dict
 
 from openai import OpenAI
+import yaml
 
 from backend.app.core.config import settings
-from backend.app.services.groq_key_manager import (
+from backend.app.services.core.groq_key_manager import (
     GroqKeyManager,
     NoGroqAPIKeysAvailableError,
     extract_retry_after_seconds,
@@ -108,13 +109,75 @@ class LLMService:
             if len(lines) >= 3:
                 content = "\n".join(lines[1:-1]).strip()
 
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", content, re.DOTALL)
-            if match:
-                return json.loads(match.group(0))
-            raise ValueError(f"LLM did not return valid JSON. Raw output:\n{content}")
+        candidates = [content]
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            candidates.append(match.group(0))
+
+        seen: set[str] = set()
+        last_error: Exception | None = None
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+
+            repaired = LLMService._escape_control_chars_in_strings(candidate)
+            for payload in (candidate, repaired):
+                if not payload or payload in seen and payload != candidate:
+                    continue
+                try:
+                    parsed = json.loads(payload)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except json.JSONDecodeError as exc:
+                    last_error = exc
+
+                try:
+                    parsed_yaml = yaml.safe_load(payload)
+                    if isinstance(parsed_yaml, dict):
+                        return parsed_yaml
+                except yaml.YAMLError as exc:
+                    last_error = exc
+
+        raise ValueError(f"LLM did not return valid JSON. Raw output:\n{content}") from last_error
+
+    @staticmethod
+    def _escape_control_chars_in_strings(payload: str) -> str:
+        result: list[str] = []
+        in_string = False
+        escaped = False
+
+        for char in payload:
+            if in_string:
+                if escaped:
+                    result.append(char)
+                    escaped = False
+                    continue
+                if char == "\\":
+                    result.append(char)
+                    escaped = True
+                    continue
+                if char == '"':
+                    result.append(char)
+                    in_string = False
+                    continue
+                if char == "\n":
+                    result.append("\\n")
+                    continue
+                if char == "\r":
+                    result.append("\\r")
+                    continue
+                if char == "\t":
+                    result.append("\\t")
+                    continue
+                result.append(char)
+                continue
+
+            result.append(char)
+            if char == '"':
+                in_string = True
+
+        return "".join(result)
 
     @staticmethod
     def _build_client(api_key: str) -> OpenAI:

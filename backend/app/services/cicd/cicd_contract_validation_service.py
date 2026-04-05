@@ -5,7 +5,7 @@ from typing import Any
 
 import yaml
 
-from backend.app.services.artifact_contract_service import ArtifactContractService
+from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
 
 
 class CicdContractValidationService:

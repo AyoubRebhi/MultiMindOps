@@ -2,14 +2,14 @@ import base64
 import unittest
 from unittest.mock import Mock, patch
 
-from backend.app.services.github_service import GitHubService
+from backend.app.services.repository.github_service import GitHubService
 
 
 class GitHubServiceTests(unittest.TestCase):
     def setUp(self):
         self.service = GitHubService()
 
-    @patch("backend.app.services.github_service.requests.get")
+    @patch("backend.app.services.repository.github_service.requests.get")
     def test_get_repository_file_content_success(self, mock_get):
         mock_response = Mock()
         mock_response.status_code = 200
@@ -31,7 +31,7 @@ class GitHubServiceTests(unittest.TestCase):
         self.assertEqual(result["encoding"], "utf-8")
         self.assertIn("name: CI", result["content"])
 
-    @patch("backend.app.services.github_service.requests.get")
+    @patch("backend.app.services.repository.github_service.requests.get")
     def test_get_repository_file_content_not_found(self, mock_get):
         mock_response = Mock()
         mock_response.status_code = 404
@@ -44,7 +44,7 @@ class GitHubServiceTests(unittest.TestCase):
                 file_path=".github/workflows/missing.yml",
             )
 
-    @patch("backend.app.services.github_service.requests.get")
+    @patch("backend.app.services.repository.github_service.requests.get")
     def test_get_repository_file_content_private_repo_without_access(self, mock_get):
         mock_response = Mock()
         mock_response.status_code = 403
@@ -60,7 +60,7 @@ class GitHubServiceTests(unittest.TestCase):
             )
 
     @patch(
-        "backend.app.services.github_service.GitHubService.get_repository_file_content",
+        "backend.app.services.repository.github_service.GitHubService.get_repository_file_content",
         return_value={"path": ".github/workflows/ci.yml", "content": "name: CI", "encoding": "utf-8"},
     )
     def test_verify_existing_github_workflow_returns_true_for_real_file(self, mock_get_file):
@@ -73,7 +73,7 @@ class GitHubServiceTests(unittest.TestCase):
         mock_get_file.assert_called_once()
 
     @patch(
-        "backend.app.services.github_service.GitHubService.get_repository_file_content",
+        "backend.app.services.repository.github_service.GitHubService.get_repository_file_content",
         side_effect=FileNotFoundError("missing"),
     )
     def test_verify_existing_github_workflow_returns_false_for_phantom_file(self, mock_get_file):

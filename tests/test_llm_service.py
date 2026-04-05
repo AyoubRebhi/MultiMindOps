@@ -1,8 +1,8 @@
 import unittest
 from types import SimpleNamespace
 
-from backend.app.services.groq_key_manager import GroqKeyManager, NoGroqAPIKeysAvailableError
-from backend.app.services.llm_service import LLMService
+from backend.app.services.core.groq_key_manager import GroqKeyManager, NoGroqAPIKeysAvailableError
+from backend.app.services.core.llm_service import LLMService
 
 
 class FakeGroqError(Exception):
@@ -28,6 +28,36 @@ class FakeClient:
 
 
 class LLMServiceTests(unittest.TestCase):
+    def test_safe_json_loads_accepts_fenced_json(self):
+        payload = """```json
+{
+  "agent": "PlannerAgent",
+  "steps": ["one"]
+}
+```"""
+
+        parsed = LLMService._safe_json_loads(payload)
+
+        self.assertEqual(parsed["agent"], "PlannerAgent")
+        self.assertEqual(parsed["steps"], ["one"])
+
+    def test_safe_json_loads_repairs_multiline_artifact_strings(self):
+        payload = """
+{
+  "agent": "InfrastructureAgent",
+  "artifacts": {
+    "dockerfile": "FROM python:3.11-slim
+WORKDIR /app
+COPY . ."
+  }
+}
+""".strip()
+
+        parsed = LLMService._safe_json_loads(payload)
+
+        self.assertEqual(parsed["agent"], "InfrastructureAgent")
+        self.assertIn("WORKDIR /app", parsed["artifacts"]["dockerfile"])
+
     def test_keeps_first_key_when_request_succeeds(self):
         manager = GroqKeyManager(
             [

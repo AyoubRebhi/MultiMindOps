@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from backend.app.core.config import Settings
-from backend.app.services.groq_key_manager import (
+from backend.app.services.core.groq_key_manager import (
     GroqKeyManager,
     extract_retry_after_seconds,
     is_groq_auth_error,

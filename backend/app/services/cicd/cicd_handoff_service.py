@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from backend.app.services.artifact_contract_service import ArtifactContractService
+from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
 
 
 class CicdHandoffService:

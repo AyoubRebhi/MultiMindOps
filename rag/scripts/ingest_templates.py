@@ -7,7 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.app.core.rag_config import rag_config
-from backend.app.services.template_corpus_service import (  # noqa: E402
+from backend.app.services.rag.template_corpus_service import (  # noqa: E402
     SimpleHashEmbeddingFunction,
     TemplateCorpusService,
 )

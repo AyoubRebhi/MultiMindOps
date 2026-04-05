@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.app.services.github_actions_template_service import (
+from backend.app.services.cicd.github_actions_template_service import (
     GitHubActionsTemplateService,
 )
 

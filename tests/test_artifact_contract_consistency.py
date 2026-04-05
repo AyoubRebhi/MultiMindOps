@@ -1,9 +1,9 @@
 import copy
 import unittest
 
-from agents.orchestrator_agent import OrchestratorAgent
+from backend.app.agents.orchestrator_agent import OrchestratorAgent
 from backend.app.agents.cicd_agent import CICDAgent
-from backend.app.services.artifact_contract_service import ArtifactContractService
+from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
 
 
 class ArtifactContractConsistencyTests(unittest.TestCase):

@@ -4,17 +4,17 @@ import traceback
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
-from agents.orchestrator_agent import OrchestratorAgent
+from backend.app.agents.orchestrator_agent import OrchestratorAgent
 from backend.app.database.session import SessionLocal
 from backend.app.schemas.task import TaskCreate, TaskResponse
-from backend.app.services.task_service import TaskService
+from backend.app.services.core.task_service import TaskService
 from backend.app.schemas.task import (
     GenerateArtifactsRequest,
     PlanPreviewRequest,
     PlanPreviewResponse,
     ReviewArtifactsRequest,
 )
-from backend.app.services.uploaded_env_file_service import UploadedEnvFileService
+from backend.app.services.environment.uploaded_env_file_service import UploadedEnvFileService
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 uploaded_env_service = UploadedEnvFileService()

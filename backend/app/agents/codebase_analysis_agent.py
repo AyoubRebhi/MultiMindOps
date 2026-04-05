@@ -1,16 +1,16 @@
 from pathlib import Path
 from typing import Any, Dict
 
-from agents.base_agent import BaseAgent
-from backend.app.services.context_builder_service import ContextBuilderService
-from backend.app.services.env_file_detector_service import EnvFileDetectorService
-from backend.app.services.env_sanitizer_service import EnvSanitizerService
-from backend.app.services.execution_trace_service import ExecutionTraceService
-from backend.app.services.github_service import GitHubService
-from backend.app.services.repository_fingerprint_service import RepositoryFingerprintService
-from backend.app.services.repository_parser_service import RepositoryParserService
-from backend.app.services.repository_registry_service import RepositoryRegistryService
-from backend.app.services.repository_security_service import RepositorySecurityService
+from backend.app.agents.base_agent import BaseAgent
+from backend.app.services.rag.context_builder_service import ContextBuilderService
+from backend.app.services.environment.env_file_detector_service import EnvFileDetectorService
+from backend.app.services.environment.env_sanitizer_service import EnvSanitizerService
+from backend.app.services.execution.execution_trace_service import ExecutionTraceService
+from backend.app.services.repository.github_service import GitHubService
+from backend.app.services.repository.repository_fingerprint_service import RepositoryFingerprintService
+from backend.app.services.repository.repository_parser_service import RepositoryParserService
+from backend.app.services.repository.repository_registry_service import RepositoryRegistryService
+from backend.app.services.repository.repository_security_service import RepositorySecurityService
 
 
 class CodebaseAnalysisAgent(BaseAgent):

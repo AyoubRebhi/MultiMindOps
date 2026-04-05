@@ -1,14 +1,14 @@
 from pathlib import Path
 from typing import Any, Dict, List
 
-from backend.app.services.chunking_service import ChunkingService
-from backend.app.services.command_detector_service import CommandDetectorService
-from backend.app.services.env_file_detector_service import EnvFileDetectorService
-from backend.app.services.env_sanitizer_service import EnvSanitizerService
-from backend.app.services.environment_variable_extractor_service import EnvironmentVariableExtractorService
-from backend.app.services.infra_dependency_detector_service import InfraDependencyDetectorService
-from backend.app.services.runtime_detector_service import RuntimeDetectorService
-from backend.app.services.service_detector_service import ServiceDetectorService
+from backend.app.services.rag.chunking_service import ChunkingService
+from backend.app.services.execution.command_detector_service import CommandDetectorService
+from backend.app.services.environment.env_file_detector_service import EnvFileDetectorService
+from backend.app.services.environment.env_sanitizer_service import EnvSanitizerService
+from backend.app.services.environment.environment_variable_extractor_service import EnvironmentVariableExtractorService
+from backend.app.services.infrastructure.infra_dependency_detector_service import InfraDependencyDetectorService
+from backend.app.services.repository.runtime_detector_service import RuntimeDetectorService
+from backend.app.services.repository.service_detector_service import ServiceDetectorService
 
 
 class RepositoryParserService:
@@ -164,6 +164,7 @@ class RepositoryParserService:
         return any(part in self.IGNORED_DIRS for part in relative_parts)
 
     def _build_file_tree(self, repo: Path, max_files: int = 250) -> List[str]:
+        
         file_tree: List[str] = []
 
         for path in repo.rglob("*"):

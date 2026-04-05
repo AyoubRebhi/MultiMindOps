@@ -2,8 +2,8 @@ from typing import Any, Dict, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from agents.base_agent import BaseAgent
-from backend.app.services.llm_service import LLMService
+from backend.app.agents.base_agent import BaseAgent
+from backend.app.services.core.llm_service import LLMService
 
 
 class PlannerResponseSchema(BaseModel):

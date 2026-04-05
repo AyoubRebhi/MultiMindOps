@@ -1,13 +1,13 @@
 from typing import Any, Dict, List
 
-from agents.base_agent import BaseAgent
-from backend.app.services.llm_service import LLMService
-from backend.app.services.infrastructure_artifact_builder_service import (
+from backend.app.agents.base_agent import BaseAgent
+from backend.app.services.core.llm_service import LLMService
+from backend.app.services.infrastructure.infrastructure_artifact_builder_service import (
     InfrastructureArtifactBuilderService,
 )
-from backend.app.services.artifact_contract_service import ArtifactContractService
-from backend.app.services.infrastructure_context_mapper import InfrastructureContextMapper
-from backend.app.services.template_retrieval_service import TemplateRetrievalService
+from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
+from backend.app.services.infrastructure.infrastructure_context_mapper import InfrastructureContextMapper
+from backend.app.services.rag.template_retrieval_service import TemplateRetrievalService
 
 
 class InfrastructureAgent(BaseAgent):

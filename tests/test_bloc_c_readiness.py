@@ -2,16 +2,16 @@ import shutil
 import unittest
 from pathlib import Path
 
-from backend.app.services.artifact_contract_service import ArtifactContractService
-from backend.app.services.artifact_quality_validator import ArtifactQualityValidator
-from backend.app.services.github_actions_template_service import (
+from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
+from backend.app.services.cicd.artifact_quality_validator import ArtifactQualityValidator
+from backend.app.services.cicd.github_actions_template_service import (
     GitHubActionsTemplateService,
 )
-from backend.app.services.infrastructure_artifact_builder_service import (
+from backend.app.services.infrastructure.infrastructure_artifact_builder_service import (
     InfrastructureArtifactBuilderService,
 )
-from backend.app.services.infrastructure_context_mapper import InfrastructureContextMapper
-from backend.app.services.repository_parser_service import RepositoryParserService
+from backend.app.services.infrastructure.infrastructure_context_mapper import InfrastructureContextMapper
+from backend.app.services.repository.repository_parser_service import RepositoryParserService
 
 
 class BlocCReadinessTests(unittest.TestCase):

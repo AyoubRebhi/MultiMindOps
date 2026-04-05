@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from agents.base_agent import BaseAgent
-from backend.app.services.artifact_contract_service import ArtifactContractService
-from backend.app.services.cicd_contract_validation_service import (
+from backend.app.agents.base_agent import BaseAgent
+from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
+from backend.app.services.cicd.cicd_contract_validation_service import (
     CicdContractValidationService,
 )
-from backend.app.services.cicd_handoff_service import CicdHandoffService
-from backend.app.services.cicd_workflow_builder_service import (
+from backend.app.services.cicd.cicd_handoff_service import CicdHandoffService
+from backend.app.services.cicd.cicd_workflow_builder_service import (
     CicdWorkflowBuilderService,
 )
 

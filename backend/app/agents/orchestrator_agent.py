@@ -2,14 +2,14 @@ from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
 
-from agents.base_agent import BaseAgent
-from agents.codebase_analysis_agent import CodebaseAnalysisAgent
-from agents.infrastructure_agent import InfrastructureAgent
-from agents.planner_agent import PlannerAgent
-from agents.state import OrchestratorState
+from backend.app.agents.base_agent import BaseAgent
+from backend.app.agents.codebase_analysis_agent import CodebaseAnalysisAgent
+from backend.app.agents.infrastructure_agent import InfrastructureAgent
+from backend.app.agents.planner_agent import PlannerAgent
+from backend.app.agents.state import OrchestratorState
 from backend.app.agents import CICDAgent
-from backend.app.services.artifact_contract_service import ArtifactContractService
-from backend.app.services.artifact_quality_validator import ArtifactQualityValidator
+from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
+from backend.app.services.cicd.artifact_quality_validator import ArtifactQualityValidator
 
 
 class OrchestratorAgent(BaseAgent):

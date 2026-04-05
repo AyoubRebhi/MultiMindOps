@@ -1,7 +1,7 @@
 from typing import Any
 
 from backend.app.core.rag_config import rag_config
-from backend.app.services.template_corpus_service import (
+from backend.app.services.rag.template_corpus_service import (
     SimpleHashEmbeddingFunction,
     TemplateCorpusService,
 )

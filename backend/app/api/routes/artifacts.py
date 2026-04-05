@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Header, HTTPException, Query
 
-from backend.app.services.github_service import GitHubService
+from backend.app.services.repository.github_service import GitHubService
 
 router = APIRouter(prefix="/artifacts", tags=["Artifacts"])
 github_service = GitHubService()

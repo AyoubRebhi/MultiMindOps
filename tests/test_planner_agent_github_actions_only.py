@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from agents.planner_agent import PlannerAgent
+from backend.app.agents.planner_agent import PlannerAgent
 
 
 class FakeLLMService:
@@ -23,7 +23,7 @@ class PlannerAgentGithubActionsOnlyTests(unittest.TestCase):
             "reasoning_summary": "Need CI/CD for the repo.",
         }
 
-        with patch("agents.planner_agent.LLMService", return_value=FakeLLMService(response)):
+        with patch("backend.app.agents.planner_agent.LLMService", return_value=FakeLLMService(response)):
             agent = PlannerAgent(prompt_template="test")
 
         plan = agent.run(
@@ -45,7 +45,7 @@ class PlannerAgentGithubActionsOnlyTests(unittest.TestCase):
             "reasoning_summary": "Need GitHub Actions.",
         }
 
-        with patch("agents.planner_agent.LLMService", return_value=FakeLLMService(response)):
+        with patch("backend.app.agents.planner_agent.LLMService", return_value=FakeLLMService(response)):
             agent = PlannerAgent(prompt_template="test")
 
         plan = agent.run("Generate GitHub Actions workflow")

@@ -1,8 +1,8 @@
 from typing import Any
 import re
 
-from backend.app.services.artifact_contract_service import ArtifactContractService
-from backend.app.services.infrastructure_context_mapper import InfrastructureContextMapper
+from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
+from backend.app.services.infrastructure.infrastructure_context_mapper import InfrastructureContextMapper
 
 
 class ArtifactQualityValidator:

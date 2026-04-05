@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from backend.app.services.env_hashing_service import EnvHashingService
+from backend.app.services.environment.env_hashing_service import EnvHashingService
 
 
 class EnvSanitizerService:
