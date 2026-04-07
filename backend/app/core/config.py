@@ -26,10 +26,19 @@ class Settings(BaseSettings):
     GROQ_MODEL: str = "llama3-8b-8192"
 
     RAG_ENABLED: bool = False
-    RAG_CHROMA_PATH: str = "rag/chroma"
+    RAG_QDRANT_URL: str = "http://localhost:6333"
     RAG_COLLECTION_NAME: str = "infra_templates"
-    RAG_TOP_K: int = 3
+    RAG_TOP_K: int = 5
     RAG_CORPUS_PATH: str = "rag/corpus"
+    RAG_CHROMA_PATH: str = "rag/chroma"
+
+    # Ollama (embeddings locaux)
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text:v1.5"
+
+    # Gemini (chunking sémantique)
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-1.5-flash"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

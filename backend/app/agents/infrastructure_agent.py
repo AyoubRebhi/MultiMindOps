@@ -8,6 +8,7 @@ from backend.app.services.infrastructure.infrastructure_artifact_builder_service
 from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
 from backend.app.services.infrastructure.infrastructure_context_mapper import InfrastructureContextMapper
 from backend.app.services.rag.template_retrieval_service import TemplateRetrievalService
+from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 
 
 class InfrastructureAgent(BaseAgent):
@@ -19,6 +20,8 @@ class InfrastructureAgent(BaseAgent):
         self.artifact_builder = InfrastructureArtifactBuilderService()
         self.artifact_contract = ArtifactContractService()
         self.template_retrieval = TemplateRetrievalService()
+        # Nouveau pipeline RAG sémantique (Qdrant + Ollama)
+        self._rag_pipeline = RAGPipelineService()
 
     def run(
         self,
@@ -34,14 +37,45 @@ class InfrastructureAgent(BaseAgent):
             approved_artifacts=approved_artifacts,
         )
         fallback_artifacts = self.artifact_builder.build_fallback_artifacts(mapped_context)
-        rag_result = self.template_retrieval.retrieve_for_context(
-            mapped_context,
-            self._requested_artifact_keys(mapped_context),
-        )
+
+        # ── RAG : essayer Qdrant d'abord, ChromaDB en fallback ───────────────
+        artifact_keys = self._requested_artifact_keys(mapped_context)
+        qdrant_result = self._rag_pipeline.retrieve_for_agent(mapped_context, artifact_keys)
+        if qdrant_result.get("available"):
+            rag_result = qdrant_result
+        else:
+            rag_result = self.template_retrieval.retrieve_for_context(
+                mapped_context, artifact_keys
+            )
+
         compact_plan = self._compact_plan(plan)
         compact_context = self._compact_mapped_context(mapped_context)
         compact_rag = self._compact_rag_result(rag_result)
         compact_fallback = self._compact_fallback_hints(fallback_artifacts)
+
+        # Bloc de contexte sémantique Qdrant (si disponible)
+        qdrant_context_block = ""
+        if qdrant_result.get("available"):
+            all_results = [
+                r
+                for retrieval in qdrant_result.get("retrievals", {}).values()
+                for r in retrieval.get("templates", [])
+            ]
+            if all_results:
+                qdrant_context_block = self._rag_pipeline.build_llm_prompt_with_context(
+                    system_prompt="",
+                    user_query=prompt,
+                    rag_results=[
+                        {
+                            "content": t.get("content", ""),
+                            "source": (t.get("metadata") or {}).get("source", ""),
+                            "doc_type": (t.get("metadata") or {}).get("artifact_type", ""),
+                            "score": t.get("score", 0),
+                        }
+                        for t in all_results[:6]
+                    ],
+                    max_context_chars=2000,
+                )[0]
 
         user_prompt = f"""
 User task:
@@ -68,6 +102,9 @@ Deterministic artifact hints:
 Approved artifacts to generate:
 {approved_artifacts or []}
 """.strip()
+
+        if qdrant_context_block:
+            user_prompt += f"\n\nSemantic Knowledge Base Context:\n{qdrant_context_block}"
 
         response = self.llm.chat_json(
             system_prompt=self.prompt_template,

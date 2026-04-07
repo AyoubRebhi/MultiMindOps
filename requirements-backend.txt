@@ -6,7 +6,7 @@ pydantic
 pydantic-settings
 python-dotenv
 python-multipart
-langchain
+qdrant-client
 langgraph
 chromadb
 openai

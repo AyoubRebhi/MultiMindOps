@@ -11,6 +11,7 @@ from backend.app.services.cicd.cicd_handoff_service import CicdHandoffService
 from backend.app.services.cicd.cicd_workflow_builder_service import (
     CicdWorkflowBuilderService,
 )
+from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 
 
 class CICDAgent(BaseAgent):
@@ -27,6 +28,8 @@ class CICDAgent(BaseAgent):
         self.contract_service = ArtifactContractService()
         self.validation_service = CicdContractValidationService()
         self.workflow_builder = CicdWorkflowBuilderService()
+        # RAG sémantique pour enrichir les workflows CI/CD générés
+        self._rag_pipeline = RAGPipelineService()
 
     def run(self, *args, **kwargs) -> dict[str, Any]:
         """BaseAgent compatibility entrypoint."""
@@ -55,6 +58,12 @@ class CICDAgent(BaseAgent):
             github_token=github_token,
         )
         runtime_info = self.workflow_builder.detect_project_runtime(normalized_handoff)
+
+        # Enrichir le contexte avec le RAG sémantique CI/CD
+        rag_context = self._retrieve_cicd_context(normalized_handoff, runtime_info)
+        if rag_context:
+            normalized_handoff["rag_cicd_context"] = rag_context
+
         artifacts, cicd_statuses, generation_notes = self.workflow_builder.generate_workflow_artifacts(
             normalized_handoff,
         )
@@ -187,6 +196,29 @@ class CICDAgent(BaseAgent):
             f"{diagnostic.get('generated_count', 0)} generated, "
             f"{diagnostic.get('missing_count', 0)} missing workflow artifacts."
         )
+
+    def _retrieve_cicd_context(
+        self,
+        normalized_handoff: dict[str, Any],
+        runtime_info: dict[str, str],
+    ) -> str:
+        """Récupère le contexte RAG CI/CD depuis Qdrant."""
+        try:
+            language = runtime_info.get("language", "")
+            framework = runtime_info.get("framework", "")
+            query = f"github actions ci cd workflow {language} {framework} security scan"
+
+            result = self._rag_pipeline.retrieve_context(
+                query=query,
+                doc_type="cicd",
+                top_k=3,
+                use_hybrid=True,
+            )
+            if result.get("available") and result.get("results"):
+                return result["context"]
+        except Exception:
+            pass
+        return ""
 
     def _build_artifact_entries(
         self,
