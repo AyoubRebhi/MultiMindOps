@@ -228,20 +228,22 @@ class QdrantService:
 
             query_filter = Filter(must=conditions) if conditions else None
 
-            hits = self._client.search(
+            # qdrant-client >= 1.7 : query_points remplace search()
+            response = self._client.query_points(
                 collection_name=self._collection,
-                query_vector=query_vector,
+                query=query_vector,
                 limit=top_k,
                 query_filter=query_filter,
                 score_threshold=score_threshold,
                 with_payload=True,
             )
+            hits = response.points
 
             return [
                 {
                     "id": str(hit.id),
                     "score": round(hit.score, 4),
-                    **hit.payload,
+                    **(hit.payload or {}),
                 }
                 for hit in hits
             ]
@@ -302,12 +304,14 @@ class QdrantService:
         if self._client is None:
             return False
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue  # type: ignore
+            from qdrant_client.models import Filter, FieldCondition, MatchValue, FilterSelector  # type: ignore
 
             self._client.delete(
                 collection_name=self._collection,
-                points_selector=Filter(
-                    must=[FieldCondition(key="source", match=MatchValue(value=source))]
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[FieldCondition(key="source", match=MatchValue(value=source))]
+                    )
                 ),
             )
             return True

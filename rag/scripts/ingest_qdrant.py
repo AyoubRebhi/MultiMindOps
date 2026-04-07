@@ -57,6 +57,9 @@ def load_corpus(corpus_root: Path, doc_type_filter: str | None = None) -> list[d
     """Charge tous les fichiers Markdown du corpus avec métadonnées."""
     import yaml
 
+    # Résoudre le chemin absolu (ROOT est la base si le chemin est relatif)
+    corpus_root = (ROOT / corpus_root).resolve() if not corpus_root.is_absolute() else corpus_root.resolve()
+
     if not corpus_root.exists():
         logger.error("Corpus introuvable : %s", corpus_root)
         return []
@@ -233,9 +236,7 @@ def main() -> int:
         )
         all_chunks.extend(chunks)
 
-        # Petite pause pour ne pas surcharger l'API Gemini
-        if gemini_available and idx < len(documents) - 1:
-            time.sleep(0.5)
+        # Pas de pause supplémentaire ici — le service gère lui-même le rate limiting
 
     print(f"  {len(all_chunks)} chunks produits (moy. {len(all_chunks) / max(len(documents), 1):.1f} / doc)")
 

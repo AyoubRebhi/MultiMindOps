@@ -32,10 +32,19 @@ class OrchestratorAgent(BaseAgent):
             return fallback
 
         default_planner = (
-            "Please generate a DevSecOps execution plan with required_artifacts for the provided task."
+            'You are a DevSecOps planning agent. Respond with ONLY a valid JSON object — no markdown, no prose, no code fences. '
+            'The JSON must have keys: "agent" (string), "input_prompt" (string), "steps" (array of strings), '
+            '"required_artifacts" (array of file path strings), "estimated_complexity" ("low"|"medium"|"high"), '
+            '"reasoning_summary" (string).'
         )
         default_infrastructure = (
-            "Please generate complete infrastructure artifacts for the provided plan."
+            'You are a DevSecOps infrastructure generation agent. Respond with ONLY a valid JSON object — no markdown, no prose, no code fences. '
+            'The JSON must have an "artifacts" key (object) whose values are plain strings for each artifact: '
+            '"dockerfile", "dockerignore", "docker_compose", "env_example", "terraform_main", "terraform_variables", '
+            '"terraform_outputs", "kubernetes_deployment", "kubernetes_service", "kubernetes_configmap", '
+            '"kubernetes_manifests", "security_notes". '
+            'Also include "generated_artifacts" (array of generated keys) and "summary" (string). '
+            'Only include artifacts relevant to the approved list. Never inject real secrets.'
         )
 
         planner_prompt = planner_prompt or _read_prompt_file(

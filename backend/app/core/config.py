@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY_3: str = ""
     GROQ_MODEL: str = "llama3-8b-8192"
 
-    RAG_ENABLED: bool = False
+    RAG_ENABLED: bool = True
     RAG_QDRANT_URL: str = "http://localhost:6333"
     RAG_COLLECTION_NAME: str = "infra_templates"
     RAG_TOP_K: int = 5
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # Gemini (chunking sémantique)
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-1.5-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash-lite"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

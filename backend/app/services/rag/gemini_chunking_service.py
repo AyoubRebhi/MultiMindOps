@@ -18,9 +18,14 @@ import json
 import logging
 import re
 import textwrap
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Délai minimum entre deux appels Gemini (free tier : 15 req/min max)
+_INTER_CALL_DELAY = 5.0   # secondes
+_MAX_RETRY_WAIT   = 90.0  # secondes max en cas de 429
 
 # ── Prompt envoyé à Gemini ───────────────────────────────────────────────────
 _CHUNK_SYSTEM_PROMPT = textwrap.dedent("""\
@@ -142,6 +147,7 @@ class GeminiChunkingService:
         content: str,
         source: str,
         doc_type: str,
+        retries: int = 2,
     ) -> list[dict[str, Any]]:
         user_prompt = (
             f"Document source : {source}\n"
@@ -150,25 +156,60 @@ class GeminiChunkingService:
             "Découpe ce document selon les règles définies."
         )
 
-        try:
-            from google.genai import types as genai_types  # type: ignore
+        for attempt in range(retries + 1):
+            try:
+                from google.genai import types as genai_types  # type: ignore
 
-            response = self._client.models.generate_content(
-                model=self._model,
-                contents=user_prompt,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=_CHUNK_SYSTEM_PROMPT,
-                    temperature=0.1,
-                    max_output_tokens=8192,
-                ),
-            )
-            raw_text = response.text.strip()
-            return self._parse_gemini_response(raw_text, source, doc_type)
-        except Exception as exc:
-            logger.warning(
-                "Gemini chunking échoué pour %s (%s) — fallback activé", source, exc
-            )
-            return self._fallback_chunk(content, source, doc_type)
+                response = self._client.models.generate_content(
+                    model=self._model,
+                    contents=user_prompt,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=_CHUNK_SYSTEM_PROMPT,
+                        temperature=0.1,
+                        max_output_tokens=8192,
+                    ),
+                )
+                # Délai poli après chaque appel réussi
+                time.sleep(_INTER_CALL_DELAY)
+                raw_text = response.text.strip()
+                return self._parse_gemini_response(raw_text, source, doc_type)
+
+            except Exception as exc:
+                exc_str = str(exc)
+                # Extraire le retryDelay suggéré par l'API (en secondes)
+                retry_delay = self._parse_retry_delay(exc_str)
+
+                if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
+                    if "PerDay" in exc_str or "limit: 0" in exc_str:
+                        # Quota journalier épuisé — inutile de réessayer
+                        logger.warning(
+                            "Quota journalier Gemini épuisé pour %s — fallback activé", source
+                        )
+                        break
+                    if attempt < retries:
+                        wait = min(retry_delay or (15 * (attempt + 1)), _MAX_RETRY_WAIT)
+                        logger.info(
+                            "Gemini rate-limit 429 pour %s — attente %.0fs (essai %d/%d)",
+                            source, wait, attempt + 1, retries,
+                        )
+                        time.sleep(wait)
+                        continue
+
+                logger.warning(
+                    "Gemini chunking échoué pour %s (%s) — fallback activé", source, exc
+                )
+                break
+
+        return self._fallback_chunk(content, source, doc_type)
+
+    @staticmethod
+    def _parse_retry_delay(exc_str: str) -> float | None:
+        """Extrait le retryDelay (en secondes) depuis le message d'erreur Gemini."""
+        # Format: "retryDelay': '13s'" ou "retryDelay: 13.5s"
+        match = re.search(r"retryDelay['\"]?\s*:\s*['\"]?\s*(\d+(?:\.\d+)?)\s*s", exc_str)
+        if match:
+            return float(match.group(1))
+        return None
 
     def _parse_gemini_response(
         self,
