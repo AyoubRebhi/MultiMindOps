@@ -10,4 +10,5 @@ qdrant-client
 langgraph
 chromadb
 openai
+httpx
 PyYAML

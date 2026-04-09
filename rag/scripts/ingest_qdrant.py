@@ -220,6 +220,8 @@ def main() -> int:
         chunker = GeminiChunkingService(
             api_key=rag_config.gemini_api_key,
             model=rag_config.gemini_model,
+            api_key_2=rag_config.gemini_api_key_2,
+            requests_per_key=20,
         )
     else:
         print("  Mode : Fallback simple (Gemini non configuré ou désactivé)")

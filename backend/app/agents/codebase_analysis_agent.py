@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from typing import Any, Dict
 
@@ -7,14 +8,19 @@ from backend.app.services.environment.env_file_detector_service import EnvFileDe
 from backend.app.services.environment.env_sanitizer_service import EnvSanitizerService
 from backend.app.services.execution.execution_trace_service import ExecutionTraceService
 from backend.app.services.repository.github_service import GitHubService
+from backend.app.services.repository.llm_priority_engine import LLMPriorityEngine
+from backend.app.services.repository.quick_scanner_service import QuickScannerService
 from backend.app.services.repository.repository_fingerprint_service import RepositoryFingerprintService
 from backend.app.services.repository.repository_parser_service import RepositoryParserService
 from backend.app.services.repository.repository_registry_service import RepositoryRegistryService
 from backend.app.services.repository.repository_security_service import RepositorySecurityService
+from backend.app.services.repository.targeted_repository_parser import TargetedRepositoryParser
+
+logger = logging.getLogger(__name__)
 
 
 class CodebaseAnalysisAgent(BaseAgent):
-    ANALYSIS_VERSION = "2026-04-01-analysis-cache-v6"
+    ANALYSIS_VERSION = "2026-04-08-analysis-llm-v1"
 
     def __init__(self):
         super().__init__(name="CodebaseAnalysisAgent")
@@ -27,6 +33,10 @@ class CodebaseAnalysisAgent(BaseAgent):
         self.fingerprint_service = RepositoryFingerprintService()
         self.registry_service = RepositoryRegistryService()
         self.trace_service = ExecutionTraceService()
+        # Intelligent analysis pipeline (GLM-5.1:cloud)
+        self.quick_scanner = QuickScannerService()
+        self.priority_engine = LLMPriorityEngine()
+        self.targeted_parser = TargetedRepositoryParser()
 
     @staticmethod
     def _summarize_cached_analysis(cached_analysis: Dict[str, Any] | None) -> Dict[str, Any] | None:
@@ -239,6 +249,52 @@ class CodebaseAnalysisAgent(BaseAgent):
             }
             return analysis_output
 
+        # ── Intelligent pipeline: GLM-5.1:cloud quick scan + targeted parse ──
+        intelligent_analysis: Dict[str, Any] = {}
+        llm_calls = 0
+        try:
+            quick_scan = self.quick_scanner.scan(repo_path)
+            priority_result = self.priority_engine.rank(
+                quick_scan=quick_scan,
+                user_prompt=None,
+            )
+            if priority_result.llm_used:
+                llm_calls += 1
+            targeted = self.targeted_parser.parse_targeted(
+                repo_path=repo_path,
+                priority_result=priority_result,
+            )
+            intelligent_analysis = {
+                "quick_scan": quick_scan,
+                "critical_files_ranked": targeted.get("critical_files_ranked", []),
+                "file_relationships": targeted.get("file_relationships", {}),
+                "critical_sections": targeted.get("critical_sections", {}),
+                "architecture_summary": targeted.get("architecture_summary", ""),
+                "llm_used": priority_result.llm_used,
+            }
+            execution_trace.append(
+                self.trace_service.build_trace_entry(
+                    step="intelligent_analysis",
+                    status="completed",
+                    details={
+                        "llm_used": priority_result.llm_used,
+                        "critical_files_count": len(targeted.get("critical_files_ranked", [])),
+                        "architecture_hint": priority_result.architecture_hint,
+                        "primary_stack": priority_result.primary_stack,
+                        "size_category": quick_scan.get("size_category"),
+                    },
+                )
+            )
+        except Exception as exc:
+            logger.warning("Intelligent analysis pipeline failed (%s); continuing with heuristic parser.", exc)
+            execution_trace.append(
+                self.trace_service.build_trace_entry(
+                    step="intelligent_analysis",
+                    status="failed",
+                    details={"error": str(exc)},
+                )
+            )
+
         parsed_repo = self.repository_parser.parse_repository(
             repo_path,
             uploaded_env=uploaded_env,
@@ -248,10 +304,20 @@ class CodebaseAnalysisAgent(BaseAgent):
             "sensitive_values": [],
             "all_values": [],
         }
+
+        # Merge LLM-ranked important files into the heuristic list (LLM takes priority)
+        llm_critical_paths = [
+            f["path"] for f in intelligent_analysis.get("critical_files_ranked", [])
+        ]
+        heuristic_important = parsed_repo.get("important_files") or []
+        merged_important_files = llm_critical_paths + [
+            f for f in heuristic_important if f not in set(llm_critical_paths)
+        ]
+
         content_fingerprint = self.fingerprint_service.build_content_fingerprint(
             repo_path=repo_path,
             candidate_files=(
-                (parsed_repo.get("important_files") or parsed_repo.get("file_tree") or [])
+                (merged_important_files or parsed_repo.get("file_tree") or [])
                 + [item["path"] for item in (parsed_repo.get("env_files") or [])]
             ),
         )
@@ -264,7 +330,7 @@ class CodebaseAnalysisAgent(BaseAgent):
                 step="repository_parsing",
                 status="completed",
                 details={
-                    "important_files_count": len(parsed_repo.get("important_files") or []),
+                    "important_files_count": len(merged_important_files),
                     "key_entrypoints_count": len(parsed_repo.get("key_entrypoints") or []),
                     "content_fingerprint": content_fingerprint,
                 },
@@ -295,11 +361,12 @@ class CodebaseAnalysisAgent(BaseAgent):
             "security": security_result,
             "repo_summary": parsed_repo.get("project_summary"),
             "file_tree": parsed_repo.get("file_tree"),
-            "important_files": parsed_repo.get("important_files"),
+            "important_files": merged_important_files,
             "key_entrypoints": parsed_repo.get("key_entrypoints"),
             "categorized_files": parsed_repo.get("categorized_files"),
             "chunks": parsed_repo.get("chunks"),
             "agent_context": agent_context,
+            "intelligent_analysis": intelligent_analysis,
         }
 
         stored_record = self.registry_service.save_analysis(
@@ -319,16 +386,18 @@ class CodebaseAnalysisAgent(BaseAgent):
                 "env_fingerprint": env_fingerprint,
                 "env_file_count": len(env_files),
                 "uploaded_env_provided": bool(uploaded_env),
+                "llm_used_for_priority": intelligent_analysis.get("llm_used", False),
                 "reused_components": [],
                 "recomputed_components": [
                     "security_scan",
+                    "intelligent_analysis",
                     "repository_parsing",
                     "env_file_processing",
                     "context_building",
                 ],
             },
             execution_trace=execution_trace,
-            execution_stats={"llm_calls": 0, "cache_hit": False},
+            execution_stats={"llm_calls": llm_calls, "cache_hit": False},
             notes=(
                 "Initial repository analysis persisted."
                 if cache_decision["status"] == "new"

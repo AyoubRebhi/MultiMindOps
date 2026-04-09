@@ -63,19 +63,72 @@ _CHUNK_SYSTEM_PROMPT = textwrap.dedent("""\
 
 
 class GeminiChunkingService:
-    """Service de chunking sémantique utilisant l'API Gemini."""
+    """Service de chunking sémantique utilisant l'API Gemini avec support dual-key."""
 
-    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-1.5-flash",
+        api_key_2: str | None = None,
+        requests_per_key: int = 20,
+    ):
+        """
+        Initialise le service Gemini avec support dual API key.
+
+        Args:
+            api_key:           Première clé API Gemini.
+            model:             Modèle Gemini à utiliser.
+            api_key_2:         Deuxième clé API (optionnelle) pour continuous chunking.
+            requests_per_key:  Nombre de requêtes max par clé (généralement 20).
+        """
+        self._api_key_1 = api_key
+        self._api_key_2 = api_key_2
+        self._current_api_key = api_key
+        self._requests_per_key = requests_per_key
+        self._request_count = 0
+        self._model = model
+        self._available = False
+
         try:
             from google import genai  # type: ignore
-            self._client = genai.Client(api_key=api_key)
-            self._model = model
-            self._available = True
+            self._genai_module = genai
+            self._client = genai.Client(api_key=self._current_api_key)
+            self._available = bool(api_key and api_key.strip())
         except Exception as exc:
             logger.warning("Gemini SDK non disponible : %s — fallback activé", exc)
             self._client = None
-            self._model = model
             self._available = False
+
+    # ── Gestion des clés API multiples ────────────────────────────────────────
+
+    def _switch_api_key(self) -> bool:
+        """
+        Bascule vers la deuxième clé API si disponible et quota atteint.
+
+        Returns:
+            True si basculement effectué, False sinon.
+        """
+        if self._request_count >= self._requests_per_key and self._api_key_2:
+            if self._current_api_key == self._api_key_1:
+                self._current_api_key = self._api_key_2
+                self._request_count = 0
+                try:
+                    self._client = self._genai_module.Client(api_key=self._current_api_key)
+                    logger.info(
+                        "Basculement vers clé API 2 | Quota clé 1 épuisé (%d requêtes)",
+                        self._requests_per_key,
+                    )
+                    return True
+                except Exception as exc:
+                    logger.error("Impossible de basculer vers clé 2 : %s", exc)
+                    return False
+        return False
+
+    def _increment_request_count(self) -> None:
+        """Incrémente le compteur de requêtes et bascule si nécessaire."""
+        self._request_count += 1
+        if self._request_count >= self._requests_per_key:
+            self._switch_api_key()
 
     # ── API publique ─────────────────────────────────────────────────────────
 
@@ -172,6 +225,7 @@ class GeminiChunkingService:
                 # Délai poli après chaque appel réussi
                 time.sleep(_INTER_CALL_DELAY)
                 raw_text = response.text.strip()
+                self._increment_request_count()  # Incrémenter après succès
                 return self._parse_gemini_response(raw_text, source, doc_type)
 
             except Exception as exc:
@@ -181,10 +235,15 @@ class GeminiChunkingService:
 
                 if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str:
                     if "PerDay" in exc_str or "limit: 0" in exc_str:
-                        # Quota journalier épuisé — inutile de réessayer
+                        # Quota journalier épuisé — essayer la clé 2
                         logger.warning(
-                            "Quota journalier Gemini épuisé pour %s — fallback activé", source
+                            "Quota journalier Gemini épuisé pour %s (clé actuelle)", source
                         )
+                        if self._switch_api_key():
+                            # Réessayer avec la nouvelle clé
+                            if attempt < retries:
+                                logger.info("Retry avec clé API 2 pour %s", source)
+                                continue
                         break
                     if attempt < retries:
                         wait = min(retry_delay or (15 * (attempt + 1)), _MAX_RETRY_WAIT)

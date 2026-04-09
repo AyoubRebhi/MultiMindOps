@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash-lite"
 
+    # GLM — Ollama cloud model proxy (aucun téléchargement local requis)
+    # Ollama route glm-5.1:cloud vers le cloud ZhipuAI de façon transparente.
+    # Authentification unique via terminal : ollama login
+    # Aucune clé API à configurer ici.
+    GLM_MODEL: str = "glm-5.1:cloud"
+    GLM_BASE_URL: str = "http://localhost:11434/v1"
+    GLM_API_KEY: str = ""  # laisser vide — Ollama gère l'auth via ollama login
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     def get_groq_api_keys(self) -> list[str]:

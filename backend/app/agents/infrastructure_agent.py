@@ -1,6 +1,35 @@
-from typing import Any, Dict, List
+"""
+InfrastructureAgent — generates DevSecOps artifacts (Dockerfile, docker-compose,
+Kubernetes manifests, Terraform configs, CI/CD workflows, etc.).
 
-from backend.app.agents.base_agent import BaseAgent
+Upgrades over the previous single-shot version
+-----------------------------------------------
+1. **ReAct loop** (inherited from EnhancedBaseAgent)
+   - Up to 3 LLM iterations.
+   - Quality evaluated after each iteration.
+   - Issues fed back as a structured refinement prompt.
+   - Result cached in agent memory to avoid recomputation.
+
+2. **Domain-specific quality evaluator** (``_evaluate_infra_quality``)
+   - Checks that all expected artifacts are present and non-generic.
+   - Checks Dockerfile validity via ValidationService.
+   - Checks docker-compose validity when expected.
+   - Reports per-artifact issues back into the ReAct loop.
+
+3. **Structured validation** (``ValidationService``)
+   - Every generated artifact is validated before being returned.
+   - Issues are surfaced in the response under ``validation_summary``.
+
+All existing public surface (constructor, ``run()`` signature, return dict shape)
+is preserved — no breaking changes to callers (OrchestratorAgent, etc.).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Callable, Dict, List, Optional
+
+from backend.app.agents.base_agent import EnhancedBaseAgent
 from backend.app.services.core.llm_service import LLMService
 from backend.app.services.infrastructure.infrastructure_artifact_builder_service import (
     InfrastructureArtifactBuilderService,
@@ -10,26 +39,46 @@ from backend.app.services.infrastructure.infrastructure_context_mapper import In
 from backend.app.services.rag.template_retrieval_service import TemplateRetrievalService
 from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 
+logger = logging.getLogger(__name__)
 
-class InfrastructureAgent(BaseAgent):
+
+class InfrastructureAgent(EnhancedBaseAgent):
+    """
+    Generates infrastructure artifacts using a ReAct loop backed by LLM + RAG.
+
+    Inherits from EnhancedBaseAgent — gains:
+    • ``self.memory``     (AgentMemory)
+    • ``self.validation`` (ValidationService)
+    • ``react_loop()``    (Reasoning + Action with automatic retries)
+    """
+
     def __init__(self, prompt_template: str):
-        super().__init__(name="InfrastructureAgent")
+        super().__init__(name="InfrastructureAgent", max_react_iterations=3)
         self.llm = LLMService()
         self.prompt_template = prompt_template
         self.context_mapper = InfrastructureContextMapper()
         self.artifact_builder = InfrastructureArtifactBuilderService()
         self.artifact_contract = ArtifactContractService()
         self.template_retrieval = TemplateRetrievalService()
-        # Nouveau pipeline RAG sémantique (Qdrant + Ollama)
         self._rag_pipeline = RAGPipelineService()
+
+    # ── Public interface ──────────────────────────────────────────────────────
 
     def run(
         self,
         prompt: str,
         plan: Dict[str, Any],
-        infrastructure_context: Dict[str, Any] | None = None,
-        approved_artifacts: List[str] | None = None,
+        infrastructure_context: Optional[Dict[str, Any]] = None,
+        approved_artifacts: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
+        """
+        Generate infrastructure artifacts for the given prompt and plan.
+
+        Returns the same dict shape as the previous implementation, plus:
+        - ``react_iterations``   — number of ReAct iterations actually used.
+        - ``validation_summary`` — per-artifact validation results.
+        """
+        # ── 1. Map context ────────────────────────────────────────────────────
         mapped_context = self.context_mapper.map(
             prompt=prompt,
             plan=plan,
@@ -38,22 +87,21 @@ class InfrastructureAgent(BaseAgent):
         )
         fallback_artifacts = self.artifact_builder.build_fallback_artifacts(mapped_context)
 
-        # ── RAG : essayer Qdrant d'abord, ChromaDB en fallback ───────────────
+        # ── 2. RAG retrieval (Qdrant → ChromaDB fallback) ─────────────────────
         artifact_keys = self._requested_artifact_keys(mapped_context)
         qdrant_result = self._rag_pipeline.retrieve_for_agent(mapped_context, artifact_keys)
-        if qdrant_result.get("available"):
-            rag_result = qdrant_result
-        else:
-            rag_result = self.template_retrieval.retrieve_for_context(
-                mapped_context, artifact_keys
-            )
+        rag_result = (
+            qdrant_result
+            if qdrant_result.get("available")
+            else self.template_retrieval.retrieve_for_context(mapped_context, artifact_keys)
+        )
 
+        # ── 3. Build compact prompt segments ─────────────────────────────────
         compact_plan = self._compact_plan(plan)
         compact_context = self._compact_mapped_context(mapped_context)
         compact_rag = self._compact_rag_result(rag_result)
         compact_fallback = self._compact_fallback_hints(fallback_artifacts)
 
-        # Bloc de contexte sémantique Qdrant (si disponible)
         qdrant_context_block = ""
         if qdrant_result.get("available"):
             all_results = [
@@ -88,7 +136,7 @@ Mapped infrastructure context:
 {compact_context}
 
 Repository context is the source of truth.
-Retrieved templates are guidance only and must be adapted to the repository.
+Retrieved templates are guidance only — adapt to the repository.
 Never copy templates blindly.
 Always adapt paths, ports, commands, variables, dependencies, and build context.
 Never inject real secrets.
@@ -106,125 +154,101 @@ Approved artifacts to generate:
         if qdrant_context_block:
             user_prompt += f"\n\nSemantic Knowledge Base Context:\n{qdrant_context_block}"
 
-        response = self.llm.chat_json(
+        # ── 4. ReAct loop ─────────────────────────────────────────────────────
+        evaluate_fn = self._make_infra_evaluator(
+            mapped_context=mapped_context,
+            approved_artifacts=approved_artifacts or [],
+        )
+
+        iterations_used = [0]  # mutable container so the closure can write to it
+
+        def _counted_evaluate(response: Dict[str, Any]) -> List[str]:
+            iterations_used[0] += 1
+            return evaluate_fn(response)
+
+        response = self.react_loop(
+            llm=self.llm,
             system_prompt=self.prompt_template,
             user_prompt=user_prompt,
+            evaluate_fn=_counted_evaluate,
             temperature=0.2,
             max_tokens=2200,
         )
+
+        # ── 5. Artifact selection (generated vs. fallback) ────────────────────
         artifacts = response.setdefault("artifacts", {})
-        fallback_reasons: dict[str, str] = {}
+        fallback_reasons: Dict[str, str] = {}
         fallback_used = False
 
-        if mapped_context.get("artifact_expectations", {}).get("needs_env_example"):
-            artifacts["env_example"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+        expectations = mapped_context.get("artifact_expectations", {})
+
+        if expectations.get("needs_env_example"):
+            artifacts["env_example"], used, reason = self._choose_best_artifact(
                 artifact_key="env_example",
                 generated=artifacts.get("env_example"),
                 fallback=fallback_artifacts.get("env_example", ""),
                 rag_result=rag_result,
             )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["env_example"] = fallback_reason
+            fallback_used = fallback_used or used
+            if reason:
+                fallback_reasons["env_example"] = reason
 
-        artifacts["dockerignore"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-            artifact_key="dockerignore",
-            generated=artifacts.get("dockerignore"),
-            fallback=fallback_artifacts.get("dockerignore", ""),
-            rag_result=rag_result,
-        )
-        fallback_used = fallback_used or artifact_fallback_used
-        if fallback_reason:
-            fallback_reasons["dockerignore"] = fallback_reason
+        for key in ("dockerignore", "dockerfile"):
+            artifacts[key], used, reason = self._choose_best_artifact(
+                artifact_key=key,
+                generated=artifacts.get(key),
+                fallback=fallback_artifacts.get(key, ""),
+                rag_result=rag_result,
+            )
+            fallback_used = fallback_used or used
+            if reason:
+                fallback_reasons[key] = reason
 
-        artifacts["dockerfile"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-            artifact_key="dockerfile",
-            generated=artifacts.get("dockerfile"),
-            fallback=fallback_artifacts.get("dockerfile", ""),
-            rag_result=rag_result,
-        )
-        fallback_used = fallback_used or artifact_fallback_used
-        if fallback_reason:
-            fallback_reasons["dockerfile"] = fallback_reason
-
-        if mapped_context.get("artifact_expectations", {}).get("needs_docker_compose"):
-            artifacts["docker_compose"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
+        if expectations.get("needs_docker_compose"):
+            artifacts["docker_compose"], used, reason = self._choose_best_artifact(
                 artifact_key="docker_compose",
                 generated=artifacts.get("docker_compose"),
                 fallback=fallback_artifacts.get("docker_compose", ""),
                 rag_result=rag_result,
             )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["docker_compose"] = fallback_reason
+            fallback_used = fallback_used or used
+            if reason:
+                fallback_reasons["docker_compose"] = reason
 
-        if mapped_context.get("artifact_expectations", {}).get("needs_kubernetes"):
-            artifacts["kubernetes_manifests"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-                artifact_key="kubernetes_manifests",
-                generated=artifacts.get("kubernetes_manifests"),
-                fallback=fallback_artifacts.get("kubernetes_manifests", ""),
-                rag_result=rag_result,
-            )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["kubernetes_manifests"] = fallback_reason
-            artifacts["kubernetes_deployment"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-                artifact_key="kubernetes_deployment",
-                generated=artifacts.get("kubernetes_deployment"),
-                fallback=fallback_artifacts.get("kubernetes_deployment", ""),
-                rag_result=rag_result,
-            )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["kubernetes_deployment"] = fallback_reason
-            artifacts["kubernetes_service"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-                artifact_key="kubernetes_service",
-                generated=artifacts.get("kubernetes_service"),
-                fallback=fallback_artifacts.get("kubernetes_service", ""),
-                rag_result=rag_result,
-            )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["kubernetes_service"] = fallback_reason
-            artifacts["kubernetes_configmap"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-                artifact_key="kubernetes_configmap",
-                generated=artifacts.get("kubernetes_configmap"),
-                fallback=fallback_artifacts.get("kubernetes_configmap", ""),
-                rag_result=rag_result,
-            )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["kubernetes_configmap"] = fallback_reason
+        if expectations.get("needs_kubernetes"):
+            for key in (
+                "kubernetes_manifests",
+                "kubernetes_deployment",
+                "kubernetes_service",
+                "kubernetes_configmap",
+            ):
+                artifacts[key], used, reason = self._choose_best_artifact(
+                    artifact_key=key,
+                    generated=artifacts.get(key),
+                    fallback=fallback_artifacts.get(key, ""),
+                    rag_result=rag_result,
+                )
+                fallback_used = fallback_used or used
+                if reason:
+                    fallback_reasons[key] = reason
 
-        if mapped_context.get("artifact_expectations", {}).get("needs_terraform"):
-            artifacts["terraform_main"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-                artifact_key="terraform_main",
-                generated=artifacts.get("terraform_main"),
-                fallback=fallback_artifacts.get("terraform_main", ""),
-                rag_result=rag_result,
-            )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["terraform_main"] = fallback_reason
-            artifacts["terraform_variables"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-                artifact_key="terraform_variables",
-                generated=artifacts.get("terraform_variables"),
-                fallback=fallback_artifacts.get("terraform_variables", ""),
-                rag_result=rag_result,
-            )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["terraform_variables"] = fallback_reason
-            artifacts["terraform_outputs"], artifact_fallback_used, fallback_reason = self._choose_best_artifact(
-                artifact_key="terraform_outputs",
-                generated=artifacts.get("terraform_outputs"),
-                fallback=fallback_artifacts.get("terraform_outputs", ""),
-                rag_result=rag_result,
-            )
-            fallback_used = fallback_used or artifact_fallback_used
-            if fallback_reason:
-                fallback_reasons["terraform_outputs"] = fallback_reason
+        if expectations.get("needs_terraform"):
+            for key in ("terraform_main", "terraform_variables", "terraform_outputs"):
+                artifacts[key], used, reason = self._choose_best_artifact(
+                    artifact_key=key,
+                    generated=artifacts.get(key),
+                    fallback=fallback_artifacts.get(key, ""),
+                    rag_result=rag_result,
+                )
+                fallback_used = fallback_used or used
+                if reason:
+                    fallback_reasons[key] = reason
 
+        # ── 6. Artifact-level validation ──────────────────────────────────────
+        validation_results = self.validation.validate_artifacts(artifacts)
+        validation_summary = self.validation.aggregate_validation(validation_results)
+
+        # ── 7. Assemble response ──────────────────────────────────────────────
         response["artifacts"] = artifacts
         self._strip_uploaded_env_artifact(response["artifacts"], mapped_context)
         response["context_used"] = mapped_context
@@ -245,21 +269,102 @@ Approved artifacts to generate:
         response["artifact_groups"] = self.artifact_contract.group_artifacts(
             response.get("generated_artifacts", [])
         )
+        response["react_iterations"] = iterations_used[0]
+        response["validation_summary"] = validation_summary
+
         return response
+
+    # ── ReAct quality evaluator ───────────────────────────────────────────────
+
+    def _make_infra_evaluator(
+        self,
+        mapped_context: Dict[str, Any],
+        approved_artifacts: List[str],
+    ) -> Callable[[Dict[str, Any]], List[str]]:
+        """
+        Return a closure that evaluates infrastructure artifact quality.
+        Captured context is used to check which artifacts are *expected*.
+        """
+        expectations = mapped_context.get("artifact_expectations", {})
+
+        def evaluate(response: Dict[str, Any]) -> List[str]:
+            return self._evaluate_infra_quality(response, expectations, approved_artifacts)
+
+        return evaluate
+
+    def _evaluate_infra_quality(
+        self,
+        response: Dict[str, Any],
+        expectations: Dict[str, Any],
+        approved_artifacts: List[str],
+    ) -> List[str]:
+        """
+        Domain-specific quality checks for infrastructure generation output.
+
+        Returns a list of issue strings (empty = acceptable).
+        """
+        issues: List[str] = []
+        artifacts = (response or {}).get("artifacts") or {}
+
+        # -- Base quality checks from EnhancedBaseAgent -----------------------
+        issues.extend(self._default_evaluate(response))
+
+        # -- Dockerfile: required and valid ------------------------------------
+        dockerfile = str(artifacts.get("dockerfile") or "").strip()
+        if not dockerfile:
+            issues.append("Artifact 'dockerfile' is missing or empty — it is always required")
+        elif self.validation.is_generic_content(dockerfile):
+            issues.append("Artifact 'dockerfile' appears to be generic/placeholder content")
+        else:
+            df_result = self.validation.validate_dockerfile(dockerfile)
+            issues.extend(df_result.issues)
+
+        # -- docker-compose: required when expected ---------------------------
+        if expectations.get("needs_docker_compose"):
+            compose = str(artifacts.get("docker_compose") or "").strip()
+            if not compose:
+                issues.append("Artifact 'docker_compose' is missing but was expected")
+            else:
+                dc_result = self.validation.validate_docker_compose(compose)
+                issues.extend(dc_result.issues)
+
+        # -- Kubernetes: required when expected --------------------------------
+        if expectations.get("needs_kubernetes"):
+            for k8s_key in ("kubernetes_deployment", "kubernetes_service"):
+                if not str(artifacts.get(k8s_key) or "").strip():
+                    issues.append(f"Artifact '{k8s_key}' is missing but was expected")
+
+        # -- Terraform: required when expected --------------------------------
+        if expectations.get("needs_terraform"):
+            if not str(artifacts.get("terraform_main") or "").strip():
+                issues.append("Artifact 'terraform_main' is missing but was expected")
+
+        # -- Generic content check for all artifacts --------------------------
+        for key, content in artifacts.items():
+            if key == "dockerfile":
+                continue  # already checked above with richer validation
+            if content and self.validation.is_generic_content(str(content)):
+                issues.append(
+                    f"Artifact '{key}' appears to contain generic placeholder content"
+                )
+
+        return issues
+
+    # ── Artifact selection helpers ────────────────────────────────────────────
 
     def _choose_best_artifact(
         self,
         *,
         artifact_key: str,
-        generated: str | None,
+        generated: Optional[str],
         fallback: str,
         rag_result: Dict[str, Any],
-    ) -> tuple[str, bool, str | None]:
+    ) -> tuple[str, bool, Optional[str]]:
         if not str(generated or "").strip():
             return fallback, True, self._fallback_reason(artifact_key, rag_result, "empty_generation")
-        if self._looks_generic(generated):
+        if self._looks_generic(generated):  # type: ignore[arg-type]
             return fallback, True, self._fallback_reason(artifact_key, rag_result, "generic_generation")
-        return generated, False, None
+        return generated, False, None  # type: ignore[return-value]
 
     def _fallback_reason(
         self,
@@ -267,12 +372,11 @@ Approved artifacts to generate:
         rag_result: Dict[str, Any],
         base_reason: str,
     ) -> str:
-        retrievals = rag_result.get("retrievals") or {}
         if not rag_result.get("enabled"):
             return f"{base_reason}:rag_disabled"
         if not rag_result.get("available"):
             return f"{base_reason}:{rag_result.get('reason', 'rag_unavailable')}"
-        if artifact_key not in retrievals:
+        if artifact_key not in (rag_result.get("retrievals") or {}):
             return f"{base_reason}:no_relevant_templates"
         return f"{base_reason}:template_guidance_insufficient"
 
@@ -286,6 +390,8 @@ Approved artifacts to generate:
         ]
         return any(marker in lowered for marker in generic_markers)
 
+    # ── Context / prompt helpers (unchanged from original) ────────────────────
+
     def _requested_artifact_keys(self, mapped_context: Dict[str, Any]) -> List[str]:
         expectations = mapped_context.get("artifact_expectations") or {}
         keys = ["dockerfile", "dockerignore", "docker_compose"]
@@ -293,12 +399,7 @@ Approved artifacts to generate:
             keys.append("env_example")
         if expectations.get("needs_kubernetes"):
             keys.extend(
-                [
-                    "kubernetes_manifests",
-                    "kubernetes_deployment",
-                    "kubernetes_service",
-                    "kubernetes_configmap",
-                ]
+                ["kubernetes_manifests", "kubernetes_deployment", "kubernetes_service", "kubernetes_configmap"]
             )
         if expectations.get("needs_terraform"):
             keys.extend(["terraform_main", "terraform_variables", "terraform_outputs"])
@@ -313,7 +414,6 @@ Approved artifacts to generate:
     ) -> List[str]:
         if mapped_context.get("env_source_of_truth") == "uploaded":
             artifacts.pop("env_example", None)
-
         artifact_targets = mapped_context.get("artifact_targets") or {}
         key_to_file = {
             "dockerfile": artifact_targets.get("dockerfile") or "Dockerfile",
@@ -358,9 +458,9 @@ Approved artifacts to generate:
             ),
         }
         generated = {
-            artifact_name
-            for artifact_name in (generated_artifacts or [])
-            if artifact_name not in key_to_file.values()
+            name
+            for name in (generated_artifacts or [])
+            if name not in key_to_file.values()
         }
         for key, file_name in key_to_file.items():
             if str(artifacts.get(key) or "").strip():
@@ -368,16 +468,16 @@ Approved artifacts to generate:
         return sorted(generated)
 
     def _strip_uploaded_env_artifact(
-        self,
-        artifacts: Dict[str, str],
-        mapped_context: Dict[str, Any],
+        self, artifacts: Dict[str, str], mapped_context: Dict[str, Any]
     ) -> None:
         if mapped_context.get("env_source_of_truth") != "uploaded":
             return
         artifacts.pop("env_example", None)
 
-    def _find_target_path(self, targets: List[str], filename: str) -> str | None:
-        return next((target for target in targets if target.lower().endswith(filename.lower())), None)
+    def _find_target_path(self, targets: List[str], filename: str) -> Optional[str]:
+        return next(
+            (t for t in targets if t.lower().endswith(filename.lower())), None
+        )
 
     def _compact_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -399,17 +499,17 @@ Approved artifacts to generate:
             "main_service": mapped_context.get("main_service"),
             "services": [
                 {
-                    "name": service.get("name"),
-                    "type": service.get("type"),
-                    "framework": service.get("framework"),
-                    "language": service.get("language"),
-                    "entrypoint": service.get("entrypoint"),
-                    "run_command": service.get("run_command"),
-                    "port": service.get("port"),
-                    "dependencies": service.get("dependencies"),
-                    "environment_variables": service.get("environment_variables"),
+                    "name": svc.get("name"),
+                    "type": svc.get("type"),
+                    "framework": svc.get("framework"),
+                    "language": svc.get("language"),
+                    "entrypoint": svc.get("entrypoint"),
+                    "run_command": svc.get("run_command"),
+                    "port": svc.get("port"),
+                    "dependencies": svc.get("dependencies"),
+                    "environment_variables": svc.get("environment_variables"),
                 }
-                for service in (mapped_context.get("services") or [])[:4]
+                for svc in (mapped_context.get("services") or [])[:4]
             ],
             "environment_template": (mapped_context.get("environment_template") or [])[:20],
             "sanitized_env_context": {
@@ -424,14 +524,8 @@ Approved artifacts to generate:
                     for item in (sanitized_env_context.get("files") or [])[:5]
                 ],
                 "variable_names": (sanitized_env_context.get("variable_names") or [])[:25],
-                "sensitive_variables_count": sanitized_env_context.get(
-                    "sensitive_variables_count",
-                    0,
-                ),
-                "used_for_generation_count": sanitized_env_context.get(
-                    "used_for_generation_count",
-                    0,
-                ),
+                "sensitive_variables_count": sanitized_env_context.get("sensitive_variables_count", 0),
+                "used_for_generation_count": sanitized_env_context.get("used_for_generation_count", 0),
             },
             "infrastructure_dependencies": mapped_context.get("infrastructure_dependencies", []),
             "infrastructure_needs": mapped_context.get("infrastructure_needs", []),
@@ -447,11 +541,11 @@ Approved artifacts to generate:
             },
             "commands": [
                 {
-                    "command": command.get("command"),
-                    "service": command.get("service"),
-                    "source_file": command.get("source_file"),
+                    "command": cmd.get("command"),
+                    "service": cmd.get("service"),
+                    "source_file": cmd.get("source_file"),
                 }
-                for command in (mapped_context.get("commands") or [])[:8]
+                for cmd in (mapped_context.get("commands") or [])[:8]
             ],
         }
 
@@ -459,26 +553,22 @@ Approved artifacts to generate:
         compact_retrievals: Dict[str, Any] = {}
         for artifact_key, retrieval in (rag_result.get("retrievals") or {}).items():
             templates = []
-            for template in (retrieval.get("templates") or [])[:1]:
+            for tmpl in (retrieval.get("templates") or [])[:1]:
                 templates.append(
                     {
-                        "id": template.get("id"),
+                        "id": tmpl.get("id"),
                         "metadata": {
-                            "artifact_type": (template.get("metadata") or {}).get("artifact_type"),
-                            "language": (template.get("metadata") or {}).get("language"),
-                            "framework": (template.get("metadata") or {}).get("framework"),
-                            "dependencies": (template.get("metadata") or {}).get("dependencies"),
-                            "description": (template.get("metadata") or {}).get("description"),
+                            "artifact_type": (tmpl.get("metadata") or {}).get("artifact_type"),
+                            "language": (tmpl.get("metadata") or {}).get("language"),
+                            "framework": (tmpl.get("metadata") or {}).get("framework"),
+                            "dependencies": (tmpl.get("metadata") or {}).get("dependencies"),
+                            "description": (tmpl.get("metadata") or {}).get("description"),
                         },
-                        "content_preview": self._truncate_text(
-                            template.get("content", ""),
-                            600,
-                        ),
+                        "content_preview": self._truncate_text(tmpl.get("content", ""), 600),
                     }
                 )
             if templates:
                 compact_retrievals[artifact_key] = templates
-
         return {
             "enabled": rag_result.get("enabled"),
             "available": rag_result.get("available"),

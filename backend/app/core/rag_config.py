@@ -55,6 +55,11 @@ class RAGConfig:
         return settings.GEMINI_API_KEY
 
     @property
+    def gemini_api_key_2(self) -> str | None:
+        """Deuxième clé API Gemini pour continuous chunking (quota partage)."""
+        return getattr(settings, 'GEMINI_API_KEY_2', None)
+
+    @property
     def gemini_model(self) -> str:
         return settings.GEMINI_MODEL
 
