@@ -6,21 +6,21 @@ from pydantic import BaseModel
 
 class TaskCreate(BaseModel):
     prompt: str
-    repo_url: Optional[str] = None
+    repo_url: str
     repository_visibility: str = "public"
     github_token: Optional[str] = None
 
 
 class PlanPreviewRequest(BaseModel):
     prompt: str
-    repo_url: Optional[str] = None
+    repo_url: str
     repository_visibility: str = "public"
     github_token: Optional[str] = None
 
 
 class GenerateArtifactsRequest(BaseModel):
     prompt: str
-    repo_url: Optional[str] = None
+    repo_url: str
     repository_visibility: str = "public"
     github_token: Optional[str] = None
     approved_artifacts: List[str] = []
