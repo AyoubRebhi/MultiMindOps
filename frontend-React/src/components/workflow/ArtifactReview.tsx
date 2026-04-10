@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { CheckCircle, Edit3 } from 'lucide-react'
 import { CodeViewer } from '@/components/artifacts/CodeViewer'
-import { detectLang } from '@/lib/utils'
+import { detectLang, cn } from '@/lib/utils'
 import type { TaskResponse } from '@/types'
 
 interface Props {
@@ -15,17 +15,23 @@ export function ArtifactReview({ task, onSubmitReview, isLoading }: Props) {
     (task.result?.artifacts as Record<string, string>) ?? {}
 
   const [artifacts, setArtifacts] = useState<Record<string, string>>(rawArtifacts)
-  const [activeTab, setActiveTab]   = useState(Object.keys(rawArtifacts)[0] ?? '')
-  const [editMode, setEditMode]     = useState(false)
-  const [notes, setNotes]           = useState('')
+  const [activeTab, setActiveTab] = useState(Object.keys(rawArtifacts)[0] ?? '')
+  const [editMode, setEditMode]   = useState(false)
+  const [notes, setNotes]         = useState('')
 
   const keys = Object.keys(artifacts)
 
   return (
     <div className="space-y-4 animate-slide-in">
-      <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
-        <p className="text-sm text-amber-300 font-medium">Human review required</p>
-        <p className="text-xs text-amber-400/70 mt-1">
+      <div className={cn(
+        'p-4 rounded-lg',
+        'bg-amber-50 dark:bg-amber-500/10',
+        'border border-amber-200 dark:border-amber-500/20'
+      )}>
+        <p className="text-sm text-amber-700 dark:text-amber-300 font-medium">
+          Human review required
+        </p>
+        <p className="text-xs text-amber-600/80 dark:text-amber-400/70 mt-1">
           Review and optionally edit the generated artifacts before approving.
         </p>
       </div>
@@ -36,11 +42,12 @@ export function ArtifactReview({ task, onSubmitReview, isLoading }: Props) {
           <button
             key={k}
             onClick={() => { setActiveTab(k); setEditMode(false) }}
-            className={`px-3 py-1.5 rounded-md text-xs font-mono font-medium whitespace-nowrap transition-colors ${
+            className={cn(
+              'px-3 py-1.5 rounded-md text-xs font-mono font-medium whitespace-nowrap transition-colors border',
               activeTab === k
-                ? 'bg-brand-600/20 text-brand-300 border border-brand-500/30'
-                : 'text-slate-500 hover:text-slate-300 border border-transparent'
-            }`}
+                ? 'bg-brand-50 dark:bg-brand-600/20 text-brand-700 dark:text-brand-300 border-brand-200 dark:border-brand-500/30'
+                : 'border-transparent text-slate-500 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            )}
           >
             {k}
           </button>
@@ -49,12 +56,19 @@ export function ArtifactReview({ task, onSubmitReview, isLoading }: Props) {
 
       {/* Code area */}
       {activeTab && (
-        <div className="rounded-lg border border-white/[0.06] overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2 bg-surface-800/50 border-b border-white/[0.04]">
-            <span className="text-xs font-mono text-slate-400">{activeTab}</span>
+        <div className={cn(
+          'rounded-lg overflow-hidden',
+          'border border-slate-200 dark:border-white/[0.06]'
+        )}>
+          <div className={cn(
+            'flex items-center justify-between px-4 py-2',
+            'bg-slate-50 dark:bg-surface-800/50',
+            'border-b border-slate-100 dark:border-white/[0.04]'
+          )}>
+            <span className="text-xs font-mono text-slate-500 dark:text-slate-400">{activeTab}</span>
             <button
               onClick={() => setEditMode((v) => !v)}
-              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-white transition-colors"
+              className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors"
             >
               <Edit3 className="w-3.5 h-3.5" />
               {editMode ? 'Preview' : 'Edit'}
@@ -67,7 +81,11 @@ export function ArtifactReview({ task, onSubmitReview, isLoading }: Props) {
               onChange={(e) =>
                 setArtifacts((prev) => ({ ...prev, [activeTab]: e.target.value }))
               }
-              className="w-full bg-surface-950 text-slate-200 font-mono text-xs p-4 resize-none focus:outline-none"
+              className={cn(
+                'w-full font-mono text-xs p-4 resize-none focus:outline-none',
+                'bg-white dark:bg-surface-950',
+                'text-slate-800 dark:text-slate-200'
+              )}
               style={{ minHeight: '400px' }}
               spellCheck={false}
             />
@@ -84,14 +102,22 @@ export function ArtifactReview({ task, onSubmitReview, isLoading }: Props) {
 
       {/* Review notes */}
       <div>
-        <label className="block text-xs font-medium text-slate-400 mb-2">
-          Review notes <span className="text-slate-600">(optional)</span>
+        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-2">
+          Review notes{' '}
+          <span className="text-slate-400 dark:text-slate-600">(optional)</span>
         </label>
         <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           placeholder="Add any notes or feedback for the AI agents…"
-          className="w-full bg-surface-800/50 border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-brand-500/40 resize-none"
+          className={cn(
+            'w-full rounded-lg px-3 py-2 text-sm resize-none focus:outline-none transition-colors',
+            'bg-white dark:bg-surface-800/50',
+            'border border-slate-200 dark:border-white/[0.06]',
+            'text-slate-800 dark:text-slate-300',
+            'placeholder-slate-400 dark:placeholder-slate-600',
+            'focus:border-brand-400 dark:focus:border-brand-500/40'
+          )}
           rows={3}
         />
       </div>

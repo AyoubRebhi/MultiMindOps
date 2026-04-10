@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Copy, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useThemeStore } from '@/store/themeStore'
 
 interface Props {
   code: string
@@ -22,6 +24,7 @@ export function CodeViewer({
   showLineNumbers = true,
 }: Props) {
   const [copied, setCopied] = useState(false)
+  const isDark = useThemeStore((s) => s.theme === 'dark')
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(code)
@@ -29,13 +32,25 @@ export function CodeViewer({
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const syntaxStyle = isDark ? oneDark : oneLight
+  const bgColor     = isDark ? 'rgb(8 15 31)' : '#fafafa'
+  const lineNumColor = isDark ? '#334155' : '#94a3b8'
+
   return (
     <div className={cn('relative group', className)}>
       {/* Header */}
       {filename && (
-        <div className="flex items-center justify-between px-4 py-2 bg-surface-800/60 border-b border-white/[0.04]">
-          <span className="text-xs font-mono text-slate-400">{filename}</span>
-          <span className="text-xs text-slate-600 bg-surface-700/50 px-2 py-0.5 rounded font-mono">
+        <div className={cn(
+          'flex items-center justify-between px-4 py-2',
+          'bg-slate-100 dark:bg-surface-800/60',
+          'border-b border-slate-200 dark:border-white/[0.04]'
+        )}>
+          <span className="text-xs font-mono text-slate-500 dark:text-slate-400">{filename}</span>
+          <span className={cn(
+            'text-xs font-mono px-2 py-0.5 rounded',
+            'text-slate-400 dark:text-slate-600',
+            'bg-slate-200 dark:bg-surface-700/50'
+          )}>
             {language}
           </span>
         </div>
@@ -45,36 +60,34 @@ export function CodeViewer({
       <button
         onClick={handleCopy}
         className={cn(
-          'absolute right-3 top-3 p-1.5 rounded-md transition-all z-10',
+          'absolute right-3 p-1.5 rounded-md transition-all z-10',
+          'opacity-0 group-hover:opacity-100',
           filename ? 'top-11' : 'top-3',
-          'bg-surface-700/80 text-slate-400 hover:text-white opacity-0 group-hover:opacity-100'
+          'bg-slate-200 dark:bg-surface-700/80',
+          'text-slate-500 dark:text-slate-400',
+          'hover:text-slate-900 dark:hover:text-white'
         )}
         title="Copy to clipboard"
       >
-        {copied ? (
-          <Check className="w-3.5 h-3.5 text-emerald-400" />
-        ) : (
-          <Copy className="w-3.5 h-3.5" />
-        )}
+        {copied
+          ? <Check className="w-3.5 h-3.5 text-emerald-500" />
+          : <Copy  className="w-3.5 h-3.5" />}
       </button>
 
       {/* Code */}
-      <div
-        className="overflow-auto"
-        style={maxHeight ? { maxHeight } : undefined}
-      >
+      <div className="overflow-auto" style={maxHeight ? { maxHeight } : undefined}>
         <SyntaxHighlighter
           language={language}
-          style={oneDark}
+          style={syntaxStyle}
           showLineNumbers={showLineNumbers}
           customStyle={{
             margin: 0,
             borderRadius: 0,
-            background: 'rgb(8 15 31)',
+            background: bgColor,
             fontSize: '0.75rem',
             lineHeight: '1.6',
           }}
-          lineNumberStyle={{ color: '#334155', minWidth: '2.5em' }}
+          lineNumberStyle={{ color: lineNumColor, minWidth: '2.5em' }}
         >
           {code}
         </SyntaxHighlighter>

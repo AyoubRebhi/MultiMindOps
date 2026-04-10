@@ -32,31 +32,31 @@ export function statusMeta(status: TaskStatus): {
 } {
   switch (status) {
     case 'pending':
-      return { label: 'Pending', color: 'text-slate-400 bg-slate-400/10 border-slate-400/20', dot: 'bg-slate-400', pulse: false }
+      return { label: 'Pending',      color: 'text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-400/10 border-slate-300 dark:border-slate-400/20',          dot: 'bg-slate-400',   pulse: false }
     case 'in_progress':
-      return { label: 'Running', color: 'text-blue-400 bg-blue-400/10 border-blue-400/20', dot: 'bg-blue-400', pulse: true }
+      return { label: 'Running',      color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-400/10 border-blue-200 dark:border-blue-400/20',                   dot: 'bg-blue-500',    pulse: true  }
     case 'completed':
-      return { label: 'Completed', color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20', dot: 'bg-emerald-400', pulse: false }
+      return { label: 'Completed',    color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-400/10 border-emerald-200 dark:border-emerald-400/20', dot: 'bg-emerald-500', pulse: false }
     case 'failed':
-      return { label: 'Failed', color: 'text-red-400 bg-red-400/10 border-red-400/20', dot: 'bg-red-400', pulse: false }
+      return { label: 'Failed',       color: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-400/10 border-red-200 dark:border-red-400/20',                         dot: 'bg-red-500',     pulse: false }
     case 'awaiting_human_review':
-      return { label: 'Needs Review', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20', dot: 'bg-amber-400', pulse: true }
+      return { label: 'Needs Review', color: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-400/10 border-amber-200 dark:border-amber-400/20',             dot: 'bg-amber-500',   pulse: true  }
     case 'human_approved':
-      return { label: 'Approved', color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20', dot: 'bg-emerald-400', pulse: false }
+      return { label: 'Approved',     color: 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-400/10 border-emerald-200 dark:border-emerald-400/20', dot: 'bg-emerald-500', pulse: false }
     case 'human_approved_with_changes':
-      return { label: 'Approved ✎', color: 'text-teal-400 bg-teal-400/10 border-teal-400/20', dot: 'bg-teal-400', pulse: false }
+      return { label: 'Approved ✎',   color: 'text-teal-600 dark:text-teal-400 bg-teal-50 dark:bg-teal-400/10 border-teal-200 dark:border-teal-400/20',                  dot: 'bg-teal-500',    pulse: false }
     default:
-      return { label: status, color: 'text-slate-400 bg-slate-400/10 border-slate-400/20', dot: 'bg-slate-400', pulse: false }
+      return { label: status,         color: 'text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-400/10 border-slate-300 dark:border-slate-400/20',            dot: 'bg-slate-400',   pulse: false }
   }
 }
 
 export function severityMeta(sev?: string) {
   switch (sev) {
-    case 'critical': return { label: 'Critical', color: 'text-red-400 bg-red-400/10 border-red-400/30' }
-    case 'high':     return { label: 'High',     color: 'text-orange-400 bg-orange-400/10 border-orange-400/30' }
-    case 'medium':   return { label: 'Medium',   color: 'text-amber-400 bg-amber-400/10 border-amber-400/30' }
-    case 'low':      return { label: 'Low',       color: 'text-blue-400 bg-blue-400/10 border-blue-400/30' }
-    default:         return { label: 'Info',      color: 'text-slate-400 bg-slate-400/10 border-slate-400/30' }
+    case 'critical': return { label: 'Critical', color: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-400/10 border-red-200 dark:border-red-400/30' }
+    case 'high':     return { label: 'High',     color: 'text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-400/10 border-orange-200 dark:border-orange-400/30' }
+    case 'medium':   return { label: 'Medium',   color: 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-400/10 border-amber-200 dark:border-amber-400/30' }
+    case 'low':      return { label: 'Low',      color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-400/10 border-blue-200 dark:border-blue-400/30' }
+    default:         return { label: 'Info',     color: 'text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-400/10 border-slate-200 dark:border-slate-400/30' }
   }
 }
 

@@ -20,14 +20,14 @@ interface Props {
 }
 
 const ARTIFACT_ICONS: Record<string, React.ElementType> = {
-  dockerfile:    FileCode,
+  dockerfile:     FileCode,
   docker_compose: Layers,
-  kubernetes:    Layers,
-  k8s:           Layers,
-  terraform:     Layers,
+  kubernetes:     Layers,
+  k8s:            Layers,
+  terraform:      Layers,
   github_actions: GitBranch,
-  ci:            GitBranch,
-  cicd:          GitBranch,
+  ci:             GitBranch,
+  cicd:           GitBranch,
 }
 
 function artifactIcon(name: string) {
@@ -56,8 +56,14 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
     <div className="space-y-6 animate-slide-in">
       {/* Plan summary */}
       {preview.plan?.summary && (
-        <div className="p-4 rounded-lg bg-brand-600/10 border border-brand-500/20">
-          <p className="text-sm text-slate-300 leading-relaxed">{preview.plan.summary}</p>
+        <div className={cn(
+          'p-4 rounded-lg',
+          'bg-brand-50 dark:bg-brand-600/10',
+          'border border-brand-200 dark:border-brand-500/20'
+        )}>
+          <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+            {preview.plan.summary}
+          </p>
         </div>
       )}
 
@@ -69,27 +75,37 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
       {/* Actions list */}
       {preview.plan?.actions && preview.plan.actions.length > 0 && (
         <div>
-          <h3 className="text-sm font-medium text-slate-400 mb-3">Planned steps</h3>
+          <h3 className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">
+            Planned steps
+          </h3>
           <div className="space-y-2">
             {preview.plan.actions.map((action, i) => (
               <div
                 key={i}
-                className="flex items-start gap-3 p-3 rounded-lg bg-surface-800/50 border border-white/[0.04]"
+                className={cn(
+                  'flex items-start gap-3 p-3 rounded-lg',
+                  'bg-slate-50 dark:bg-surface-800/50',
+                  'border border-slate-100 dark:border-white/[0.04]'
+                )}
               >
-                <div className="w-5 h-5 rounded-full bg-brand-600/20 border border-brand-500/30 flex items-center justify-center shrink-0 mt-0.5">
-                  <span className="text-xs text-brand-400 font-mono">{i + 1}</span>
+                <div className={cn(
+                  'w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5',
+                  'bg-brand-50 dark:bg-brand-600/20',
+                  'border border-brand-200 dark:border-brand-500/30'
+                )}>
+                  <span className="text-xs text-brand-600 dark:text-brand-400 font-mono">{i + 1}</span>
                 </div>
                 <div className="min-w-0">
                   {action.agent && (
-                    <span className="text-xs text-brand-400 font-medium">
+                    <span className="text-xs text-brand-600 dark:text-brand-400 font-medium">
                       [{String(action.agent)}]{'  '}
                     </span>
                   )}
-                  <span className="text-sm text-slate-300">
+                  <span className="text-sm text-slate-700 dark:text-slate-300">
                     {String(action.description ?? action.type ?? '')}
                   </span>
                 </div>
-                <ChevronRight className="w-4 h-4 text-slate-600 shrink-0 mt-0.5" />
+                <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-600 shrink-0 mt-0.5" />
               </div>
             ))}
           </div>
@@ -100,12 +116,12 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
       {artifacts.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-medium text-slate-400">
+            <h3 className="text-sm font-medium text-slate-600 dark:text-slate-400">
               Artifacts to generate
             </h3>
             <button
               onClick={toggleAll}
-              className="text-xs text-brand-400 hover:text-brand-300 transition-colors"
+              className="text-xs text-brand-600 dark:text-brand-400 hover:text-brand-500 dark:hover:text-brand-300 transition-colors"
             >
               {selected.size === artifacts.length ? 'Deselect all' : 'Select all'}
             </button>
@@ -121,15 +137,18 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
                   className={cn(
                     'flex items-center gap-3 p-3 rounded-lg border text-left transition-all',
                     isSelected
-                      ? 'bg-brand-600/10 border-brand-500/30 text-white'
-                      : 'bg-surface-800/40 border-white/[0.05] text-slate-400 hover:border-white/10'
+                      ? 'bg-brand-50 dark:bg-brand-600/10 border-brand-200 dark:border-brand-500/30 text-slate-900 dark:text-white'
+                      : cn(
+                          'bg-white dark:bg-surface-800/40',
+                          'border-slate-200 dark:border-white/[0.05]',
+                          'text-slate-500 dark:text-slate-400',
+                          'hover:border-slate-300 dark:hover:border-white/10'
+                        )
                   )}
                 >
-                  {isSelected ? (
-                    <CheckSquare className="w-4 h-4 text-brand-400 shrink-0" />
-                  ) : (
-                    <Square className="w-4 h-4 shrink-0" />
-                  )}
+                  {isSelected
+                    ? <CheckSquare className="w-4 h-4 text-brand-600 dark:text-brand-400 shrink-0" />
+                    : <Square      className="w-4 h-4 shrink-0" />}
                   <Icon className="w-4 h-4 shrink-0" />
                   <span className="text-sm font-medium truncate">{art}</span>
                 </button>
@@ -145,7 +164,12 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
           {(preview.plan.technologies as string[]).map((t) => (
             <span
               key={t}
-              className="px-2 py-0.5 rounded text-xs font-mono text-slate-400 bg-white/[0.04] border border-white/[0.06]"
+              className={cn(
+                'px-2 py-0.5 rounded text-xs font-mono',
+                'text-slate-500 dark:text-slate-400',
+                'bg-slate-100 dark:bg-white/[0.04]',
+                'border border-slate-200 dark:border-white/[0.06]'
+              )}
             >
               {t}
             </span>
@@ -158,7 +182,14 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
         <button
           onClick={onBack}
           disabled={isLoading}
-          className="px-4 py-2 rounded-lg border border-white/[0.08] text-slate-400 hover:text-white hover:border-white/20 text-sm font-medium transition-colors disabled:opacity-40"
+          className={cn(
+            'px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-40',
+            'border border-slate-200 dark:border-white/[0.08]',
+            'text-slate-600 dark:text-slate-400',
+            'hover:text-slate-900 dark:hover:text-white',
+            'hover:border-slate-300 dark:hover:border-white/20',
+            'hover:bg-slate-50 dark:hover:bg-white/[0.03]'
+          )}
         >
           Back
         </button>

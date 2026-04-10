@@ -2,14 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Light mode (default) ──────────────────────────────────────────────── */
 @layer base {
   :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 9%;
+    --card: 210 40% 98%;
+    --card-foreground: 222 47% 9%;
+    --primary: 217 91% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 94%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 94%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 217 91% 50%;
+    --radius: 0.75rem;
+  }
+
+  /* ─── Dark mode ─────────────────────────────────────────────────────── */
+  html.dark {
     --background: 222 47% 5%;
     --foreground: 210 40% 98%;
     --card: 222 47% 7%;
     --card-foreground: 210 40% 98%;
     --primary: 217 91% 60%;
-    --primary-foreground: 210 40% 98%;
+    --primary-foreground: 0 0% 100%;
     --secondary: 217 32% 17%;
     --secondary-foreground: 210 40% 98%;
     --muted: 217 32% 17%;
@@ -17,26 +40,33 @@
     --accent: 217 32% 17%;
     --accent-foreground: 210 40% 98%;
     --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 0 0% 100%;
     --border: 217 32% 17%;
     --input: 217 32% 17%;
     --ring: 224 76% 48%;
-    --radius: 0.75rem;
   }
 
+  /* ─── Global base styles ────────────────────────────────────────────── */
   * {
     @apply border-border;
     box-sizing: border-box;
   }
 
+  /* Smooth theme transitions on structural elements only */
   html {
-    @apply bg-surface-950 text-foreground;
+    @apply bg-background text-foreground;
+    transition: background-color 250ms ease, color 150ms ease;
   }
 
   body {
-    @apply bg-surface-950 text-foreground font-sans antialiased;
+    @apply bg-background text-foreground font-sans antialiased;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Cards, sidebars, navbars get smooth transitions */
+  aside, header, nav, main, section, article, .card {
+    transition: background-color 250ms ease, border-color 200ms ease;
   }
 
   /* Custom scrollbar */
@@ -48,10 +78,10 @@
     @apply bg-transparent;
   }
   ::-webkit-scrollbar-thumb {
-    @apply bg-white/10 rounded-full;
+    @apply bg-slate-300 dark:bg-white/10 rounded-full;
   }
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-white/20;
+    @apply bg-slate-400 dark:bg-white/20;
   }
 
   /* Code blocks */
@@ -62,10 +92,16 @@
 
 @layer utilities {
   .text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-400 to-blue-400;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-500 to-brand-700 dark:from-brand-400 dark:to-blue-400;
   }
 
   .glass {
-    @apply bg-white/[0.03] backdrop-blur-sm border border-white/[0.06];
+    @apply bg-white/70 dark:bg-white/[0.03] backdrop-blur-sm border border-slate-200 dark:border-white/[0.06];
   }
+
+  /* Reusable semantic surface shortcuts */
+  .surface-base   { @apply bg-white dark:bg-surface-950; }
+  .surface-raised { @apply bg-slate-50 dark:bg-surface-900; }
+  .surface-card   { @apply bg-white dark:bg-surface-800\/40 border border-slate-200 dark:border-white\/\[0\.06\]; }
+  .border-theme   { @apply border-slate-200 dark:border-white\/\[0\.06\]; }
 }
