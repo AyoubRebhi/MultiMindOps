@@ -9,7 +9,7 @@ import {
   Shield,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { PlanPreviewResponse } from '@/types'
+import type { PlanPreviewResponse, PlanAction } from '@/types'
 import { SecurityScore } from '@/components/security/SecurityScore'
 
 interface Props {
@@ -39,7 +39,12 @@ function artifactIcon(name: string) {
 }
 
 export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
-  const artifacts: string[] = preview.plan?.artifacts ?? []
+  // Normalize backend field names → frontend field names
+  const plan = preview.plan
+  const artifacts: string[] = plan?.artifacts ?? (plan?.required_artifacts as string[] | undefined) ?? []
+  const actions: PlanAction[] = plan?.actions ?? ((plan?.steps as string[] | undefined)?.map((s) => ({ description: s })) ?? [])
+  const summary: string | undefined = plan?.summary ?? plan?.reasoning_summary
+
   const [selected, setSelected] = useState<Set<string>>(new Set(artifacts))
 
   const toggle = (art: string) =>
@@ -52,17 +57,19 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
   const toggleAll = () =>
     setSelected(selected.size === artifacts.length ? new Set() : new Set(artifacts))
 
+  const hasPlanData = plan && (summary || actions.length || artifacts.length || plan.technologies?.length)
+
   return (
     <div className="space-y-6 animate-slide-in">
       {/* Plan summary */}
-      {preview.plan?.summary && (
+      {summary && (
         <div className={cn(
           'p-4 rounded-lg',
           'bg-brand-50 dark:bg-brand-600/10',
           'border border-brand-200 dark:border-brand-500/20'
         )}>
           <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
-            {preview.plan.summary}
+            {summary}
           </p>
         </div>
       )}
@@ -72,14 +79,27 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
         <SecurityScore security={preview.repository_security} compact />
       )}
 
+      {/* No plan data warning */}
+      {!hasPlanData && (
+        <div className={cn(
+          'p-4 rounded-lg border',
+          'bg-amber-50 dark:bg-amber-500/5',
+          'border-amber-200 dark:border-amber-500/30'
+        )}>
+          <p className="text-sm text-amber-700 dark:text-amber-300">
+            Plan generation completed, but no artifacts were recommended. You can still proceed or go back to refine your request.
+          </p>
+        </div>
+      )}
+
       {/* Actions list */}
-      {preview.plan?.actions && preview.plan.actions.length > 0 && (
+      {actions.length > 0 && (
         <div>
           <h3 className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">
             Planned steps
           </h3>
           <div className="space-y-2">
-            {preview.plan.actions.map((action, i) => (
+            {actions.map((action, i) => (
               <div
                 key={i}
                 className={cn(
@@ -159,9 +179,9 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
       )}
 
       {/* Technologies */}
-      {preview.plan?.technologies && (
+      {plan?.technologies && (
         <div className="flex flex-wrap gap-2">
-          {(preview.plan.technologies as string[]).map((t) => (
+          {(plan.technologies as string[]).map((t) => (
             <span
               key={t}
               className={cn(
@@ -195,7 +215,7 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
         </button>
         <button
           onClick={() => onApprove([...selected])}
-          disabled={isLoading || selected.size === 0}
+          disabled={isLoading || (artifacts.length > 0 && selected.size === 0)}
           className="flex items-center gap-2 px-6 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isLoading ? (

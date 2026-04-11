@@ -9,7 +9,7 @@ import {
   RefreshCw,
   AlertCircle,
 } from 'lucide-react'
-import { useTask, useReviewTask, TASKS_KEY } from '@/hooks/useTasks'
+import { useTask, useReviewTask } from '@/hooks/useTasks'
 import { useTaskPolling } from '@/hooks/useTaskPolling'
 import { PageLoader } from '@/components/common/LoadingSpinner'
 import { ErrorAlert } from '@/components/common/ErrorAlert'
@@ -18,11 +18,11 @@ import { LogViewer } from '@/components/workflow/LogViewer'
 import { ArtifactReview } from '@/components/workflow/ArtifactReview'
 import { ArtifactTabs } from '@/components/artifacts/ArtifactTabs'
 import { DiffViewer } from '@/components/artifacts/DiffViewer'
+import { ValidationIssues } from '@/components/artifacts/ValidationIssues'
 import { SecurityScore } from '@/components/security/SecurityScore'
 import { VulnerabilityList } from '@/components/security/VulnerabilityList'
 import { formatDate, isTerminalStatus, cn } from '@/lib/utils'
 import type { ReviewArtifactsRequest } from '@/types'
-import { useQueryClient } from '@tanstack/react-query'
 
 type Tab = 'artifacts' | 'security' | 'diffs' | 'logs'
 
@@ -35,7 +35,6 @@ const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
 
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>()
-  const qc = useQueryClient()
   const { data: task, isLoading, error, refetch } = useTask(id!)
   const reviewTask = useReviewTask()
   const [activeTab, setActiveTab]   = useState<Tab>('artifacts')
@@ -52,10 +51,18 @@ export default function TaskDetail() {
   if (error)     return <div className="p-6"><ErrorAlert message={error.message} /></div>
   if (!task)     return null
 
-  const artifacts = (task.result?.artifacts ?? {}) as Record<string, string>
+  // Artifacts are nested under result.infrastructure.artifacts (or human_review after review)
+  const artifacts = (
+    task.result?.human_review?.reviewed_artifacts ??
+    task.result?.human_review?.original_artifacts ??
+    task.result?.infrastructure?.artifacts ??
+    task.result?.artifacts ??
+    {}
+  ) as Record<string, string>
   const diffs     = (task.result?.diffs     ?? {}) as Record<string, { before: string; after: string; changes?: number }>
   const security  = task.result?.security
   const vulns     = security?.vulnerabilities ?? []
+  const validation = task.result?.validation
 
   const handleReview = async (reviewed: Record<string, string>, notes: string) => {
     setReviewError(null)
@@ -141,6 +148,17 @@ export default function TaskDetail() {
           {reviewError && (
             <ErrorAlert message={reviewError} onDismiss={() => setReviewError(null)} />
           )}
+          {/* Full-page review button */}
+          <Link
+            to={`/tasks/${task.id}/review`}
+            className={cn(
+              'flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-medium transition-colors',
+              'bg-emerald-600 hover:bg-emerald-500 text-white',
+            )}
+          >
+            <FileCode className="w-4 h-4" />
+            Open Review Page
+          </Link>
           <ArtifactReview
             task={task}
             onSubmitReview={handleReview}
@@ -231,6 +249,14 @@ export default function TaskDetail() {
           {/* ── Security ───────────────────────────────────── */}
           {activeTab === 'security' && security && (
             <div className="space-y-6">
+              {validation && (
+                <div>
+                  <h3 className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">
+                    Artifact Validation
+                  </h3>
+                  <ValidationIssues validation={validation} />
+                </div>
+              )}
               {vulns.length > 0 && (
                 <div>
                   <h3 className="text-sm font-medium text-slate-600 dark:text-slate-400 mb-3">

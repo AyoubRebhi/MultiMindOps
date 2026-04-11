@@ -11,8 +11,12 @@ interface Props {
 }
 
 export function ArtifactReview({ task, onSubmitReview, isLoading }: Props) {
+  // Artifacts live at result.human_review.original_artifacts or result.infrastructure.artifacts
   const rawArtifacts: Record<string, string> =
-    (task.result?.artifacts as Record<string, string>) ?? {}
+    task.result?.human_review?.original_artifacts ??
+    task.result?.infrastructure?.artifacts ??
+    (task.result?.artifacts as Record<string, string> | undefined) ??
+    {}
 
   const [artifacts, setArtifacts] = useState<Record<string, string>>(rawArtifacts)
   const [activeTab, setActiveTab] = useState(Object.keys(rawArtifacts)[0] ?? '')

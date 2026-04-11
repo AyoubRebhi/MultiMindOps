@@ -1,10 +1,11 @@
 import { Routes, Route } from 'react-router-dom'
 import { Layout } from '@/components/layout/Layout'
-import Dashboard from '@/pages/Dashboard'
-import NewTask   from '@/pages/NewTask'
-import TaskList  from '@/pages/TaskList'
+import Dashboard  from '@/pages/Dashboard'
+import NewTask    from '@/pages/NewTask'
+import TaskList   from '@/pages/TaskList'
 import TaskDetail from '@/pages/TaskDetail'
-import NotFound  from '@/pages/NotFound'
+import TaskReview from '@/pages/TaskReview'
+import NotFound   from '@/pages/NotFound'
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
           <Route index element={<TaskList />} />
           <Route path="new" element={<NewTask />} />
           <Route path=":id" element={<TaskDetail />} />
+          <Route path=":id/review" element={<TaskReview />} />
         </Route>
         <Route path="*" element={<NotFound />} />
       </Route>
