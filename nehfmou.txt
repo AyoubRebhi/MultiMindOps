@@ -1,0 +1,34 @@
+corpus ??
+- datasets (text)
+
+chroma ??
+- vector db, bech nkhaddem RAG(bech na3ti contexte mn data interne
+li heyya l corpus mte3i, bech enna9es ml hallucination)
+
+RAG Pipeline ?? 
+ -> 1. data (corpus)
+ -> 2. chuking : segmentation mta3 data (bana methode/parameter li sta3melnehom)chunking 7asb koll section, ou 7asb taille/type de document, tnajjem testa3mel offset ki t7ebb tlemm l kelmet zeydin (0--400; 401 -- 700)
+ -> 3. Embedding : transformation men text l binaire (chnowa l modele li sta3malneh w chnowa li yesta3mel f embedding? )
+ -> 4. store f vector db: 
+ -> ??semantic search ? elastic search ? regression search ? (chnowa type mta3 search li nesta3mlou fih ?)
+ -> 5. Rerank : resultat mta3 retieval 
+ -> 6. bech nakhtarou l best of 3
+
+nomic text embedding v1.5 
+
+3lech nesta3mel fl .env fl input ?
+bech na3mel analyse ll vulnerabilités ll API calls mabin l back w l front.
+
+l far9 mabin l LLM w l agent ?
+- agent : ya3mel plannification wa7dou (autonome) + excution en plusieurs taches + acces 3la l memoire (de base LLM)
+- LLM : generation + assistance (ta3tih prompt)
+
+chneyya l framework li neta3mel feha ? 
+
+!!!!!! nzid nefhem l projet
+chnooma les best practices li sta3malt hom ? 
+
+##7ajet bech nsall7ouhom : 
+-cicd --> corpus
+
+

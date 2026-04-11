@@ -5,5 +5,10 @@ psycopg2-binary
 pydantic
 pydantic-settings
 python-dotenv
-langchain
+python-multipart
+qdrant-client
 langgraph
+chromadb
+openai
+httpx
+PyYAML

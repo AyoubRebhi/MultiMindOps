@@ -18,6 +18,12 @@ Thumbs.db
 # History folder (VS Code extension)
 .history/
 
+.github/
+.claude/
+
+nefhmou.txt
+frontend-React/.env
+frontend-React/node_modules
 #Source code des projets de test
 workspace/
 
