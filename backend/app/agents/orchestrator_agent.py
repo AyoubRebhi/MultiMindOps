@@ -40,6 +40,7 @@ from backend.app.agents.state import OrchestratorState
 from backend.app.agents import CICDAgent
 from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
 from backend.app.services.cicd.artifact_quality_validator import ArtifactQualityValidator
+from backend.app.services.security.security_score_transformer import SecurityScoreTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -494,12 +495,19 @@ class OrchestratorAgent(BaseAgent):
             final_status = "partial_success"
             result_status = "partial_success"
 
+        # Transform security data into frontend-expected format
+        security_analysis = SecurityScoreTransformer.transform(
+            repository_security=security_result,
+            env_security_runtime=state.get("env_security_runtime"),
+        )
+
         result = {
             "agent": self.name,
             "status": result_status,
             "prototype_scope": "artifact_generation_only",
             "execution_policy": self.artifact_contract_service.default_execution_policy(),
             "repository_security": security_result,
+            "security": security_analysis,
             "repository_analysis": state.get("repository_analysis"),
             "repo_summary": final_contract["handoff_context"]["repo_summary"],
             "categorized_files": final_contract["handoff_context"]["categorized_files"],
@@ -749,6 +757,13 @@ class OrchestratorAgent(BaseAgent):
                 "message": "Waiting for user approval of required artifacts",
             }
         ]
+
+        # Transform raw repository_security into frontend-expected SecurityAnalysis format
+        state["security"] = SecurityScoreTransformer.transform(
+            repository_security=state.get("repository_security"),
+            env_security_runtime=state.get("env_security_runtime"),
+        )
+
         return state
 
     def run_generation(

@@ -93,6 +93,7 @@ async def plan_preview(request: Request):
             "status": state.get("status"),
             "plan": state.get("plan"),
             "repository_security": state.get("repository_security"),
+            "security": state.get("security"),
             "repo_summary": state.get("repo_summary"),
             "logs": state.get("logs", []),
         }

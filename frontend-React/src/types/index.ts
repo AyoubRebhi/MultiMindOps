@@ -168,7 +168,10 @@ export interface TaskResponse {
 export interface PlanPreviewResponse {
   status: string
   plan?: PlanData
-  repository_security?: SecurityAnalysis
+  /** Raw scan output from RepositorySecurityService — has risk_score, not score */
+  repository_security?: Record<string, unknown>
+  /** Transformed SecurityAnalysis ready for SecurityScore component */
+  security?: SecurityAnalysis
   repo_summary?: unknown
   logs: LogEntry[]
 }

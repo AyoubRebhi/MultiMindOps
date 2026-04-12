@@ -74,9 +74,9 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
         </div>
       )}
 
-      {/* Repo security */}
-      {preview.repository_security && (
-        <SecurityScore security={preview.repository_security} compact />
+      {/* Repo security — use transformed security object (has score/grade/vulns) */}
+      {preview.security && (
+        <SecurityScore security={preview.security} compact />
       )}
 
       {/* No plan data warning */}

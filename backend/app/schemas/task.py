@@ -35,6 +35,7 @@ class PlanPreviewResponse(BaseModel):
     status: str
     plan: Optional[Any] = None
     repository_security: Optional[Any] = None
+    security: Optional[Any] = None
     repo_summary: Optional[Any] = None
     logs: List[Any] = []
 
