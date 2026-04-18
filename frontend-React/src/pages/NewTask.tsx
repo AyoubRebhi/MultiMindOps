@@ -568,6 +568,7 @@ export default function NewTask() {
             )}
             <PlanPreview
               preview={wizard.planPreview}
+              originalPrompt={wizard.formData?.prompt ?? ''}
               onApprove={handleApprove}
               onBack={() => setWizard({ step: 'form' })}
               isLoading={generate.isPending}

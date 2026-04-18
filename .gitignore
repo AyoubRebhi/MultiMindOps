@@ -19,7 +19,7 @@ Thumbs.db
 .history/
 
 .github/
-.claude/
+.claude
 
 nefhmou.txt
 frontend-React/.env
@@ -29,3 +29,7 @@ workspace/
 
 # Local databases
 devsecops.db
+
+documentations/
+.pytest_cache/
+.claude/

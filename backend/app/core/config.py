@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_API_KEY_2: str = ""
     GROQ_API_KEY_3: str = ""
+    GROQ_API_KEY_4: str = ""
+    
     GROQ_MODEL: str = "llama3-8b-8192"
 
     RAG_ENABLED: bool = True
@@ -40,13 +42,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash-lite"
 
-    # GLM — Ollama cloud model proxy (aucun téléchargement local requis)
-    # Ollama route glm-5.1:cloud vers le cloud ZhipuAI de façon transparente.
-    # Authentification unique via terminal : ollama login
-    # Aucune clé API à configurer ici.
-    GLM_MODEL: str = "glm-5.1:cloud"
-    GLM_BASE_URL: str = "http://localhost:11434/v1"
-    GLM_API_KEY: str = ""  # laisser vide — Ollama gère l'auth via ollama login
+    # Generic LLM provider — OpenAI-compatible endpoint (NVIDIA NIM, Together.ai, Groq, etc.)
+    # LLM_API_KEY falls back to GROQ_API_KEY when left empty.
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://api.groq.com/openai/v1"
+    LLM_MODEL: str = "llama3-70b-8192"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

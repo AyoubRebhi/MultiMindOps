@@ -7,7 +7,9 @@
       "Bash(ls backend/app/services/*.py)",
       "Bash(\"venv/Scripts/pip.exe\" install:*)",
       "Bash(python -m pip install qdrant-client)",
-      "Bash(python rag/scripts/ingest_qdrant.py --reset)"
+      "Bash(python rag/scripts/ingest_qdrant.py --reset)",
+      "Bash(python -m pip install pytest -q)",
+      "Bash(python -m pytest tests/test_encoding_fix.py -v)"
     ]
   }
 }

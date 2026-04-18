@@ -59,6 +59,10 @@ services:
       # Override pour pointer vers les containers
       RAG_QDRANT_URL: http://qdrant:6333
       OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # Force UTF-8 encoding to prevent UnicodeEncodeError with LLM responses
+      PYTHONIOENCODING: utf-8
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
     command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:

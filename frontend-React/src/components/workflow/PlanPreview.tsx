@@ -11,9 +11,11 @@ import {
 import { cn } from '@/lib/utils'
 import type { PlanPreviewResponse, PlanAction } from '@/types'
 import { SecurityScore } from '@/components/security/SecurityScore'
+import { PlanEvaluation } from '@/components/quality/PlanEvaluation'
 
 interface Props {
   preview: PlanPreviewResponse
+  originalPrompt: string
   onApprove: (approvedArtifacts: string[]) => void
   onBack: () => void
   isLoading?: boolean
@@ -38,7 +40,7 @@ function artifactIcon(name: string) {
   return FileCode
 }
 
-export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
+export function PlanPreview({ preview, originalPrompt, onApprove, onBack, isLoading }: Props) {
   // Normalize backend field names → frontend field names
   const plan = preview.plan
   const artifacts: string[] = plan?.artifacts ?? (plan?.required_artifacts as string[] | undefined) ?? []
@@ -77,6 +79,20 @@ export function PlanPreview({ preview, onApprove, onBack, isLoading }: Props) {
       {/* Repo security — use transformed security object (has score/grade/vulns) */}
       {preview.security && (
         <SecurityScore security={preview.security} compact />
+      )}
+
+      {/* Plan quality evaluation panel */}
+      {plan && (
+        <PlanEvaluation
+          plan={plan}
+          originalPrompt={originalPrompt}
+          repositoryContext={
+            preview.repo_summary
+              ? { repo_summary: preview.repo_summary }
+              : undefined
+          }
+          autoRun
+        />
       )}
 
       {/* No plan data warning */}
