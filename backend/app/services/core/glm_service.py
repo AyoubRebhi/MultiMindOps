@@ -41,18 +41,21 @@ class LLMClient:
     locale-codec surprises.  Retries transient errors with exponential back-off.
     """
 
+    # Groq is the sole authorised LLM provider for all pipeline stages.
+    _GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
     def __init__(self) -> None:
-        # LLM_API_KEY takes precedence; fall back to the first Groq key.
-        self.api_key: str = (
-            settings.LLM_API_KEY.strip()
-            or settings.GROQ_API_KEY.strip()
-            or "NO_KEY_SET"
-        )
-        self.base_url: str = settings.LLM_BASE_URL.rstrip("/")
-        self.model: str = settings.LLM_MODEL
+        groq_key = settings.GROQ_API_KEY.strip()
+        if not groq_key:
+            raise Exception(
+                "Missing GROQ API key — set GROQ_API_KEY in your environment or .env file."
+            )
+        self.api_key: str = groq_key
+        self.base_url: str = self._GROQ_BASE_URL
+        self.model: str = settings.GROQ_MODEL
 
         logger.info(
-            "[LLMClient] Initialized — model=%s endpoint=%s",
+            "[LLMClient] Initialized — provider=GROQ model=%s endpoint=%s",
             self.model,
             self.base_url,
         )
@@ -69,6 +72,7 @@ class LLMClient:
         max_tokens: int = 2000,
     ) -> str:
         """Send a chat request and return the raw string response."""
+        print("LLM PROVIDER: GROQ")
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [

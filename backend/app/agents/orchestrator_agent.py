@@ -21,8 +21,16 @@ Upgrades over the previous static orchestrator
    - Every routing decision is appended to ``state["logs"]`` for
      full observability in the task history.
 
-All three execution modes (``run``, ``run_plan_preview``, ``run_generation``)
-are preserved with their existing signatures.
+5. **Multi-phase workflow with human-in-the-loop plan selection**
+   - New phases: planning_phase → multi_plan_phase → plan_selection (pause)
+     → generation_phase → validation_phase.
+   - run_until_plan_selection(): executes up to multi_plan_phase then stops.
+   - resume_with_plan(selected_plan_id): resumes from generation_phase with
+     the chosen plan injected into state.
+   - auto_mode=True skips plan_selection and picks the first available plan.
+
+All execution modes (``run``, ``run_plan_preview``, ``run_generation``,
+``run_until_plan_selection``, ``resume_with_plan``) are supported.
 """
 
 from __future__ import annotations
@@ -34,7 +42,9 @@ from langgraph.graph import END, START, StateGraph
 
 from backend.app.agents.base_agent import BaseAgent
 from backend.app.agents.codebase_analysis_agent import CodebaseAnalysisAgent
+from backend.app.agents.cost_estimation_agent import CostEstimationAgent
 from backend.app.agents.infrastructure_agent import InfrastructureAgent
+from backend.app.agents.multi_plan_agent import MultiPlanAgent
 from backend.app.agents.planner_agent import PlannerAgent
 from backend.app.agents.state import OrchestratorState
 from backend.app.agents import CICDAgent
@@ -64,14 +74,22 @@ class OrchestratorAgent(BaseAgent):
       │                          ┌───────────────────┤
       │                          │ security_blocked?  │ ok?
       │                          ▼                    ▼
-      │                       finalize             planner ◄──── (no repo_url)
+      │                       finalize          planning_phase ◄──── (no repo_url)
       │                                              │
-      │                       ┌──────────────────────┤
-      │                       │ empty_plan?           │ artifacts?
-      │                       ▼                       ▼
-      │                    finalize            infrastructure
+      │                                       multi_plan_phase
       │                                              │
-      │                                     artifact_validation
+      │                          ┌───────────────────┤
+      │                          │ auto_mode=True     │ default
+      │                          │ (pick first plan)  ▼
+      │                          │             plan_selection
+      │                          │             (awaiting_user_input)
+      │                          │                    │
+      │                          │              selected_plan?
+      │                          │             yes /        \ no
+      │                          ▼            ▼              ▼
+      │                    generation_phase  generation_phase  END (partial)
+      │    (≡infrastructure)     │
+      │                   artifact_validation (validation_phase)
       │                                              │
       │                       ┌──────────────────────┤
       │                       │ fully_invalid?        │ ok / partial?
@@ -102,11 +120,21 @@ class OrchestratorAgent(BaseAgent):
             return fallback
 
         default_planner = (
-            "You are a DevSecOps planning agent. Respond with ONLY a valid JSON object — "
-            "no markdown, no prose, no code fences. "
+            "You are an infrastructure-first DevSecOps planning agent. "
+            "Planning priority: Infrastructure → Deployment → CI/CD. Never generate CI/CD-only plans. "
+            "ALWAYS include Terraform for infrastructure provisioning. "
+            "Include Kubernetes manifests for microservices or scalable applications. "
+            "GitHub Actions is used ONLY for automation, not as the primary output. "
+            "Respond with ONLY a valid JSON object — no markdown, no prose, no code fences. "
             'The JSON must have keys: "agent" (string), "input_prompt" (string), '
-            '"steps" (array of strings), "required_artifacts" (array of file path strings), '
-            '"estimated_complexity" ("low"|"medium"|"high"), "reasoning_summary" (string).'
+            '"steps" (array of strings following this order: 1.Define Terraform infrastructure, '
+            '2.Create Dockerfile, 3.Build container image, 4.Define Kubernetes manifests, '
+            '5.Configure GitHub Actions CI/CD, 6.Deploy infrastructure and application), '
+            '"required_artifacts" (array of file path strings — MUST include terraform/main.tf '
+            'and Dockerfile; include kubernetes/deployment.yaml for microservices), '
+            '"estimated_complexity" ("low"|"medium"|"high"), '
+            '"reasoning_summary" (string — MUST explain why Terraform is used and why '
+            'Kubernetes is or is not chosen based on the application architecture).'
         )
         default_infrastructure = (
             "You are a DevSecOps infrastructure generation agent. Respond with ONLY a valid JSON "
@@ -129,6 +157,8 @@ class OrchestratorAgent(BaseAgent):
         self.codebase_agent = CodebaseAnalysisAgent()
         self.infrastructure_agent = InfrastructureAgent(prompt_template=infrastructure_prompt)
         self.cicd_agent = CICDAgent()
+        self.cost_estimation_agent = CostEstimationAgent()
+        self.multi_plan_agent = MultiPlanAgent()
         self.artifact_quality_validator = ArtifactQualityValidator()
         self.artifact_contract_service = ArtifactContractService()
         self.graph = self._build_graph()
@@ -175,6 +205,35 @@ class OrchestratorAgent(BaseAgent):
             logs.append({"step": "repository_security", "message": sec_msg})
             logs.append({"step": "codebase_analysis", "message": "Repository analyzed successfully"})
 
+        application_profile = analysis.get("application_profile")
+        cache_status = (analysis.get("repository_analysis") or {}).get("cache_status", "fresh")
+
+        if application_profile is None:
+            logger.error(
+                "[OrchestratorAgent] application_profile key absent from analysis output (cache_status=%s) — profiling pipeline did not set it",
+                cache_status,
+            )
+            raise Exception("Application profiling failed: key missing from analysis output")
+
+        if not application_profile:
+            logger.error(
+                "[OrchestratorAgent] application_profile is an empty dict (cache_status=%s) — profiling returned no usable data",
+                cache_status,
+            )
+            raise Exception("Application profiling failed: empty profile returned")
+
+        logger.info(
+            "[OrchestratorAgent] application_profile extracted — type=%s scalability=%s source=%s",
+            application_profile.get("application_type"),
+            application_profile.get("scalability_level"),
+            cache_status,
+        )
+
+        agent_context = analysis.get("agent_context") or {}
+        if "application_profile" not in agent_context:
+            agent_context = dict(agent_context)
+            agent_context["application_profile"] = application_profile
+
         return {
             **state,
             "repository_security": security_result,
@@ -185,31 +244,152 @@ class OrchestratorAgent(BaseAgent):
             "key_entrypoints": analysis.get("key_entrypoints"),
             "categorized_files": analysis.get("categorized_files"),
             "chunks": analysis.get("chunks"),
-            "agent_context": analysis.get("agent_context"),
+            "agent_context": agent_context,
+            "application_profile": application_profile,
             "env_security_runtime": analysis.get("env_security_runtime"),
             "logs": logs,
         }
 
     def _planner_node(self, state: OrchestratorState) -> OrchestratorState:
-        planner_context = (state.get("agent_context") or {}).get("planner_context")
-        plan = self.planner_agent.run(state["prompt"], planner_context)
+        """Retained for backward-compat; delegates to _planning_phase_node."""
+        return self._planning_phase_node(state)
 
-        # Log which plan variant was selected (if multi-plan was used)
+    def _planning_phase_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Phase 1 — run PlannerAgent and store the primary plan."""
+        logger.info("[OrchestratorAgent] Entering planning_phase")
+        agent_context = state.get("agent_context") or {}
+        planner_context = dict(agent_context.get("planner_context") or {})
+
+        # Inject application_profile from CodebaseAnalysisAgent into planner_context.
+        # Prefer the top-level state field (populated by _analyze_repository_node);
+        # fall back to agent_context for backward compatibility.
+        application_profile = (
+            state.get("application_profile")
+            or agent_context.get("application_profile")
+        )
+        planner_context = planner_context or {}
+        planner_context["application_profile"] = application_profile
+
+        if application_profile:
+            logger.info(
+                "[OrchestratorAgent] application_profile injected into planner_context — type=%s scalability=%s",
+                application_profile.get("application_type"),
+                application_profile.get("scalability_level"),
+            )
+        else:
+            logger.warning("[OrchestratorAgent] application_profile not found in agent_context or state")
+
+        if state.get("repo_url") and not application_profile:
+            raise Exception("Application profile missing in orchestrator state")
+
+        plan = self.planner_agent.run(state["prompt"], planner_context or None)
+
         logs = list(state.get("logs", []))
         variant = plan.get("plan_variant")
         score = plan.get("plan_score")
         if variant and score is not None:
             logs.append({
-                "step": "planner",
+                "step": "planning_phase",
                 "message": (
                     f"Multi-plan generated — selected variant '{variant}' "
                     f"(score={score:.3f})"
                 ),
             })
         else:
-            logs.append({"step": "planner", "message": "Plan generated successfully"})
+            logs.append({"step": "planning_phase", "message": "Planning phase completed"})
 
         return {**state, "plan": plan, "logs": logs}
+
+    def _cost_estimation_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Estimate monthly AWS cost from the infrastructure blueprint in the plan."""
+        logger.info("[OrchestratorAgent] Entering cost_estimation")
+        plan = state.get("plan") or {}
+        planner_context = (state.get("agent_context") or {}).get("planner_context") or {}
+        application_profile = planner_context.get("application_profile")
+
+        try:
+            result = self.cost_estimation_agent.run(
+                plan=plan,
+                application_profile=application_profile,
+            )
+            cost_estimation = result.get("cost_estimation") or {}
+        except Exception as exc:
+            logger.warning("[OrchestratorAgent] CostEstimationAgent failed (%s) — skipping.", exc)
+            cost_estimation = {}
+
+        logs = list(state.get("logs", []))
+        monthly = cost_estimation.get("monthly_cost")
+        profile = cost_estimation.get("cost_profile", "unknown")
+        if monthly is not None:
+            logs.append({
+                "step": "cost_estimation",
+                "message": f"Estimated monthly cost: ${monthly:.2f} ({profile})",
+            })
+        else:
+            logs.append({"step": "cost_estimation", "message": "Cost estimation skipped"})
+
+        return {**state, "cost_estimation": cost_estimation, "logs": logs}
+
+    def _multi_plan_phase_node(self, state: OrchestratorState) -> OrchestratorState:
+        """
+        Phase 2 — generate three infrastructure plan variants (low_cost,
+        balanced, high_performance) via MultiPlanAgent and store them in
+        ``state["plans"]`` for the subsequent plan_selection node.
+        """
+        logger.info("[OrchestratorAgent] Entering multi_plan_phase")
+        plan = state.get("plan") or {}
+        cost_estimation = state.get("cost_estimation")
+        planner_context = (state.get("agent_context") or {}).get("planner_context") or {}
+        application_profile = planner_context.get("application_profile")
+
+        result = self.multi_plan_agent.run(
+            plan=plan,
+            cost_estimation=cost_estimation,
+            prompt=state.get("prompt", ""),
+            application_profile=application_profile,
+        )
+
+        plans: list[dict] = result.get("plans") or []
+        recommended: str = result.get("recommended_plan") or "balanced"
+
+        logs = list(state.get("logs", []))
+        logs.append({
+            "step": "multi_plan_phase",
+            "message": (
+                f"{len(plans)} plan variant(s) generated — "
+                f"recommended: '{recommended}'"
+            ),
+        })
+        return {**state, "plans": plans, "logs": logs}
+
+    def _plan_selection_node(self, state: OrchestratorState) -> OrchestratorState:
+        """
+        Blocking node — workflow pauses here until the user injects a selected_plan.
+
+        In run_until_plan_selection() the graph is invoked but the conditional
+        edge after this node routes to END when selected_plan is None, so no
+        further processing happens until resume_with_plan() is called.
+        """
+        logs = list(state.get("logs", []))
+        logs.append({
+            "step": "plan_selection",
+            "message": "Workflow paused — awaiting user plan selection",
+        })
+        logger.info("[OrchestratorAgent] plan_selection node reached — workflow paused")
+        return {**state, "awaiting_user_input": True, "logs": logs}
+
+    # generation_phase and validation_phase are thin aliases so the graph uses
+    # the new phase names while delegating to the existing heavy-lift nodes.
+
+    def _generation_phase_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Phase alias → infrastructure generation."""
+        logger.info("[OrchestratorAgent] Entering generation_phase")
+        return self._infrastructure_node(state)
+
+    def _validation_phase_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Phase alias → artifact validation."""
+        logger.info("[OrchestratorAgent] Entering validation_phase")
+        return self._artifact_validation_node(state)
 
     def _infrastructure_node(self, state: OrchestratorState) -> OrchestratorState:
         infrastructure_context = (state.get("agent_context") or {}).get("infrastructure_context")
@@ -515,6 +695,7 @@ class OrchestratorAgent(BaseAgent):
             "plan": state.get("plan"),
             "infrastructure": state.get("infra"),
             "cicd": cicd,
+            "cost_estimation": state.get("cost_estimation"),
             "validation": final_validation,
             "artifact_contract": final_contract,
         }
@@ -526,29 +707,73 @@ class OrchestratorAgent(BaseAgent):
     # ═══════════════════════════════════════════════════════════════════════════
 
     def _route_repository(self, state: OrchestratorState) -> str:
-        """Route to repo analysis or directly to planner."""
-        return "analyze_repository" if state.get("repo_url") else "planner"
+        """Route to repo analysis or directly to planning_phase."""
+        return "analyze_repository" if state.get("repo_url") else "planning_phase"
 
     def _route_after_repository_analysis(self, state: OrchestratorState) -> str:
         """
         After repo analysis:
         - security blocked → finalize immediately
-        - otherwise → planner
+        - otherwise → planning_phase
         """
         security_result = state.get("repository_security") or {}
         if security_result.get("status") == "blocked":
             return "finalize"
-        return "planner"
+        return "planning_phase"
 
-    def _route_after_planner(self, state: OrchestratorState) -> str:
+    def _route_after_multi_plan(self, state: OrchestratorState) -> str:
         """
-        Dynamic routing after planner — context-aware decision.
+        Routing after multi_plan_phase.
+
+        - auto_mode=True  → pick first plan automatically, go to generation_phase.
+        - Otherwise       → set awaiting_user_input=True, park at plan_selection.
+        """
+        logs = list(state.get("logs", []))
+
+        if state.get("auto_mode"):
+            plans = state.get("plans") or []
+            first_plan_id = (plans[0].get("plan_id") if plans else None) or "plan_0"
+            state["selected_plan"] = first_plan_id
+            state["awaiting_user_input"] = False
+            logs.append({
+                "step": "dynamic_routing",
+                "message": f"auto_mode — automatically selected plan '{first_plan_id}'",
+            })
+            state["logs"] = logs
+            logger.info("[OrchestratorAgent] auto_mode: selected plan '%s'", first_plan_id)
+            return "generation_phase"
+
+        state["awaiting_user_input"] = True
+        logs.append({
+            "step": "dynamic_routing",
+            "message": "Waiting for user to select a plan",
+        })
+        state["logs"] = logs
+        logger.info("[OrchestratorAgent] Pausing workflow — awaiting user plan selection")
+        return "plan_selection"
+
+    def _route_after_plan_selection(self, state: OrchestratorState) -> str:
+        """
+        Continue to generation_phase only if the user has supplied a selected_plan.
+        Otherwise surface a partial result and end.
+        """
+        if state.get("selected_plan"):
+            logger.info(
+                "[OrchestratorAgent] Plan '%s' selected — resuming to generation_phase",
+                state["selected_plan"],
+            )
+            return "generation_phase"
+
+        logger.info("[OrchestratorAgent] No plan selected — stopping workflow")
+        return "finalize"
+
+    def _route_after_planning_phase(self, state: OrchestratorState) -> str:
+        """
+        Dynamic routing after planning_phase — context-aware decision.
 
         Rules (evaluated in priority order):
         1. Plan has no required_artifacts AND no reasoning → skip generation.
-        2. Plan has required_artifacts → proceed to infrastructure.
-        3. Plan has no required_artifacts but has reasoning summary → proceed
-           (the infrastructure agent may still generate a Dockerfile).
+        2. Otherwise → multi_plan_phase.
         """
         plan = state.get("plan") or {}
         required_artifacts = plan.get("required_artifacts") or []
@@ -557,7 +782,6 @@ class OrchestratorAgent(BaseAgent):
 
         logs = list(state.get("logs", []))
 
-        # Degenerate plan — nothing to generate
         if not required_artifacts and not reasoning and not steps:
             logs.append({
                 "step": "dynamic_routing",
@@ -566,22 +790,15 @@ class OrchestratorAgent(BaseAgent):
             state["logs"] = logs
             return "finalize"
 
-        if required_artifacts:
-            logs.append({
-                "step": "dynamic_routing",
-                "message": (
-                    f"Planner produced {len(required_artifacts)} artifact(s) — "
-                    f"routing to infrastructure"
-                ),
-            })
-        else:
-            logs.append({
-                "step": "dynamic_routing",
-                "message": "No explicit required_artifacts — proceeding to infrastructure with inferred defaults",
-            })
-
+        logs.append({
+            "step": "dynamic_routing",
+            "message": (
+                f"Planning phase produced {len(required_artifacts)} artifact(s) — "
+                f"routing to cost_estimation"
+            ),
+        })
         state["logs"] = logs
-        return "infrastructure"
+        return "cost_estimation"
 
     def _route_after_validation(self, state: OrchestratorState) -> str:
         """
@@ -624,45 +841,68 @@ class OrchestratorAgent(BaseAgent):
     def _build_graph(self):
         workflow = StateGraph(OrchestratorState)
 
-        # Nodes
+        # ── Nodes ────────────────────────────────────────────────────────────
         workflow.add_node("initialize", self._initialize_node)
         workflow.add_node("analyze_repository", self._analyze_repository_node)
-        workflow.add_node("planner", self._planner_node)
-        workflow.add_node("infrastructure", self._infrastructure_node)
-        workflow.add_node("artifact_validation", self._artifact_validation_node)
+
+        # Phase nodes (new architecture)
+        workflow.add_node("planning_phase", self._planning_phase_node)
+        workflow.add_node("cost_estimation", self._cost_estimation_node)
+        workflow.add_node("multi_plan_phase", self._multi_plan_phase_node)
+        workflow.add_node("plan_selection", self._plan_selection_node)
+        workflow.add_node("generation_phase", self._generation_phase_node)
+        workflow.add_node("validation_phase", self._validation_phase_node)
+
         workflow.add_node("cicd", self._cicd_node)
         workflow.add_node("finalize", self._finalize_node)
 
-        # Entry
+        # ── Entry ─────────────────────────────────────────────────────────────
         workflow.add_edge(START, "initialize")
 
-        # initialize → analyze_repository | planner
+        # initialize → analyze_repository | planning_phase
         workflow.add_conditional_edges(
             "initialize",
             self._route_repository,
-            {"analyze_repository": "analyze_repository", "planner": "planner"},
+            {"analyze_repository": "analyze_repository", "planning_phase": "planning_phase"},
         )
 
-        # analyze_repository → planner | finalize (security blocked)
+        # analyze_repository → planning_phase | finalize (security blocked)
         workflow.add_conditional_edges(
             "analyze_repository",
             self._route_after_repository_analysis,
-            {"planner": "planner", "finalize": "finalize"},
+            {"planning_phase": "planning_phase", "finalize": "finalize"},
         )
 
-        # planner → infrastructure | finalize (empty plan)   [DYNAMIC]
+        # planning_phase → cost_estimation | finalize (empty plan)
         workflow.add_conditional_edges(
-            "planner",
-            self._route_after_planner,
-            {"infrastructure": "infrastructure", "finalize": "finalize"},
+            "planning_phase",
+            self._route_after_planning_phase,
+            {"cost_estimation": "cost_estimation", "finalize": "finalize"},
         )
 
-        # infrastructure → artifact_validation (always)
-        workflow.add_edge("infrastructure", "artifact_validation")
+        # cost_estimation → multi_plan_phase (always)
+        workflow.add_edge("cost_estimation", "multi_plan_phase")
 
-        # artifact_validation → cicd | finalize (fully invalid)   [DYNAMIC]
+        # multi_plan_phase → plan_selection | generation_phase (auto_mode)
         workflow.add_conditional_edges(
-            "artifact_validation",
+            "multi_plan_phase",
+            self._route_after_multi_plan,
+            {"plan_selection": "plan_selection", "generation_phase": "generation_phase"},
+        )
+
+        # plan_selection → generation_phase (plan chosen) | finalize (no plan)
+        workflow.add_conditional_edges(
+            "plan_selection",
+            self._route_after_plan_selection,
+            {"generation_phase": "generation_phase", "finalize": "finalize"},
+        )
+
+        # generation_phase → validation_phase (always)
+        workflow.add_edge("generation_phase", "validation_phase")
+
+        # validation_phase → cicd | finalize (fully invalid)
+        workflow.add_conditional_edges(
+            "validation_phase",
             self._route_after_validation,
             {"cicd": "cicd", "finalize": "finalize"},
         )
@@ -677,20 +917,23 @@ class OrchestratorAgent(BaseAgent):
     # Public execution modes
     # ═══════════════════════════════════════════════════════════════════════════
 
-    def run(
+    def _base_state(
         self,
         prompt: str,
         repo_url: str | None = None,
         repository_visibility: str = "public",
         github_token: str | None = None,
         uploaded_env_input: dict | None = None,
-    ) -> dict:
-        initial_state: OrchestratorState = {
+        auto_mode: bool = True,
+    ) -> OrchestratorState:
+        """Build a fresh initial OrchestratorState."""
+        return {
             "prompt": prompt,
             "repo_url": repo_url,
             "repository_visibility": repository_visibility,
             "github_token": github_token,
             "uploaded_env_input": uploaded_env_input,
+            "auto_mode": auto_mode,
             "status": "pending",
             "logs": [],
             "repository_security": None,
@@ -701,12 +944,35 @@ class OrchestratorAgent(BaseAgent):
             "agent_context": None,
             "env_security_runtime": None,
             "plan": None,
+            "plans": None,
+            "selected_plan": None,
+            "awaiting_user_input": False,
             "infra": None,
             "cicd": None,
+            "cost_estimation": None,
+            "application_profile": None,
             "validation": None,
             "result": None,
             "error_message": None,
         }
+
+    def run(
+        self,
+        prompt: str,
+        repo_url: str | None = None,
+        repository_visibility: str = "public",
+        github_token: str | None = None,
+        uploaded_env_input: dict | None = None,
+        auto_mode: bool = True,
+    ) -> dict:
+        initial_state = self._base_state(
+            prompt=prompt,
+            repo_url=repo_url,
+            repository_visibility=repository_visibility,
+            github_token=github_token,
+            uploaded_env_input=uploaded_env_input,
+            auto_mode=auto_mode,
+        )
         return self.graph.invoke(initial_state)
 
     def run_plan_preview(
@@ -717,29 +983,14 @@ class OrchestratorAgent(BaseAgent):
         github_token: str | None = None,
         uploaded_env_input: dict | None = None,
     ) -> dict:
-        state: OrchestratorState = {
-            "prompt": prompt,
-            "repo_url": repo_url,
-            "repository_visibility": repository_visibility,
-            "github_token": github_token,
-            "uploaded_env_input": uploaded_env_input,
-            "approved_artifacts": None,
-            "status": "pending",
-            "logs": [],
-            "repository_security": None,
-            "repository_analysis": None,
-            "repo_summary": None,
-            "file_tree": None,
-            "important_files": None,
-            "agent_context": None,
-            "env_security_runtime": None,
-            "plan": None,
-            "infra": None,
-            "cicd": None,
-            "validation": None,
-            "result": None,
-            "error_message": None,
-        }
+        state: OrchestratorState = self._base_state(
+            prompt=prompt,
+            repo_url=repo_url,
+            repository_visibility=repository_visibility,
+            github_token=github_token,
+            uploaded_env_input=uploaded_env_input,
+        )
+        state["approved_artifacts"] = None
 
         state = self._initialize_node(state)
 
@@ -749,7 +1000,8 @@ class OrchestratorAgent(BaseAgent):
                 state["status"] = "blocked"
                 return state
 
-        state = self._planner_node(state)
+        state = self._planning_phase_node(state)
+        state = self._cost_estimation_node(state)
         state["status"] = "awaiting_user_review"
         state["logs"] = list(state.get("logs", [])) + [
             {
@@ -758,7 +1010,6 @@ class OrchestratorAgent(BaseAgent):
             }
         ]
 
-        # Transform raw repository_security into frontend-expected SecurityAnalysis format
         state["security"] = SecurityScoreTransformer.transform(
             repository_security=state.get("repository_security"),
             env_security_runtime=state.get("env_security_runtime"),
@@ -802,6 +1053,126 @@ class OrchestratorAgent(BaseAgent):
 
         preview_state = self._finalize_node(preview_state)
         return preview_state
+
+    def run_until_plan_selection(
+        self,
+        prompt: str,
+        repo_url: str | None = None,
+        repository_visibility: str = "public",
+        github_token: str | None = None,
+        uploaded_env_input: dict | None = None,
+    ) -> dict:
+        """
+        Execute the workflow up to and including multi_plan_phase, then stop.
+
+        Returns the partial state that includes ``plans`` and
+        ``awaiting_user_input=True``.  Call ``resume_with_plan()`` to continue.
+        """
+        logger.info("[OrchestratorAgent] run_until_plan_selection — starting")
+        state: OrchestratorState = self._base_state(
+            prompt=prompt,
+            repo_url=repo_url,
+            repository_visibility=repository_visibility,
+            github_token=github_token,
+            uploaded_env_input=uploaded_env_input,
+            auto_mode=False,  # force interactive mode
+        )
+
+        state = self._initialize_node(state)
+
+        if repo_url:
+            state = self._analyze_repository_node(state)
+            if (state.get("repository_security") or {}).get("status") == "blocked":
+                state["status"] = "blocked"
+                logger.info("[OrchestratorAgent] run_until_plan_selection — blocked by security")
+                return state
+
+        state = self._planning_phase_node(state)
+
+        plan = state.get("plan") or {}
+        required_artifacts = plan.get("required_artifacts") or []
+        reasoning = (plan.get("reasoning_summary") or "").strip()
+        steps = plan.get("steps") or []
+        if not required_artifacts and not reasoning and not steps:
+            state["status"] = "empty_plan"
+            logger.info("[OrchestratorAgent] run_until_plan_selection — empty plan, stopping")
+            return state
+
+        state = self._cost_estimation_node(state)
+        state = self._multi_plan_phase_node(state)
+        state["status"] = "awaiting_plan_selection"
+        state["awaiting_user_input"] = True
+
+        state["security"] = SecurityScoreTransformer.transform(
+            repository_security=state.get("repository_security"),
+            env_security_runtime=state.get("env_security_runtime"),
+        )
+
+        logger.info(
+            "[OrchestratorAgent] run_until_plan_selection — returning %d plan(s) for user selection",
+            len(state.get("plans") or []),
+        )
+        return state
+
+    def resume_with_plan(
+        self,
+        prior_state: dict,
+        selected_plan_id: str,
+        approved_artifacts: list[str] | None = None,
+    ) -> dict:
+        """
+        Resume the workflow from generation_phase using a user-selected plan.
+
+        Parameters
+        ----------
+        prior_state:
+            The state dict returned by ``run_until_plan_selection()``.
+        selected_plan_id:
+            The ``plan_id`` of the chosen plan from ``prior_state["plans"]``.
+        approved_artifacts:
+            Optional artifact allowlist; if omitted the plan's own
+            required_artifacts list is used.
+        """
+        logger.info(
+            "[OrchestratorAgent] resume_with_plan — selected plan '%s'", selected_plan_id
+        )
+
+        state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
+        state["selected_plan"] = selected_plan_id
+        state["awaiting_user_input"] = False
+
+        # Resolve which plan dict corresponds to the selection
+        plans = state.get("plans") or []
+        matched = next(
+            (p for p in plans if p.get("plan_id") == selected_plan_id),
+            state.get("plan") or {},
+        )
+        if matched:
+            state["plan"] = matched
+
+        if approved_artifacts is not None:
+            state["approved_artifacts"] = approved_artifacts
+            plan = state.get("plan") or {}
+            plan["approved_artifacts"] = approved_artifacts
+            state["plan"] = plan
+
+        logs = list(state.get("logs", []))
+        logs.append({
+            "step": "plan_selection",
+            "message": f"User selected plan '{selected_plan_id}' — resuming workflow",
+        })
+        state["logs"] = logs
+
+        state = self._generation_phase_node(state)
+        state = self._filter_generated_artifacts(state)
+        state = self._validation_phase_node(state)
+
+        next_step = self._route_after_validation(state)
+        if next_step == "cicd":
+            state = self._cicd_node(state)
+
+        state = self._finalize_node(state)
+        return state
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Utilities (unchanged from original)

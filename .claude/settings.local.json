@@ -9,7 +9,9 @@
       "Bash(python -m pip install qdrant-client)",
       "Bash(python rag/scripts/ingest_qdrant.py --reset)",
       "Bash(python -m pip install pytest -q)",
-      "Bash(python -m pytest tests/test_encoding_fix.py -v)"
+      "Bash(python -m pytest tests/test_encoding_fix.py -v)",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"from backend.app.agents.planner_agent import PlannerAgent; print\\('OK'\\)\")"
     ]
   }
 }

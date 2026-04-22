@@ -33,5 +33,15 @@ class OrchestratorState(TypedDict, total=False):
     knowledge: Optional[Dict[str, Any]]
     validation: Optional[Dict[str, Any]]
 
+    # Multi-phase workflow fields
+    plans: Optional[List[Dict[str, Any]]]
+    selected_plan: Optional[str]
+    awaiting_user_input: bool
+    auto_mode: bool
+
+    cost_estimation: Optional[Dict[str, Any]]
+
+    application_profile: Optional[Dict[str, Any]]
+
     result: Optional[Dict[str, Any]]
     error_message: Optional[str]

@@ -14,6 +14,7 @@ from backend.app.services.repository.repository_fingerprint_service import Repos
 from backend.app.services.repository.repository_parser_service import RepositoryParserService
 from backend.app.services.repository.repository_registry_service import RepositoryRegistryService
 from backend.app.services.repository.repository_security_service import RepositorySecurityService
+from backend.app.services.repository.application_profiler_service import ApplicationProfilerService
 from backend.app.services.repository.targeted_repository_parser import TargetedRepositoryParser
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class CodebaseAnalysisAgent(BaseAgent):
         self.quick_scanner = QuickScannerService()
         self.priority_engine = LLMPriorityEngine()
         self.targeted_parser = TargetedRepositoryParser()
+        self.app_profiler = ApplicationProfilerService()
 
     @staticmethod
     def _summarize_cached_analysis(cached_analysis: Dict[str, Any] | None) -> Dict[str, Any] | None:
@@ -270,6 +272,8 @@ class CodebaseAnalysisAgent(BaseAgent):
                 "file_relationships": targeted.get("file_relationships", {}),
                 "critical_sections": targeted.get("critical_sections", {}),
                 "architecture_summary": targeted.get("architecture_summary", ""),
+                "architecture_hint": priority_result.architecture_hint,
+                "primary_stack": priority_result.primary_stack,
                 "llm_used": priority_result.llm_used,
             }
             execution_trace.append(
@@ -299,7 +303,57 @@ class CodebaseAnalysisAgent(BaseAgent):
             repo_path,
             uploaded_env=uploaded_env,
         )
+
+        # ── Application profile (heuristic + LLM) ──────────────────────────
+        _SAFE_FALLBACK_PROFILE: Dict[str, Any] = {
+            "application_type": "monolith",
+            "architecture_pattern": "layered",
+            "statefulness": "stateless",
+            "workload_profile": "io_bound",
+            "scalability_level": "medium",
+            "detected_services": [],
+            "entrypoints": [],
+        }
+        application_profile: Dict[str, Any] = {}
+        try:
+            application_profile = self.app_profiler.build_profile(
+                quick_scan=intelligent_analysis.get("quick_scan") or {},
+                architecture_summary=intelligent_analysis.get("architecture_summary") or "",
+                repo_summary=parsed_repo.get("project_summary"),
+                primary_stack=intelligent_analysis.get("primary_stack") or [],
+            )
+            execution_trace.append(
+                self.trace_service.build_trace_entry(
+                    step="application_profiling",
+                    status="completed",
+                    details={
+                        "application_type": application_profile.get("application_type"),
+                        "workload_profile": application_profile.get("workload_profile"),
+                        "scalability_level": application_profile.get("scalability_level"),
+                        "statefulness": application_profile.get("statefulness"),
+                        "detected_services_count": len(
+                            application_profile.get("detected_services") or []
+                        ),
+                    },
+                )
+            )
+        except Exception as exc:
+            logger.error(
+                "Application profiling failed (%s); injecting safe fallback profile.", exc
+            )
+            application_profile = dict(_SAFE_FALLBACK_PROFILE)
+            execution_trace.append(
+                self.trace_service.build_trace_entry(
+                    step="application_profiling",
+                    status="failed_with_fallback",
+                    details={"error": str(exc), "fallback_applied": True},
+                )
+            )
+
         agent_context = self.context_builder.build_agent_context(parsed_repo)
+        if application_profile:
+            agent_context["application_profile"] = application_profile
+
         env_security_runtime = parsed_repo.pop("_runtime_env_security", None) or {
             "sensitive_values": [],
             "all_values": [],
@@ -367,6 +421,7 @@ class CodebaseAnalysisAgent(BaseAgent):
             "chunks": parsed_repo.get("chunks"),
             "agent_context": agent_context,
             "intelligent_analysis": intelligent_analysis,
+            "application_profile": application_profile,
         }
 
         stored_record = self.registry_service.save_analysis(
@@ -392,6 +447,7 @@ class CodebaseAnalysisAgent(BaseAgent):
                     "security_scan",
                     "intelligent_analysis",
                     "repository_parsing",
+                    "application_profiling",
                     "env_file_processing",
                     "context_building",
                 ],
