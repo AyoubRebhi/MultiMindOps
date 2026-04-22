@@ -30,6 +30,6 @@ workspace/
 # Local databases
 devsecops.db
 
-documentations/
+# documentations/
 .pytest_cache/
 .claude/

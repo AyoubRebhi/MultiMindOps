@@ -33,7 +33,7 @@ class CodebaseAnalysisAgent(BaseAgent):
         self.fingerprint_service = RepositoryFingerprintService()
         self.registry_service = RepositoryRegistryService()
         self.trace_service = ExecutionTraceService()
-        # Intelligent analysis pipeline (GLM-5.1:cloud)
+        # Intelligent analysis pipeline (LLM-powered priority ranking)
         self.quick_scanner = QuickScannerService()
         self.priority_engine = LLMPriorityEngine()
         self.targeted_parser = TargetedRepositoryParser()
@@ -249,7 +249,7 @@ class CodebaseAnalysisAgent(BaseAgent):
             }
             return analysis_output
 
-        # ── Intelligent pipeline: GLM-5.1:cloud quick scan + targeted parse ──
+        # ── Intelligent pipeline: LLM quick scan + targeted parse ──
         intelligent_analysis: Dict[str, Any] = {}
         llm_calls = 0
         try:

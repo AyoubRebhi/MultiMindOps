@@ -1,12 +1,16 @@
-"""LLM-powered file priority engine using GLM-5.1:cloud."""
+"""LLM-powered file priority engine (OpenAI-compatible backend)."""
 import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from backend.app.services.core.glm_service import GLMService, get_glm_service
+from backend.app.services.core.glm_service import LLMClient, get_glm_service
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
 You are a DevSecOps expert analyzing code repositories to automate infrastructure and CI/CD.
@@ -44,6 +48,35 @@ Output format (strict JSON):
 }
 """
 
+# ---------------------------------------------------------------------------
+# Token-budget constants
+# ---------------------------------------------------------------------------
+
+# File names / patterns that must always be sent to the LLM regardless of
+# how many files the repository contains.
+_CRITICAL_FILENAMES = frozenset({
+    "Dockerfile",
+    "docker-compose.yml", "docker-compose.yaml",
+    "package.json",
+    "requirements.txt", "requirements-backend.txt",
+    "pyproject.toml",
+    "pom.xml", "build.gradle",
+    "Chart.yaml",
+    "main.py", "app.py", "manage.py", "server.py",
+    "index.js", "index.ts", "main.ts", "main.go",
+    "README.md",
+    ".env.example", ".env.template",
+    "main.tf",
+})
+
+# Maximum number of file paths forwarded to the LLM.  Keeps the prompt under
+# ~4 k tokens even for very large repos.
+_MAX_FILES_FOR_LLM = 150
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
 
 @dataclass
 class FileRanking:
@@ -61,20 +94,84 @@ class PriorityResult:
     llm_used: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _is_critical_path(file_path: str) -> bool:
+    """Return True if *file_path* should always be included in the LLM prompt."""
+    name = file_path.split("/")[-1]
+    return (
+        name in _CRITICAL_FILENAMES
+        or ".github/workflows/" in file_path
+        or file_path.endswith(".tf")
+        or any(
+            file_path.startswith(prefix)
+            for prefix in ("k8s/", "kubernetes/", "helm/", "infra/")
+        )
+    )
+
+
+def _truncate_file_list(files: List[str], max_count: int) -> List[str]:
+    """
+    Guarantee critical files are always present; trim the rest so the total
+    stays within *max_count*.  Preserves original ordering within each group.
+    """
+    if len(files) <= max_count:
+        return files
+
+    critical: List[str] = []
+    others: List[str] = []
+    seen: set = set()
+
+    for f in files:
+        if f in seen:
+            continue
+        seen.add(f)
+        (critical if _is_critical_path(f) else others).append(f)
+
+    remaining_slots = max(0, max_count - len(critical))
+    trimmed_others = others[:remaining_slots]
+
+    logger.debug(
+        "[LLMPriorityEngine] File list truncated: %d critical + %d sampled "
+        "(original=%d, limit=%d)",
+        len(critical),
+        len(trimmed_others),
+        len(files),
+        max_count,
+    )
+    return critical + trimmed_others
+
+
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
+
 class LLMPriorityEngine:
     """
-    Uses GLM-5.1:cloud to select the 5-20 most critical files in a repository.
-    Falls back to heuristic selection if the LLM call fails.
+    Selects the 5–20 most critical repository files via an OpenAI-compatible
+    LLM (LLaMA 3, Mixtral, Mistral, …).  Configured through:
+
+        LLM_API_KEY   — provider API key
+        LLM_BASE_URL  — endpoint base URL  (e.g. https://api.groq.com/openai/v1)
+        LLM_MODEL     — model identifier   (e.g. llama3-70b-8192)
+
+    Falls back to heuristic selection when the LLM call fails.
     """
 
-    def __init__(self, glm_service: GLMService | None = None) -> None:
-        self._glm = glm_service  # lazy init if None
+    def __init__(self, llm_client: LLMClient | None = None) -> None:
+        self._client = llm_client  # lazy-initialised on first use
 
     @property
-    def glm(self) -> GLMService:
-        if self._glm is None:
-            self._glm = get_glm_service()
-        return self._glm
+    def _llm(self) -> LLMClient:
+        if self._client is None:
+            self._client = get_glm_service()  # factory returns the singleton LLMClient
+        return self._client
+
+    # ------------------------------------------------------------------
+    # Public
+    # ------------------------------------------------------------------
 
     def rank(
         self,
@@ -82,15 +179,15 @@ class LLMPriorityEngine:
         user_prompt: str | None = None,
         max_files: int = 20,
     ) -> PriorityResult:
-        """
-        Ask GLM which files matter most, with heuristic fallback.
-        """
+        """Rank files by importance; fall back to heuristics on any error."""
         try:
             result = self._llm_rank(quick_scan, user_prompt, max_files)
             result.llm_used = True
             return result
         except Exception as exc:
-            logger.warning("GLM priority ranking failed (%s), using heuristic fallback.", exc)
+            logger.warning(
+                "[LLMPriorityEngine] LLM ranking failed (%s) — using heuristic fallback.", exc
+            )
             return self._heuristic_rank(quick_scan, max_files)
 
     # ------------------------------------------------------------------
@@ -103,30 +200,44 @@ class LLMPriorityEngine:
         user_prompt: str | None,
         max_files: int,
     ) -> PriorityResult:
+        # Build a token-budget-aware scan summary
+        signal_files: List[str] = quick_scan.get("signal_files", [])
+        root_files: List[str] = quick_scan.get("root_files", [])
+
+        # Deduplicate and merge; signal_files take precedence
+        all_files: List[str] = signal_files + [f for f in root_files if f not in set(signal_files)]
+        truncated_files = _truncate_file_list(all_files, _MAX_FILES_FOR_LLM)
+
         scan_summary = {
-            "root_files": quick_scan.get("root_files", []),
+            "files": truncated_files,
             "top_level_dirs": quick_scan.get("top_level_dirs", []),
-            "signal_files": quick_scan.get("signal_files", []),
             "languages_hinted": quick_scan.get("languages_hinted", []),
             "hints": quick_scan.get("hints", {}),
             "size_category": quick_scan.get("size_category", "unknown"),
+            "truncated": len(all_files) > _MAX_FILES_FOR_LLM,
+            "total_files_seen": len(all_files),
         }
 
         user_parts = [
-            f"Repository structure:\n{json.dumps(scan_summary, indent=2)}",
+            f"Repository structure:\n{json.dumps(scan_summary, indent=2, ensure_ascii=False)}",
         ]
         if user_prompt:
             user_parts.append(f"\nUser request context: {user_prompt}")
         user_parts.append(f"\nSelect at most {max_files} critical files.")
 
-        raw = self.glm.chat_json(
+        raw = self._llm.chat_json(
             system_prompt=_SYSTEM_PROMPT,
             user_prompt="\n".join(user_parts),
-            temperature=0.1,
+            temperature=0.1,   # deterministic; must be <= 0.3
             max_tokens=1500,
         )
 
-        files = []
+        logger.debug(
+            "[LLMPriorityEngine] Raw LLM response (truncated): %.500s",
+            json.dumps(raw, ensure_ascii=False),
+        )
+
+        files: List[FileRanking] = []
         for item in raw.get("critical_files", []):
             files.append(FileRanking(
                 path=str(item.get("path", "")),
@@ -183,11 +294,9 @@ class LLMPriorityEngine:
         }
 
         ranked: List[FileRanking] = []
-        seen: set[str] = set()
+        seen: set = set()
 
-        all_candidates = signal_files + [
-            f for f in root_files if f not in signal_files
-        ]
+        all_candidates = signal_files + [f for f in root_files if f not in signal_files]
 
         for file_path in all_candidates:
             filename = file_path.split("/")[-1]
@@ -195,7 +304,6 @@ class LLMPriorityEngine:
                 continue
             seen.add(file_path)
 
-            # CI/CD files
             if ".github/workflows/" in file_path:
                 ranked.append(FileRanking(
                     path=file_path,
@@ -205,7 +313,6 @@ class LLMPriorityEngine:
                 ))
                 continue
 
-            # Terraform / k8s
             if file_path.endswith(".tf") or file_path.startswith(("k8s/", "kubernetes/")):
                 ranked.append(FileRanking(
                     path=file_path,
