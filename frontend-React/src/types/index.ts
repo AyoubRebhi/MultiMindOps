@@ -167,6 +167,8 @@ export interface TaskResponse {
 
 export interface PlanPreviewResponse {
   status: string
+  task_id?: string
+  requires_user_input?: boolean
   plan?: PlanData
   /** Raw scan output from RepositorySecurityService — has risk_score, not score */
   repository_security?: Record<string, unknown>
@@ -176,9 +178,28 @@ export interface PlanPreviewResponse {
   logs: LogEntry[]
 }
 
+// ─── Plan validation ───────────────────────────────────────────────────────────
+export type PlanValidationDecision = 'approve' | 'reject' | 'modify'
+
+export interface ValidatePlanRequest {
+  task_id: string
+  decision: PlanValidationDecision
+  feedback?: string | null
+}
+
+export interface ValidatePlanResponse {
+  status: string
+  task_id: string
+  decision: PlanValidationDecision
+  plan?: PlanData
+  requires_user_input?: boolean
+  message?: string
+  logs?: LogEntry[]
+}
+
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 export interface StepState {
-  step: 'form' | 'plan' | 'generating' | 'review' | 'result'
+  step: 'form' | 'plan' | 'plan_validation' | 'generating' | 'review' | 'result'
   planPreview?: PlanPreviewResponse
   formData?: PlanPreviewRequest
   task?: TaskResponse

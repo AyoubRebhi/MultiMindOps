@@ -5,6 +5,7 @@ import type {
   PlanPreviewRequest,
   GenerateArtifactsRequest,
   ReviewArtifactsRequest,
+  ValidatePlanRequest,
 } from '@/types'
 
 export const TASKS_KEY = ['tasks']
@@ -56,5 +57,17 @@ export function useReviewTask() {
       tasksApi.review(taskId, payload),
     onSuccess: (_, { taskId }) =>
       qc.invalidateQueries({ queryKey: [...TASKS_KEY, taskId] }),
+  })
+}
+
+export function useValidatePlan() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: ValidatePlanRequest) => tasksApi.validatePlan(payload),
+    onSuccess: (data) => {
+      if (data.task_id) {
+        qc.invalidateQueries({ queryKey: [...TASKS_KEY, data.task_id] })
+      }
+    },
   })
 }

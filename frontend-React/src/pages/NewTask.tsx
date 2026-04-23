@@ -11,23 +11,27 @@ import {
   X,
   FileText,
   AlertCircle,
+  ClipboardList,
 } from 'lucide-react'
-import { usePlanPreview, useGenerateArtifacts } from '@/hooks/useTasks'
+import { usePlanPreview, useGenerateArtifacts, useValidatePlan } from '@/hooks/useTasks'
 import { useTaskPolling } from '@/hooks/useTaskPolling'
 import { useTaskStore } from '@/store/taskStore'
 import { PlanPreview } from '@/components/workflow/PlanPreview'
+import { PlanViewer } from '@/components/workflow/PlanViewer'
+import { ValidationPanel } from '@/components/workflow/ValidationPanel'
 import { LogViewer } from '@/components/workflow/LogViewer'
 import { ErrorAlert } from '@/components/common/ErrorAlert'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { cn } from '@/lib/utils'
-import type { PlanPreviewRequest } from '@/types'
+import type { PlanPreviewRequest, PlanPreviewResponse, PlanValidationDecision } from '@/types'
 
 // ─── Step indicator ────────────────────────────────────────────────────────────
 const STEPS = [
-  { key: 'form',       label: 'Configure' },
-  { key: 'plan',       label: 'Plan Review' },
-  { key: 'generating', label: 'Generating' },
-  { key: 'result',     label: 'Done' },
+  { key: 'form',            label: 'Configure' },
+  { key: 'plan',            label: 'Plan Review' },
+  { key: 'plan_validation', label: 'Validation' },
+  { key: 'generating',      label: 'Generating' },
+  { key: 'result',          label: 'Done' },
 ]
 
 function StepBar({ current }: { current: string }) {
@@ -471,16 +475,89 @@ function GeneratingView({ taskId }: { taskId: string }) {
   )
 }
 
+// ─── Human validation view ────────────────────────────────────────────────────
+function PlanValidationView({
+  preview,
+  onDecision,
+  onBack,
+  isLoading,
+  rejectedMessage,
+}: {
+  preview: PlanPreviewResponse
+  onDecision: (decision: PlanValidationDecision, feedback?: string) => Promise<void>
+  onBack: () => void
+  isLoading: boolean
+  rejectedMessage?: string | null
+}) {
+  const plan = preview.plan
+  const logs = preview.logs
+
+  return (
+    <div className="space-y-6 animate-slide-in">
+      {/* Header banner */}
+      <div className={cn(
+        'flex items-start gap-3 px-4 py-3 rounded-xl',
+        'bg-brand-50 dark:bg-brand-600/10',
+        'border border-brand-200 dark:border-brand-500/20'
+      )}>
+        <ClipboardList className="w-5 h-5 text-brand-500 dark:text-brand-400 shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-semibold text-brand-700 dark:text-brand-300">
+            Human validation required
+          </p>
+          <p className="text-xs text-brand-600/70 dark:text-brand-400/60 mt-0.5">
+            Review the generated plan below and choose an action. Execution is blocked until you decide.
+          </p>
+        </div>
+      </div>
+
+      {/* Logs */}
+      {logs?.length > 0 && (
+        <div>
+          <p className="text-xs font-medium text-slate-400 dark:text-slate-500 mb-2">
+            Plan generation logs
+          </p>
+          <LogViewer logs={logs} className="h-28" autoScroll={false} />
+        </div>
+      )}
+
+      {/* Plan details */}
+      {plan && <PlanViewer plan={plan} />}
+
+      {/* Decision panel */}
+      <ValidationPanel
+        onDecision={onDecision}
+        isLoading={isLoading}
+        rejectedMessage={rejectedMessage}
+      />
+
+      {/* Back link */}
+      {!rejectedMessage && (
+        <button
+          onClick={onBack}
+          disabled={isLoading}
+          className="text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors disabled:opacity-40"
+        >
+          ← Go back and edit request
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── Main page ─────────────────────────────────────────────────────────────────
 export default function NewTask() {
   const { wizard, setWizard, resetWizard } = useTaskStore()
-  const planPreview = usePlanPreview()
-  const generate    = useGenerateArtifacts()
-  const [error, setError] = useState<string | null>(null)
-  const [cachedEnvFile, setCachedEnvFile] = useState<File | undefined>()
+  const planPreview   = usePlanPreview()
+  const generate      = useGenerateArtifacts()
+  const validatePlan  = useValidatePlan()
+  const [error, setError]                   = useState<string | null>(null)
+  const [rejectedMsg, setRejectedMsg]       = useState<string | null>(null)
+  const [cachedEnvFile, setCachedEnvFile]   = useState<File | undefined>()
 
   const handleFormSubmit = async (values: FormValues, envFile: File) => {
     setError(null)
+    setRejectedMsg(null)
     setCachedEnvFile(envFile)
     const req: PlanPreviewRequest = {
       prompt:                values.prompt,
@@ -490,12 +567,14 @@ export default function NewTask() {
     }
     try {
       const preview = await planPreview.mutateAsync({ payload: req, envFile })
-      setWizard({ step: 'plan', planPreview: preview, formData: req })
+      const nextStep = preview.requires_user_input ? 'plan_validation' : 'plan'
+      setWizard({ step: nextStep, planPreview: preview, formData: req })
     } catch (e) {
       setError((e as Error).message)
     }
   }
 
+  // Standard plan-approval path (artifact selection)
   const handleApprove = useCallback(
     async (approvedArtifacts: string[]) => {
       if (!wizard.formData) return
@@ -511,6 +590,50 @@ export default function NewTask() {
       }
     },
     [wizard.formData, generate, setWizard, cachedEnvFile]
+  )
+
+  // Human validation decision (approve / reject / modify)
+  const handleValidationDecision = useCallback(
+    async (decision: PlanValidationDecision, feedback?: string) => {
+      const taskId = wizard.planPreview?.task_id
+      if (!taskId) {
+        setError('No task ID found in plan preview response. Cannot validate.')
+        return
+      }
+      setError(null)
+      try {
+        const result = await validatePlan.mutateAsync({ task_id: taskId, decision, feedback })
+
+        if (decision === 'reject') {
+          setRejectedMsg(result.message ?? 'The plan has been rejected. You can start a new task.')
+          return
+        }
+
+        if (decision === 'approve') {
+          // Backend continues execution — navigate to the generating/polling view
+          // Use the task_id from the validate-plan response
+          setWizard({ step: 'generating', task: { id: result.task_id } as Parameters<typeof setWizard>[0]['task'] })
+          return
+        }
+
+        if (decision === 'modify') {
+          // Reload the updated plan returned by the backend
+          if (result.plan) {
+            const updatedPreview = {
+              ...wizard.planPreview!,
+              plan: result.plan,
+              task_id: result.task_id,
+              requires_user_input: result.requires_user_input ?? true,
+            }
+            const nextStep = result.requires_user_input ? 'plan_validation' : 'plan'
+            setWizard({ step: nextStep, planPreview: updatedPreview })
+          }
+        }
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    },
+    [wizard.planPreview, validatePlan, setWizard]
   )
 
   const step = wizard.step
@@ -530,6 +653,7 @@ export default function NewTask() {
             onClick={() => {
               resetWizard()
               setError(null)
+              setRejectedMsg(null)
               setCachedEnvFile(undefined)
             }}
             className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-white transition-colors"
@@ -556,6 +680,7 @@ export default function NewTask() {
           <TaskForm onSubmit={handleFormSubmit} isLoading={planPreview.isPending} />
         )}
 
+        {/* Standard plan-review (artifact selection) */}
         {step === 'plan' && wizard.planPreview && (
           <>
             {wizard.planPreview.logs?.length > 0 && (
@@ -574,6 +699,17 @@ export default function NewTask() {
               isLoading={generate.isPending}
             />
           </>
+        )}
+
+        {/* Human validation step */}
+        {step === 'plan_validation' && wizard.planPreview && (
+          <PlanValidationView
+            preview={wizard.planPreview}
+            onDecision={handleValidationDecision}
+            onBack={() => setWizard({ step: 'form' })}
+            isLoading={validatePlan.isPending}
+            rejectedMessage={rejectedMsg}
+          />
         )}
 
         {step === 'generating' && wizard.task && (

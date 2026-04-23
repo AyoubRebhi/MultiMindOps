@@ -11,7 +11,8 @@
       "Bash(python -m pip install pytest -q)",
       "Bash(python -m pytest tests/test_encoding_fix.py -v)",
       "Bash(python -c ' *)",
-      "Bash(python -c \"from backend.app.agents.planner_agent import PlannerAgent; print\\('OK'\\)\")"
+      "Bash(python -c \"from backend.app.agents.planner_agent import PlannerAgent; print\\('OK'\\)\")",
+      "Bash(npx tsc *)"
     ]
   }
 }

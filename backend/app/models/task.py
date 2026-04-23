@@ -18,6 +18,8 @@ class Task(Base):
     plan = Column(MutableDict.as_mutable(JSONB), nullable=True)
     logs = Column(MutableList.as_mutable(JSONB), nullable=False, default=list)
     result = Column(MutableDict.as_mutable(JSONB), nullable=True)
+    # Stores the full OrchestratorState between plan-preview and validate-plan
+    workflow_state = Column(MutableDict.as_mutable(JSONB), nullable=True)
 
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

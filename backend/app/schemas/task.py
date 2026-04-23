@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class TaskCreate(BaseModel):
@@ -32,12 +32,44 @@ class ReviewArtifactsRequest(BaseModel):
 
 
 class PlanPreviewResponse(BaseModel):
+    task_id: str
     status: str
+    requires_user_input: bool = True
     plan: Optional[Any] = None
+    cost_estimation: Optional[Any] = None
     repository_security: Optional[Any] = None
     security: Optional[Any] = None
     repo_summary: Optional[Any] = None
     logs: List[Any] = []
+
+
+class ValidatePlanRequest(BaseModel):
+    task_id: str
+    decision: Literal["approved", "rejected", "modified"]
+    feedback: Optional[str] = None
+
+    @field_validator("feedback")
+    @classmethod
+    def feedback_required_for_modified(cls, v: Optional[str], info: Any) -> Optional[str]:
+        data = info.data if hasattr(info, "data") else {}
+        if data.get("decision") == "modified" and not (v or "").strip():
+            raise ValueError("feedback is required when decision is 'modified'")
+        return v
+
+
+class ValidatePlanResponse(BaseModel):
+    task_id: str
+    decision: str
+    status: str
+    requires_user_input: bool = False
+    # Populated on "modified" — the regenerated plan awaiting next validation
+    plan: Optional[Any] = None
+    cost_estimation: Optional[Any] = None
+    logs: List[Any] = []
+    # Populated on "approved" — final generation result
+    result: Optional[Any] = None
+    # Populated on "rejected"
+    rejection_reason: Optional[str] = None
 
 
 class TaskResponse(BaseModel):

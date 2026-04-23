@@ -39,6 +39,11 @@ class OrchestratorState(TypedDict, total=False):
     awaiting_user_input: bool
     auto_mode: bool
 
+    # Human validation gate (Bloc 7)
+    human_decision: Optional[str]   # "approved" | "rejected" | "modified"
+    human_feedback: Optional[str]
+    requires_user_input: bool
+
     cost_estimation: Optional[Dict[str, Any]]
 
     application_profile: Optional[Dict[str, Any]]

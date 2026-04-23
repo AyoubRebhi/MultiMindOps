@@ -1,9 +1,26 @@
+import base64
 from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from backend.app.models.task import Task
+
+
+def _sanitize_for_json(obj):
+    """Recursively convert non-JSON-serializable values (bytes, sets) to safe types."""
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            return base64.b64encode(obj).decode("utf-8")
+    if isinstance(obj, set):
+        return [_sanitize_for_json(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(item) for item in obj]
+    return obj
 
 
 class TaskService:
@@ -121,6 +138,37 @@ class TaskService:
 
         task.result = result
         task.status = result["status"]
+        db.commit()
+        db.refresh(task)
+        return task
+
+    @staticmethod
+    def save_workflow_state(db: Session, task: Task, state: dict) -> Task:
+        """Persist the full OrchestratorState so it can be resumed later."""
+        task.workflow_state = _sanitize_for_json(state)
+        db.commit()
+        db.refresh(task)
+        return task
+
+    @staticmethod
+    def load_workflow_state(db: Session, task: Task) -> dict | None:
+        return task.workflow_state
+
+    @staticmethod
+    def save_plan_awaiting_validation(db: Session, task: Task, state: dict) -> Task:
+        """Save plan + workflow state and mark task as awaiting human plan validation."""
+        clean_state = _sanitize_for_json(state)
+        task.plan = clean_state.get("plan")
+        task.workflow_state = clean_state
+        task.status = "awaiting_plan_validation"
+
+        if task.logs is None:
+            task.logs = []
+        task.logs.append({
+            "step": "human_validation",
+            "message": "Plan generated — awaiting human approval before execution",
+        })
+
         db.commit()
         db.refresh(task)
         return task

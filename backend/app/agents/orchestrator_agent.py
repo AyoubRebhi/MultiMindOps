@@ -255,14 +255,17 @@ class OrchestratorAgent(BaseAgent):
         return self._planning_phase_node(state)
 
     def _planning_phase_node(self, state: OrchestratorState) -> OrchestratorState:
-        """Phase 1 — run PlannerAgent and store the primary plan."""
+        """Phase 1 — run PlannerAgent and store the primary plan.
+
+        Always sets ``requires_user_input=True`` so the human_validation node
+        decides whether to proceed (auto_mode) or pause for API input.
+        If ``human_feedback`` is present in state the prompt is augmented with
+        the modification request so the planner regenerates accordingly.
+        """
         logger.info("[OrchestratorAgent] Entering planning_phase")
         agent_context = state.get("agent_context") or {}
         planner_context = dict(agent_context.get("planner_context") or {})
 
-        # Inject application_profile from CodebaseAnalysisAgent into planner_context.
-        # Prefer the top-level state field (populated by _analyze_repository_node);
-        # fall back to agent_context for backward compatibility.
         application_profile = (
             state.get("application_profile")
             or agent_context.get("application_profile")
@@ -272,7 +275,7 @@ class OrchestratorAgent(BaseAgent):
 
         if application_profile:
             logger.info(
-                "[OrchestratorAgent] application_profile injected into planner_context — type=%s scalability=%s",
+                "[OrchestratorAgent] application_profile injected — type=%s scalability=%s",
                 application_profile.get("application_type"),
                 application_profile.get("scalability_level"),
             )
@@ -282,7 +285,20 @@ class OrchestratorAgent(BaseAgent):
         if state.get("repo_url") and not application_profile:
             raise Exception("Application profile missing in orchestrator state")
 
-        plan = self.planner_agent.run(state["prompt"], planner_context or None)
+        # Augment the prompt when the user has requested plan modifications.
+        base_prompt = state["prompt"]
+        human_feedback = (state.get("human_feedback") or "").strip()
+        if human_feedback:
+            effective_prompt = (
+                f"{base_prompt}\n\n"
+                f"User requested the following modifications to the previous plan:\n"
+                f"{human_feedback}"
+            )
+            logger.info("[OrchestratorAgent] human_feedback injected into planner prompt")
+        else:
+            effective_prompt = base_prompt
+
+        plan = self.planner_agent.run(effective_prompt, planner_context or None)
 
         logs = list(state.get("logs", []))
         variant = plan.get("plan_variant")
@@ -298,7 +314,8 @@ class OrchestratorAgent(BaseAgent):
         else:
             logs.append({"step": "planning_phase", "message": "Planning phase completed"})
 
-        return {**state, "plan": plan, "logs": logs}
+        # Signal that a human decision is required before execution continues.
+        return {**state, "plan": plan, "logs": logs, "requires_user_input": True}
 
     def _cost_estimation_node(self, state: OrchestratorState) -> OrchestratorState:
         """Estimate monthly AWS cost from the infrastructure blueprint in the plan."""
@@ -377,6 +394,66 @@ class OrchestratorAgent(BaseAgent):
         })
         logger.info("[OrchestratorAgent] plan_selection node reached — workflow paused")
         return {**state, "awaiting_user_input": True, "logs": logs}
+
+    def _human_validation_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Bloc 7 — human-in-the-loop gate between planning and execution.
+
+        Behaviour
+        ---------
+        * ``auto_mode=True``           → auto-approve and clear the gate.
+        * ``human_decision`` not set   → stay paused (graph will route to finalize).
+        * ``human_decision=approved``  → clear the gate, continue.
+        * ``human_decision=rejected``  → mark status as rejected, stop.
+        * ``human_decision=modified``  → re-plan with feedback (graph path only;
+          the API path handles this loop via ``resume_with_human_decision``).
+        """
+        logs = list(state.get("logs", []))
+
+        # ── Auto-approve for batch / automated runs ───────────────────────────
+        if state.get("auto_mode"):
+            logs.append({
+                "step": "human_validation",
+                "message": "Auto-mode active — plan auto-approved, proceeding to execution",
+            })
+            logger.info("[OrchestratorAgent] human_validation: auto-approved")
+            return {**state, "human_decision": "approved", "requires_user_input": False, "logs": logs}
+
+        decision = (state.get("human_decision") or "").strip().lower()
+
+        # ── No decision yet — workflow is paused ─────────────────────────────
+        if not decision:
+            logs.append({
+                "step": "human_validation",
+                "message": "Workflow paused — awaiting human plan validation via API",
+            })
+            logger.info("[OrchestratorAgent] human_validation: paused, no decision received")
+            return {**state, "requires_user_input": True, "logs": logs}
+
+        # ── Approved ─────────────────────────────────────────────────────────
+        if decision == "approved":
+            logs.append({
+                "step": "human_validation",
+                "message": "Plan approved by user — proceeding to execution",
+            })
+            logger.info("[OrchestratorAgent] human_validation: approved")
+            return {**state, "requires_user_input": False, "logs": logs}
+
+        # ── Rejected ─────────────────────────────────────────────────────────
+        if decision == "rejected":
+            reason = (state.get("human_feedback") or "No reason provided")
+            logs.append({
+                "step": "human_validation",
+                "message": f"Plan rejected by user. Reason: {reason}",
+            })
+            logger.info("[OrchestratorAgent] human_validation: rejected")
+            return {**state, "status": "rejected", "requires_user_input": False, "logs": logs}
+
+        # ── Modified (graph path only — API path uses resume_with_human_decision)
+        logs.append({
+            "step": "human_validation",
+            "message": "Modification requested — replanning required via API",
+        })
+        return {**state, "status": "awaiting_replanning", "requires_user_input": True, "logs": logs}
 
     # generation_phase and validation_phase are thin aliases so the graph uses
     # the new phase names while delegating to the existing heavy-lift nodes.
@@ -767,6 +844,34 @@ class OrchestratorAgent(BaseAgent):
         logger.info("[OrchestratorAgent] No plan selected — stopping workflow")
         return "finalize"
 
+    def _route_after_human_validation(self, state: OrchestratorState) -> str:
+        """
+        Route after the human_validation node.
+
+        - auto_mode or decision=approved → cost_estimation
+        - decision=rejected / still waiting / modified → finalize (partial/stopped)
+        """
+        if state.get("auto_mode"):
+            return "cost_estimation"
+
+        decision = (state.get("human_decision") or "").lower()
+        if decision == "approved" and not state.get("requires_user_input"):
+            return "cost_estimation"
+
+        logs = list(state.get("logs", []))
+        if decision == "rejected":
+            logs.append({
+                "step": "dynamic_routing",
+                "message": "Plan rejected — stopping pipeline",
+            })
+        else:
+            logs.append({
+                "step": "dynamic_routing",
+                "message": "Human validation pending — routing to finalize (partial state)",
+            })
+        state["logs"] = logs
+        return "finalize"
+
     def _route_after_planning_phase(self, state: OrchestratorState) -> str:
         """
         Dynamic routing after planning_phase — context-aware decision.
@@ -847,6 +952,7 @@ class OrchestratorAgent(BaseAgent):
 
         # Phase nodes (new architecture)
         workflow.add_node("planning_phase", self._planning_phase_node)
+        workflow.add_node("human_validation", self._human_validation_node)  # Bloc 7
         workflow.add_node("cost_estimation", self._cost_estimation_node)
         workflow.add_node("multi_plan_phase", self._multi_plan_phase_node)
         workflow.add_node("plan_selection", self._plan_selection_node)
@@ -873,10 +979,17 @@ class OrchestratorAgent(BaseAgent):
             {"planning_phase": "planning_phase", "finalize": "finalize"},
         )
 
-        # planning_phase → cost_estimation | finalize (empty plan)
+        # planning_phase → human_validation | finalize (empty plan)
         workflow.add_conditional_edges(
             "planning_phase",
             self._route_after_planning_phase,
+            {"cost_estimation": "human_validation", "finalize": "finalize"},
+        )
+
+        # human_validation → cost_estimation (approved/auto) | finalize (rejected/paused)
+        workflow.add_conditional_edges(
+            "human_validation",
+            self._route_after_human_validation,
             {"cost_estimation": "cost_estimation", "finalize": "finalize"},
         )
 
@@ -954,6 +1067,10 @@ class OrchestratorAgent(BaseAgent):
             "validation": None,
             "result": None,
             "error_message": None,
+            # Bloc 7 — human validation gate
+            "human_decision": None,
+            "human_feedback": None,
+            "requires_user_input": False,
         }
 
     def run(
@@ -1166,6 +1283,118 @@ class OrchestratorAgent(BaseAgent):
         state = self._generation_phase_node(state)
         state = self._filter_generated_artifacts(state)
         state = self._validation_phase_node(state)
+
+        next_step = self._route_after_validation(state)
+        if next_step == "cicd":
+            state = self._cicd_node(state)
+
+        state = self._finalize_node(state)
+        return state
+
+    def resume_with_human_decision(
+        self,
+        prior_state: dict,
+        decision: str,
+        feedback: str | None = None,
+    ) -> dict:
+        """
+        Bloc 7 — resume the pipeline after a human validates the plan.
+
+        Parameters
+        ----------
+        prior_state:
+            The OrchestratorState returned by ``run_plan_preview()``,
+            loaded from the persisted ``task.workflow_state``.
+        decision:
+            ``"approved"`` | ``"rejected"`` | ``"modified"``
+        feedback:
+            Free-text reason (required when ``decision == "modified"``).
+
+        Returns
+        -------
+        dict
+            Updated state.  Callers inspect ``requires_user_input`` to
+            determine whether another validation round is needed (``modified``
+            path) or the pipeline has finished.
+        """
+        decision = decision.strip().lower()
+        if decision not in {"approved", "rejected", "modified"}:
+            raise ValueError(f"Invalid decision '{decision}'. Must be approved, rejected, or modified.")
+        if decision == "modified" and not (feedback or "").strip():
+            raise ValueError("feedback is required when decision is 'modified'")
+
+        state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
+        state["human_decision"] = decision
+        state["human_feedback"] = feedback
+        state["requires_user_input"] = False
+
+        logs = list(state.get("logs", []))
+
+        # ── Rejected ─────────────────────────────────────────────────────────
+        if decision == "rejected":
+            reason = feedback or "No reason provided"
+            logs.append({
+                "step": "human_validation",
+                "message": f"Plan rejected by user. Reason: {reason}",
+            })
+            state["logs"] = logs
+            state["status"] = "rejected"
+            state["result"] = {
+                "agent": self.name,
+                "status": "rejected",
+                "plan": state.get("plan"),
+                "rejection_reason": reason,
+            }
+            logger.info("[OrchestratorAgent] resume_with_human_decision: rejected")
+            return state
+
+        # ── Modified — re-plan with user feedback then pause again ───────────
+        if decision == "modified":
+            logs.append({
+                "step": "human_validation",
+                "message": f"Modification requested — replanning with feedback: {feedback}",
+            })
+            state["logs"] = logs
+
+            # Carry feedback into state so _planning_phase_node picks it up
+            state["human_feedback"] = feedback
+            # Reset decision so the next call can set a fresh one
+            state["human_decision"] = None
+
+            state = self._planning_phase_node(state)   # regenerates plan
+            state = self._cost_estimation_node(state)  # refresh cost estimate
+
+            state["requires_user_input"] = True
+            state["status"] = "awaiting_plan_validation"
+            state["security"] = SecurityScoreTransformer.transform(
+                repository_security=state.get("repository_security"),
+                env_security_runtime=state.get("env_security_runtime"),
+            )
+            logger.info("[OrchestratorAgent] resume_with_human_decision: replanned, pausing again")
+            return state
+
+        # ── Approved — run full generation pipeline ───────────────────────────
+        logs.append({
+            "step": "human_validation",
+            "message": "Plan approved by user — proceeding to artifact generation",
+        })
+        state["logs"] = logs
+
+        approved_artifacts = (
+            state.get("approved_artifacts")
+            or (state.get("plan") or {}).get("required_artifacts")
+            or []
+        )
+        state["approved_artifacts"] = approved_artifacts
+        plan = dict(state.get("plan") or {})
+        plan["approved_artifacts"] = approved_artifacts
+        state["plan"] = plan
+
+        logger.info("[OrchestratorAgent] resume_with_human_decision: approved, running generation")
+
+        state = self._infrastructure_node(state)
+        state = self._filter_generated_artifacts(state)
+        state = self._artifact_validation_node(state)
 
         next_step = self._route_after_validation(state)
         if next_step == "cicd":

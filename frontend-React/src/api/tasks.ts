@@ -6,6 +6,8 @@ import type {
   PlanPreviewResponse,
   GenerateArtifactsRequest,
   ReviewArtifactsRequest,
+  ValidatePlanRequest,
+  ValidatePlanResponse,
 } from '@/types'
 
 // Build a multipart/form-data body so we can attach the .env file
@@ -80,5 +82,11 @@ export const tasksApi = {
   review: (taskId: string, payload: ReviewArtifactsRequest) =>
     apiClient
       .post<TaskResponse>(`/tasks/${taskId}/review`, payload)
+      .then((r) => r.data),
+
+  // Validate (approve / reject / modify) a generated plan
+  validatePlan: (payload: ValidatePlanRequest) =>
+    apiClient
+      .post<ValidatePlanResponse>('/tasks/validate-plan', payload)
       .then((r) => r.data),
 }
