@@ -1,0 +1,161 @@
+{
+  "metadata": {
+    "id": "devsecops_best_practices_kb",
+    "title": "DevSecOps Best Practices — Shift-Left Security",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "devsecops_shift_left_policy_as_code",
+      "category": "devsecops",
+      "concept": "Shift-left security and Policy as Code",
+      "description": "Integrate security at every SDLC phase: Plan (Threat Modeling), Code (SAST), Build (SCA, Trivy), Test (DAST), Release (SBOM, Snyk), Deploy (Config Audit), Monitor (Runtime Alerts). Use Policy as Code with OPA/Conftest to enforce rules declaratively — e.g. deny if Docker image has no USER or no HEALTHCHECK.",
+      "decision_rules": [
+        "Apply security controls at the earliest feasible phase — finding issues in Code is 10x cheaper than in Production",
+        "Express security policies as code (OPA Rego, Conftest) so they are versioned, testable, and automated"
+      ],
+      "tradeoffs": [
+        "Shift-left adds tooling and process overhead in early phases — offset by significantly reducing costly late-stage remediations"
+      ],
+      "anti_patterns": [
+        "Running security scans only in a pre-production gate — too late in the cycle",
+        "Manual security reviews without automated policy enforcement"
+      ],
+      "aws_alignment": ["Use AWS Config Rules and Security Hub to enforce policies at the infrastructure layer"]
+    },
+    {
+      "id": "devsecops_sast_tools",
+      "category": "devsecops",
+      "concept": "SAST tools for static code security analysis",
+      "description": "Recommended SAST tools by language: Semgrep (multi-language, OWASP + custom rules), Bandit (Python, B1xx-B7xx rules: bandit -r ./backend -ll -f json -o bandit-report.json), SpotBugs/FindSec-Bugs (Java), ESLint Security plugin (JS/TS), CodeQL (multi-language, taint tracking). Export results as SARIF for GitHub Security tab integration.",
+      "decision_rules": [
+        "Run Semgrep with p/python and p/owasp-top-ten configs as the baseline for Python projects",
+        "Export SARIF format (semgrep --sarif > semgrep.sarif) for GitHub Security tab visibility",
+        "Add CodeQL for deeper taint-tracking analysis on critical codebases"
+      ],
+      "tradeoffs": [
+        "SAST tools generate false positives — tune rules and triage findings before making them pipeline blockers",
+        "CodeQL analysis is slower than Semgrep — run on schedule or PR, not every commit"
+      ],
+      "anti_patterns": [
+        "Running SAST on test code only — scan production application code",
+        "Suppressing all SAST findings without documented risk acceptance"
+      ],
+      "aws_alignment": ["Integrate Semgrep SARIF results with Amazon CodeGuru for unified findings"]
+    },
+    {
+      "id": "devsecops_secrets_management",
+      "category": "devsecops",
+      "concept": "Secrets management — scan and retrieval best practices",
+      "description": "Prevent secrets from entering version control using pre-commit hooks with gitleaks (v8.18.0) and trufflehog (v3.63.0). For runtime secret retrieval in Python, use boto3 to call AWS Secrets Manager get_secret_value — never load secrets from environment variables or config files.",
+      "decision_rules": [
+        "Install gitleaks pre-commit hook in every repository to block secret commits before they happen",
+        "Use AWS Secrets Manager or HashiCorp Vault for runtime secret retrieval — never pass secrets as env vars",
+        "Add trufflehog --only-verified to catch high-confidence secrets that evade simpler regex scanners"
+      ],
+      "tradeoffs": [
+        "Pre-commit hooks only protect developers who have installed them — enforce via CI/CD as a backstop"
+      ],
+      "anti_patterns": [
+        "Storing secrets in .env files committed to git",
+        "Passing secrets as command-line arguments (visible in process list and shell history)",
+        "Loading secrets from environment variables injected at container startup without a vault"
+      ],
+      "aws_alignment": ["Use AWS Secrets Manager with automatic rotation for database credentials", "Use Secrets Manager resource policies to restrict secret access to specific IAM roles"]
+    },
+    {
+      "id": "devsecops_sbom",
+      "category": "devsecops",
+      "concept": "SBOM generation and vulnerability analysis",
+      "description": "Generate a Software Bill of Materials (SBOM) for every Docker image using Syft (syft myapp:latest -o spdx-json > sbom.spdx.json). Analyze the SBOM with Grype (grype sbom:./sbom.spdx.json --fail-on high). Alternatively use CycloneDX format (cyclonedx-py environment -o sbom.cyclonedx.json).",
+      "decision_rules": [
+        "Generate SBOM in the build stage and store it as a CI artifact alongside the image",
+        "Use grype --fail-on high to block promotion of images with HIGH severity CVEs in dependencies",
+        "Prefer SPDX or CycloneDX formats for tooling interoperability"
+      ],
+      "tradeoffs": [
+        "SBOM generation adds ~30 seconds to the build — acceptable for the supply chain transparency gained"
+      ],
+      "anti_patterns": [
+        "Deploying images without knowing their dependency inventory",
+        "Not re-scanning SBOMs after new CVEs are published — CVEs are discovered continuously"
+      ],
+      "aws_alignment": ["Store SBOMs in Amazon S3 alongside image tags for traceability", "Use Amazon Inspector for continuous CVE scanning of ECR images"]
+    },
+    {
+      "id": "devsecops_container_registry_security",
+      "category": "devsecops",
+      "concept": "Container image signing and verification with Cosign",
+      "description": "Sign container images with Cosign (Sigstore): cosign generate-key-pair, cosign sign --key cosign.key myregistry.io/myapp:1.0.0. Verify before deployment: cosign verify --key cosign.pub myregistry.io/myapp:1.0.0. Enforce signature verification in Kubernetes with Kyverno ClusterPolicy (verifyImages).",
+      "decision_rules": [
+        "Sign every image pushed to production registry — signing proves the image came from a trusted CI pipeline",
+        "Use Kyverno ClusterPolicy with verifyImages to reject unsigned or untrusted images at admission time"
+      ],
+      "tradeoffs": [
+        "Cosign keyless signing (Fulcio + Rekor) is simpler but requires OIDC identity — good for GitHub Actions",
+        "Key-based signing requires secure storage of the private key (use KMS-backed keys)"
+      ],
+      "anti_patterns": [
+        "Deploying images from public registries without verifying their provenance",
+        "Using mutable image tags (latest) in production — makes signature verification unreliable"
+      ],
+      "aws_alignment": ["Use AWS Signer for ECR image signing as an alternative to Cosign on EKS"]
+    },
+    {
+      "id": "devsecops_runtime_monitoring",
+      "category": "devsecops",
+      "concept": "Runtime security monitoring with Falco",
+      "description": "Use Falco for runtime behavioral detection in containers and Kubernetes. Define custom rules to detect unexpected outbound connections (condition: outbound and not proc.name in allowed_processes). Alerts on anomalies: unexpected shells, file system writes, privilege escalation, data exfiltration patterns.",
+      "decision_rules": [
+        "Deploy Falco as a DaemonSet on every Kubernetes node for runtime visibility",
+        "Define an allowlist of expected processes and IPs — alert on any deviation",
+        "Route Falco alerts to SIEM (Splunk, Elasticsearch) or AWS Security Hub for centralized analysis"
+      ],
+      "tradeoffs": [
+        "Falco kernel module/eBPF probe adds small CPU overhead — use eBPF mode for lower overhead",
+        "Default Falco rules generate significant alert volume — tune and create suppression rules for known-good behavior"
+      ],
+      "anti_patterns": [
+        "Relying solely on pre-deployment scans with no runtime security monitoring",
+        "Running Falco with default rules only without tuning — alert fatigue reduces effectiveness"
+      ],
+      "aws_alignment": ["Use Amazon Security Lake and Amazon Detective for incident investigation of Falco alerts", "GuardDuty EKS Runtime Monitoring is an AWS-managed alternative to Falco on EKS"]
+    },
+    {
+      "id": "devsecops_threat_modeling_stride",
+      "category": "devsecops",
+      "concept": "Threat modeling with STRIDE for REST APIs",
+      "description": "Apply STRIDE threat model to REST API design: Spoofing (mitigate: JWT/mTLS auth), Tampering (mitigate: HTTPS + request signing), Repudiation (mitigate: immutable audit logs via CloudTrail), Information Disclosure (mitigate: encryption + log filtering), Denial of Service (mitigate: rate limiting + WAF + circuit breakers), Elevation of Privilege (mitigate: RBAC + permission validation per request).",
+      "decision_rules": [
+        "Run STRIDE analysis for every new API endpoint or significant feature change",
+        "Map each threat to a concrete control — do not leave any STRIDE category without a mitigation"
+      ],
+      "tradeoffs": [
+        "Threat modeling sessions add time to the design phase — run lightweight threat model reviews (1-2 hours) rather than exhaustive sessions"
+      ],
+      "anti_patterns": [
+        "Skipping threat modeling and relying entirely on reactive vulnerability scanning",
+        "Treating threat modeling as a one-time exercise — repeat for significant architectural changes"
+      ],
+      "aws_alignment": ["Use AWS Threat Composer as a structured threat modeling tool aligned with AWS services"]
+    },
+    {
+      "id": "devsecops_phase_checklist",
+      "category": "devsecops",
+      "concept": "DevSecOps checklist by SDLC phase",
+      "description": "Phase CODE: pre-commit hooks (secret scan, linting), threat modeling for new features, dependency pinning with hashes. Phase BUILD: SAST (Semgrep, Bandit, CodeQL), SCA (Safety, Snyk, OWASP Dependency-Check), Dockerfile lint (Hadolint), Docker image scan (Trivy, Grype), SBOM generation. Phase TEST: DAST (OWASP ZAP, Nuclei), auth/authz tests, input fuzzing. Phase DEPLOY: IaC scan (tfsec, Checkov), secrets via Secrets Manager, signed images (Cosign), policy enforcement (OPA/Kyverno). Phase MONITOR: runtime security (Falco), anomaly alerting (GuardDuty, Security Hub), credential rotation, privileged access audit.",
+      "decision_rules": [
+        "Treat this checklist as a minimum — automate as many items as possible in CI/CD",
+        "Track checklist completion per release in a security runbook"
+      ],
+      "tradeoffs": [
+        "Automating all checklist items requires significant initial tooling investment — prioritize CODE and BUILD phases first"
+      ],
+      "anti_patterns": [
+        "Running only one security phase (e.g. SAST only) and skipping others",
+        "Not reviewing checklist after a security incident — update it with lessons learned"
+      ],
+      "aws_alignment": ["AWS Security Hub security score tracks many of these controls automatically across AWS services"]
+    }
+  ]
+}

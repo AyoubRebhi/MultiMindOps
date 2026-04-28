@@ -1,0 +1,26 @@
+{
+  "metadata": {
+    "id": "env_fastapi_postgres_kb",
+    "title": "Env Example — FastAPI with PostgreSQL",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "env_fastapi_postgres",
+      "category": "secrets",
+      "concept": "FastAPI PostgreSQL .env.example Template",
+      "description": "Safe .env.example template for FastAPI with PostgreSQL. Defines empty placeholders for DATABASE_URL (SQLAlchemy connection string), POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB. All values intentionally blank to avoid committing credentials.",
+      "decision_rules": [
+        "Commit .env.example to version control; never commit a populated .env file",
+        "DATABASE_URL format for SQLAlchemy: postgresql+asyncpg://user:password@host:5432/dbname",
+        "POSTGRES_* vars are consumed directly by the postgres:15 Docker image for initialization"
+      ],
+      "tradeoffs": [],
+      "anti_patterns": [
+        "Never set default values in .env.example — blanks are intentional",
+        "Never commit .env files with real credentials or tokens to version control"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

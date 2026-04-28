@@ -1,0 +1,140 @@
+{
+  "metadata": {
+    "id": "supply_chain_security_kb",
+    "title": "Software Supply Chain Security — Decision Intelligence",
+    "description": "Production patterns for supply-chain security: SLSA levels, SBOM generation, container/binary signing with cosign, build provenance, dependency pinning, and secure CI/CD pipeline integration with Trivy, Snyk, and SonarQube.",
+    "domain": "supply_chain",
+    "difficulty": "expert",
+    "type": "pattern",
+    "tags": ["supply-chain", "slsa", "sbom", "cosign", "sigstore", "trivy", "snyk", "sonarqube", "ci-cd", "provenance", "signing"],
+    "version": "1.0.0",
+    "source_alignment": [
+      "SLSA Specification v1.0 (slsa.dev)",
+      "Sigstore / cosign documentation (sigstore.dev)",
+      "CycloneDX and SPDX SBOM formats",
+      "OWASP Software Component Verification Standard (SCVS)",
+      "NIST SP 800-218 SSDF",
+      "OpenSSF Scorecard"
+    ]
+  },
+  "entries": [
+    {
+      "id": "sc-001",
+      "category": "SLSA Framework",
+      "concept": "SLSA levels and what each one actually requires",
+      "description": "SLSA (Supply-chain Levels for Software Artifacts) defines four progressive levels of build integrity. Level 1: build process is documented and produces provenance. Level 2: build runs on a hosted service that generates signed provenance. Level 3: build platform is hardened, source and build are isolated, provenance is non-forgeable. Level 4 (in v0.1; deprecated as a level in v1.0): hermetic, reproducible builds with two-party review. Most teams should target Level 3 — it is the meaningful security boundary and is achievable on GitHub Actions with the slsa-github-generator.",
+      "decision_rules": [
+        "TARGET SLSA Level 3 for all production artifacts — Levels 1 and 2 do not meaningfully prevent build-system compromise",
+        "USE GitHub Actions with the official slsa-github-generator reusable workflow — produces L3 provenance out of the box",
+        "PUBLISH provenance alongside the artifact (OCI annotations or attestation) — consumers verify before pulling",
+        "ENFORCE provenance verification at deploy time — admission controller (sigstore policy-controller) blocks unsigned/unattested images",
+        "ROTATE signing keys via Sigstore keyless signing (OIDC-based, ephemeral keys) — eliminates key management"
+      ],
+      "tradeoffs": [
+        "SLSA L3 with hosted CI: clear win vs requires reusable workflow constraints (no arbitrary scripts in build phase)",
+        "Keyless cosign: zero key mgmt vs depends on public Rekor + Fulcio (sigstore public good infra)",
+        "Self-hosted L3: full control vs significant build-system hardening required"
+      ],
+      "anti_patterns": [
+        "Claiming SLSA L1 'because we generate a build log' — provides no integrity guarantee",
+        "Signing artifacts but not verifying signatures at deploy time — signing without verification is security theater",
+        "Storing the cosign private key in CI secrets — keyless mode eliminates this risk"
+      ]
+    },
+    {
+      "id": "sc-002",
+      "category": "SBOM",
+      "concept": "Generating, publishing, and consuming SBOMs",
+      "description": "An SBOM (Software Bill of Materials) lists every component (direct and transitive) included in an artifact, with version and ideally hash. It is the prerequisite for fast vulnerability response — when log4shell drops, you query SBOMs to find affected systems in minutes, not weeks. Generate SBOMs at build time (when dependency resolution is fresh), in CycloneDX or SPDX format, and attach them as OCI attestations next to the image. Consume them at runtime by scanning continuously against vulnerability databases.",
+      "decision_rules": [
+        "GENERATE SBOM at build time using syft (containers, language ecosystems) — embed in the artifact OCI attestation",
+        "PREFER CycloneDX 1.5+ for security-focused SBOMs (richer vuln, license, and ML-BOM extensions) or SPDX for license compliance",
+        "PUBLISH SBOM alongside the image: `cosign attest --predicate sbom.json --type cyclonedx` with keyless signing",
+        "SCAN SBOMs continuously (not just at build) — new CVEs appear daily; grype or Trivy can scan SBOMs offline",
+        "MAINTAIN an SBOM repository (Dependency-Track or GitHub Dependency Graph) for org-wide CVE-impact queries"
+      ],
+      "tradeoffs": [
+        "Build-time SBOM: accurate but tied to build infra vs runtime SBOM (scan deployed image) catches drift",
+        "CycloneDX: richer for security vs SPDX is more standard for legal/license teams — generate both if needed (cost is small)",
+        "Continuous scanning: catches new CVEs vs constant noise — tune severity thresholds"
+      ],
+      "anti_patterns": [
+        "Generating SBOM only at build time, never re-scanning — misses CVEs disclosed after release",
+        "SBOM that includes only direct deps — transitive deps are where most CVEs live",
+        "Publishing SBOMs without signing — an SBOM you cannot trust is worse than no SBOM"
+      ]
+    },
+    {
+      "id": "sc-003",
+      "category": "Container Signing",
+      "concept": "Cosign keyless signing and admission-policy enforcement",
+      "description": "cosign (Sigstore) signs container images and other OCI artifacts. Keyless mode uses short-lived certificates issued by Fulcio based on OIDC identity (e.g. GitHub Actions OIDC token), eliminating long-lived signing keys. The signature is logged to the public transparency log Rekor. At deploy time, an admission controller (sigstore policy-controller, Kyverno, or Connaisseur) verifies that every image is signed by an expected identity before the pod is admitted.",
+      "decision_rules": [
+        "SIGN every production image with cosign keyless during the build job — `cosign sign --yes ${IMAGE}@${DIGEST}`",
+        "VERIFY at admission time using an identity claim, not a public key: `--certificate-identity=https://github.com/<org>/<repo>/.github/workflows/release.yml@refs/tags/*` and `--certificate-oidc-issuer=https://token.actions.githubusercontent.com`",
+        "PIN images by digest (`@sha256:...`), not by tag — tags are mutable, digests are not",
+        "ATTACH attestations (SBOM, SLSA provenance) to the same digest — verify them with the same identity-based policy",
+        "BLOCK at admission: if signature is missing, identity is wrong, or no Rekor entry exists — fail closed"
+      ],
+      "tradeoffs": [
+        "Keyless signing: no key management vs depends on public Sigstore infrastructure (highly available but third-party)",
+        "Self-hosted Sigstore (Fulcio + Rekor): control vs operational burden — only needed for air-gapped environments",
+        "Strict identity match: high integrity vs blocks legitimate deploys when workflow paths change"
+      ],
+      "anti_patterns": [
+        "Signing with a long-lived cosign keypair stored in CI secrets — defeats most of the security gain",
+        "Verifying only that a signature exists, not who signed it — anyone can sign any image",
+        "Pinning by `:latest` tag — no integrity guarantee even with verified signatures"
+      ]
+    },
+    {
+      "id": "sc-004",
+      "category": "Secure CI Pipeline",
+      "concept": "Hardening a GitHub Actions / GitLab CI build pipeline",
+      "description": "The pipeline IS the supply chain. A compromised CI runner is a worst-case incident — it can sign and deploy malicious artifacts wearing your identity. Hardening: pin all third-party actions by SHA (not by tag), use OIDC federation to AWS instead of long-lived keys, enable required reviews on protected workflow files, run dependency scans (Dependabot/Renovate + Snyk/Trivy), run static analysis (SonarQube/CodeQL), and enforce branch protection.",
+      "decision_rules": [
+        "PIN third-party actions by full commit SHA — `uses: actions/checkout@8f4b7f...` not `@v4` (Dependabot can update SHAs)",
+        "USE OIDC federation from CI to AWS/GCP/Azure — no long-lived cloud credentials in CI secrets",
+        "ENFORCE branch protection on main: required PR review, signed commits, status checks (lint, test, scan, SAST)",
+        "RUN SCAN GATES (block on Critical CVEs): Trivy on container, Snyk/OWASP Dependency-Check on libraries, gitleaks on secrets, CodeQL/Semgrep on code",
+        "ISOLATE build jobs: separate runners or ephemeral runners for production builds; never reuse runner state across runs",
+        "REVIEW required workflow file changes via CODEOWNERS — workflow modifications are the most sensitive change in the repo"
+      ],
+      "tradeoffs": [
+        "SHA-pinning: prevents action-tag retargeting vs requires Renovate/Dependabot to keep moving",
+        "Ephemeral runners: cleanest isolation vs slower and more expensive than reusable runners",
+        "Strict scan gates: catches issues vs blocks deploys on noisy findings — tune severity per repo"
+      ],
+      "anti_patterns": [
+        "`uses: random/action@main` — the action author can ship malicious code at any time",
+        "Long-lived AWS keys in CI secrets — OIDC federation has been GA since 2021",
+        "`pull_request_target` with checkout of PR head + privileged secrets — public-repo poisoning vector",
+        "Self-hosted runners on public repos without isolation — strangers run code with your secrets"
+      ]
+    },
+    {
+      "id": "sc-005",
+      "category": "Vulnerability Management",
+      "concept": "Trivy, Snyk, SonarQube — what each is for and how to combine them",
+      "description": "These tools cover overlapping but distinct surfaces. Trivy (Aqua) is the de facto open-source scanner for containers, IaC, and SBOMs — fast, free, broad. Snyk is commercial, with strong dependency-vulnerability databases, license compliance, and developer UX. SonarQube focuses on code quality and SAST findings (bugs, code smells, security hotspots). A balanced pipeline runs Trivy on every container build and IaC plan, Snyk on dependencies (or use Trivy + grype if budget-constrained), and SonarQube/CodeQL/Semgrep on the source.",
+      "decision_rules": [
+        "RUN Trivy on every container image in CI (`trivy image --severity CRITICAL,HIGH --exit-code 1`) — fail the build on Critical/High",
+        "RUN Trivy on Terraform/CloudFormation/K8s manifests (`trivy config`) before plan/apply",
+        "RUN dependency scan on every PR (Snyk, Dependabot, or `trivy fs`) — gate merge on no new Critical CVEs",
+        "RUN SAST (SonarQube, CodeQL, or Semgrep) on every PR — block on new security hotspots or quality regressions",
+        "DEFINE an exception process — CVEs without fixes need documented risk acceptance with expiry, not silent suppression",
+        "CONTINUOUSLY scan production images, not just at build — new CVEs disclose against deployed images daily"
+      ],
+      "tradeoffs": [
+        "Trivy free vs Snyk paid: Trivy covers most needs; Snyk's value is in advanced reachability analysis and the developer UX",
+        "Strict block on High/Critical: forces hygiene vs blocks legitimate work when no upstream fix exists — exception process is essential",
+        "Continuous scanning: catches new CVEs vs alert fatigue — route to a triage queue, not directly to engineers"
+      ],
+      "anti_patterns": [
+        "Suppressing CVEs in `.trivyignore` without a documented reason or expiry date",
+        "Running scans but not blocking merges on findings — provides visibility, no enforcement",
+        "Scanning only at build time — misses post-deploy CVE disclosures"
+      ]
+    }
+  ]
+}

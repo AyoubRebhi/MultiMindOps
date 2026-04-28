@@ -1,0 +1,330 @@
+{
+  "metadata": {
+    "id": "aws_infrastructure_patterns_kb",
+    "title": "AWS Infrastructure Patterns — Decision Intelligence Knowledge Base",
+    "description": "Structured reasoning entries for AWS infrastructure design patterns. Covers VPC, compute, storage, networking, and IAM decisions for the AI Infrastructure Agent.",
+    "tags": ["aws", "vpc", "ec2", "ecs", "eks", "lambda", "s3", "rds", "alb", "nlb", "iam", "networking", "compute", "storage"],
+    "version": "1.0.0",
+    "source_alignment": [
+      "AWS Well-Architected Framework",
+      "AWS Well-Architected Labs (wellarchitectedlabs.com)",
+      "Terraform AWS EKS Module (registry.terraform.io/modules/terraform-aws-modules/eks/aws)"
+    ]
+  },
+  "entries": [
+    {
+      "id": "aws-vpc-001",
+      "category": "AWS Infrastructure Patterns — VPC Design",
+      "concept": "VPC Architecture — Multi-AZ Public/Private Subnet Design",
+      "description": "A production VPC uses a multi-AZ layout with strict tier separation: public subnets (internet-facing load balancers, NAT gateways), private application subnets (compute: ECS, EKS nodes, EC2), and private data subnets (RDS, ElastiCache, Elasticsearch). This is the AWS-recommended baseline for any production workload. The VPC CIDR must be planned for future growth and VPC peering requirements.",
+      "decision_rules": [
+        "USE /16 CIDR for production VPCs — allows 65,536 IPs and room for subnet division across 3+ AZs",
+        "USE /24 subnets per tier per AZ as default — 251 usable IPs per subnet is sufficient for most service tiers",
+        "DEPLOY across minimum 2 AZs for staging, 3 AZs for production — ensures regional failover tolerance",
+        "PLACE load balancers (ALB/NLB) in public subnets only — compute resources must NEVER be directly internet-exposed",
+        "PLACE compute (EKS nodes, ECS tasks, EC2) in private application subnets — no public IPs",
+        "PLACE databases (RDS, ElastiCache) in isolated private data subnets — no route to application subnets except via security groups",
+        "AVOID CIDR overlap with on-premises networks or other VPCs if VPC peering or Transit Gateway is planned"
+      ],
+      "tradeoffs": [
+        "3-AZ deployment: high availability vs. 50% higher NAT gateway cost and subnet count",
+        "Separate data subnets: strong isolation vs. requires more subnet management and route tables",
+        "Large VPC CIDR: future flexibility vs. CIDR exhaustion in multi-VPC architectures",
+        "Single VPC vs. multi-VPC: simpler networking vs. blast radius contains entire application"
+      ],
+      "anti_patterns": [
+        "Placing RDS or ElastiCache in public subnets — violates security baseline, exposes data plane to internet",
+        "Using overlapping CIDRs across VPCs in the same account — blocks future peering and Transit Gateway",
+        "Deploying all resources in a single AZ — single AZ failure causes complete outage",
+        "Assigning public IPs to EC2 instances in application subnets — bypasses NAT and exposes private services",
+        "Creating a flat VPC with no subnet tier separation — prevents security group isolation and blast radius control"
+      ],
+      "aws_alignment": [
+        "Security Pillar: tier separation limits lateral movement in the event of a breach",
+        "Reliability Pillar: multi-AZ deployment tolerates AZ-level failures",
+        "Cost Optimization: right-sized subnets prevent IP exhaustion while avoiding unnecessary scale"
+      ]
+    },
+    {
+      "id": "aws-vpc-002",
+      "category": "AWS Infrastructure Patterns — VPC Design",
+      "concept": "NAT Gateway vs. NAT Instance",
+      "description": "NAT Gateways provide managed outbound internet connectivity for private subnet resources. They are fully managed by AWS, scale automatically, and require no patching. NAT Instances are self-managed EC2 instances functioning as NAT — they are a legacy pattern with significant operational overhead. In any production environment, NAT Gateway is the unambiguous choice.",
+      "decision_rules": [
+        "USE NAT Gateway for all production workloads — no exceptions",
+        "DEPLOY one NAT Gateway per AZ for production — cross-AZ NAT traffic incurs data transfer fees and AZ dependency",
+        "USE a single NAT Gateway for dev/staging environments to optimize cost — accept the single-AZ risk",
+        "CONSIDER VPC Endpoints (Gateway and Interface) to eliminate NAT costs for AWS service traffic (S3, DynamoDB, ECR, SSM)",
+        "USE NAT Instance ONLY for cost-constrained personal projects — not in any business workload"
+      ],
+      "tradeoffs": [
+        "Per-AZ NAT Gateway: zero cross-AZ data charges, full HA vs. 3x NAT Gateway cost (~$32/mo each)",
+        "Single NAT Gateway: 66% cost reduction vs. AZ-level failure disrupts all private subnet outbound traffic",
+        "VPC Endpoints: eliminates NAT data charges for AWS services vs. per-endpoint hourly cost (~$7/mo each)"
+      ],
+      "anti_patterns": [
+        "Using NAT Instance in production — patching burden, no auto-scaling, becomes a bottleneck",
+        "Single NAT Gateway in production with SLA requirements — AZ failure = all private resources lose internet",
+        "Not using S3 Gateway Endpoint — S3 traffic through NAT incurs unnecessary data transfer cost (S3 Gateway Endpoint is free)"
+      ],
+      "aws_alignment": [
+        "Reliability Pillar: per-AZ NAT eliminates AZ-level single points of failure",
+        "Cost Optimization: VPC Endpoints reduce NAT data processing charges for high-volume AWS service calls"
+      ]
+    },
+    {
+      "id": "aws-vpc-003",
+      "category": "AWS Infrastructure Patterns — VPC Design",
+      "concept": "VPC Endpoints — Reducing Attack Surface and Egress Cost",
+      "description": "VPC Endpoints allow private connectivity to AWS services without routing through the public internet or NAT Gateway. Gateway Endpoints (S3, DynamoDB) are free and routing-based. Interface Endpoints (most other services: ECR, SSM, Secrets Manager, CloudWatch, STS) use ENIs in your subnet and have hourly costs. For security-sensitive workloads, Interface Endpoints prevent all AWS API traffic from leaving the VPC.",
+      "decision_rules": [
+        "ALWAYS create S3 Gateway Endpoint and DynamoDB Gateway Endpoint in every VPC — they are free and reduce NAT cost",
+        "CREATE Interface Endpoints for ECR (required for EKS nodes in private subnets to pull images)",
+        "CREATE Interface Endpoints for SSM, SSMMessages, EC2Messages when using AWS Systems Manager Session Manager",
+        "CREATE Interface Endpoints for Secrets Manager, KMS when secrets access must not traverse the internet",
+        "EVALUATE Interface Endpoint cost vs. NAT savings for high-volume services — break-even at moderate API call volume"
+      ],
+      "tradeoffs": [
+        "Full Interface Endpoint coverage: zero internet exposure for AWS APIs vs. significant endpoint hourly cost in multi-AZ",
+        "Gateway Endpoints: free, no latency penalty vs. only covers S3 and DynamoDB",
+        "No endpoints: simpler setup vs. AWS service traffic goes through NAT (cost + internet exposure)"
+      ],
+      "anti_patterns": [
+        "Not creating S3 Gateway Endpoint — leaving free cost savings unclaimed while routing S3 traffic through NAT",
+        "EKS nodes in private subnets without ECR endpoints — image pulls fail or go through NAT at high cost",
+        "Ignoring VPC Endpoints for compliance workloads where AWS API traffic must not traverse public internet"
+      ],
+      "aws_alignment": [
+        "Security Pillar: keeps AWS API traffic within the AWS network, removes internet exposure",
+        "Cost Optimization: Gateway Endpoints eliminate NAT data processing charges for S3/DynamoDB"
+      ]
+    },
+    {
+      "id": "aws-compute-001",
+      "category": "AWS Infrastructure Patterns — Compute Decision",
+      "concept": "EC2 vs. ECS Fargate vs. EKS vs. Lambda — Compute Selection Framework",
+      "description": "Choosing the right compute primitive is the most impactful infrastructure decision. The choice determines operational complexity, scaling behavior, cost model, and deployment velocity. AWS offers a spectrum from maximum control (EC2) to zero infrastructure management (Lambda). The correct choice depends on: workload type (stateful/stateless), team Kubernetes maturity, request pattern (constant/spiky), and operational overhead tolerance.",
+      "decision_rules": [
+        "USE Lambda WHEN: event-driven, stateless, short-lived functions (<15 min), unpredictable or spiky traffic, minimal baseline cost required",
+        "USE ECS Fargate WHEN: containerized workload, team lacks Kubernetes expertise, need managed container orchestration without node management, microservices with moderate scale",
+        "USE EKS WHEN: large-scale microservices, multi-team platform, Kubernetes ecosystem required (service mesh, custom operators, advanced autoscaling), stateful workloads needing persistent volumes",
+        "USE EC2 WHEN: workload requires specific hardware (GPU, FPGA, bare metal), licensing requires dedicated hardware, applications cannot be containerized, maximum OS-level control needed",
+        "PREFER ECS Fargate over EC2-backed ECS for new projects — removes node patching and capacity management burden",
+        "PREFER EKS Managed Node Groups over self-managed EC2 nodes when EKS is required — AWS handles node lifecycle"
+      ],
+      "tradeoffs": [
+        "Lambda: zero idle cost, infinite scale vs. cold starts, 15-min limit, stateless-only, limited compute",
+        "ECS Fargate: no node management vs. higher per-vCPU/GB cost than EC2, less control",
+        "EKS: full Kubernetes power vs. highest operational complexity, ~$0.10/hr control plane cost, steep learning curve",
+        "EC2: complete control, lowest unit cost at scale vs. patching, capacity planning, and AMI management burden"
+      ],
+      "anti_patterns": [
+        "Using EKS for a 2-service startup — Kubernetes overhead crushes small teams (use ECS Fargate instead)",
+        "Running long-running batch jobs on Lambda — 15-minute timeout kills incomplete jobs (use ECS or AWS Batch)",
+        "Using EC2 for stateless web APIs that could run on Fargate — unnecessary operational overhead",
+        "Running databases on EKS without persistent volume backup strategy — data loss risk",
+        "Choosing Lambda for consistent high-throughput workloads — always-on Lambda is more expensive than Fargate"
+      ],
+      "aws_alignment": [
+        "Performance Efficiency: right-sizing compute to workload pattern prevents over/under-provisioning",
+        "Cost Optimization: Fargate eliminates idle EC2 capacity; Lambda eliminates baseline cost for spiky loads",
+        "Operational Excellence: managed services (Fargate, Lambda) reduce undifferentiated heavy lifting"
+      ]
+    },
+    {
+      "id": "aws-compute-002",
+      "category": "AWS Infrastructure Patterns — Compute Decision",
+      "concept": "EKS Architecture — Node Group Strategy",
+      "description": "When EKS is the chosen compute platform, the node group strategy determines cost, availability, and operational overhead. The standard pattern separates system workloads (kube-system) from application workloads, with a combination of On-Demand nodes for critical services and Spot instances for stateless, fault-tolerant workloads. Karpenter is the modern replacement for Cluster Autoscaler.",
+      "decision_rules": [
+        "USE Managed Node Groups over self-managed EC2 — AWS handles node launch template, AMI, and graceful drain during upgrades",
+        "CREATE dedicated system node group for kube-system components — prevents application workloads from starving system pods",
+        "USE On-Demand instances for: databases, caches, stateful services, and critical path services with strict SLAs",
+        "USE Spot instances for: batch processing, stateless APIs with horizontal scaling, CI/CD runners, development workloads",
+        "DEPLOY Karpenter over Cluster Autoscaler for new EKS clusters — faster scale-out, bin-packing optimization, instance diversity",
+        "USE multiple instance types in node groups — prevents single instance-type capacity exhaustion affecting scale-out",
+        "ENABLE EKS Managed Add-ons for: VPC CNI, CoreDNS, kube-proxy, EBS CSI driver — AWS manages version upgrades"
+      ],
+      "tradeoffs": [
+        "Spot instances: 60-90% cost reduction vs. 2-minute interruption notice — only suitable for fault-tolerant workloads",
+        "Karpenter vs. Cluster Autoscaler: faster and smarter scaling vs. newer, requires additional IRSA setup",
+        "Managed Node Groups: easier management vs. less control over node bootstrapping and lifecycle hooks",
+        "Large instance types: fewer nodes to manage vs. lower fault isolation granularity on node failure"
+      ],
+      "anti_patterns": [
+        "Running stateful services (databases, Kafka) on Spot nodes — interruption causes data loss or corruption",
+        "Single instance type in node groups — capacity shortage for that type blocks all scaling",
+        "Not configuring Pod Disruption Budgets — node rolling updates kill too many pods simultaneously",
+        "Mixing system and application workloads on the same nodes without taints — noisy-neighbor resource exhaustion",
+        "Not enabling IRSA (IAM Roles for Service Accounts) — forces broad IAM permissions via node instance profile"
+      ],
+      "aws_alignment": [
+        "Cost Optimization: Spot instances for tolerant workloads delivers 60-90% compute savings",
+        "Reliability: On-Demand for critical paths, Spot for batch — right reliability level per workload",
+        "Security Pillar: IRSA provides pod-level IAM isolation instead of broad node-level permissions"
+      ]
+    },
+    {
+      "id": "aws-storage-001",
+      "category": "AWS Infrastructure Patterns — Storage Decision",
+      "concept": "S3 vs. EBS vs. EFS vs. RDS — Storage Selection Framework",
+      "description": "AWS storage primitives serve fundamentally different access patterns. S3 is object storage for unstructured data with essentially infinite scale. EBS is block storage attached to a single EC2 instance. EFS is shared POSIX-compliant file storage for multi-instance access. RDS provides managed relational database storage. Choosing the wrong primitive causes either data loss, performance degradation, or unnecessary cost.",
+      "decision_rules": [
+        "USE S3 WHEN: storing objects (images, videos, backups, logs, artifacts), data lake, static website assets, ML training data",
+        "USE EBS WHEN: EC2 instance root volumes, database storage on self-managed DB instances, applications needing block-level access",
+        "USE EFS WHEN: multiple EC2 instances or ECS/EKS pods need concurrent read/write to the same file system (shared config, content management, ML checkpoints)",
+        "USE RDS WHEN: relational data model, ACID transactions, structured queries, managed patching and backups are required",
+        "USE RDS Aurora WHEN: variable load requires storage auto-scaling, multi-AZ with fast failover, or MySQL/PostgreSQL compatibility with improved performance",
+        "USE DynamoDB WHEN: key-value or document data, massive scale, single-digit millisecond latency, serverless or Lambda-backed applications",
+        "NEVER use EBS for shared storage between multiple instances — EBS is single-instance block storage"
+      ],
+      "tradeoffs": [
+        "S3 vs. EFS: S3 has eventual consistency (now strongly consistent), lower cost vs. EFS has POSIX semantics and low-latency file access",
+        "RDS Multi-AZ: automatic failover, 2-3 minutes vs. ~2x cost over single-AZ",
+        "Aurora vs. RDS: better auto-scaling, faster failover vs. Aurora Serverless v1 has cold start issues for infrequent workloads",
+        "EFS vs. EBS for containers: shared access vs. EFS higher latency and cost for single-pod use cases"
+      ],
+      "anti_patterns": [
+        "Using RDS for key-value lookups at scale — DynamoDB delivers better performance at lower cost",
+        "Storing application logs in RDS — use S3 + Athena or OpenSearch instead",
+        "Using EFS for every container storage need — EFS is expensive for single-pod access patterns (use EBS via CSI driver)",
+        "Single-AZ RDS in production — AZ failure = database unavailable = full application outage",
+        "Not enabling RDS automated backups — no recovery path for data corruption or accidental deletion"
+      ],
+      "aws_alignment": [
+        "Reliability Pillar: Multi-AZ RDS, S3 versioning, and EBS snapshots provide data durability",
+        "Performance Efficiency: matching storage type to access pattern prevents bottlenecks",
+        "Cost Optimization: S3 Intelligent-Tiering, RDS Reserved Instances reduce storage costs significantly"
+      ]
+    },
+    {
+      "id": "aws-networking-001",
+      "category": "AWS Infrastructure Patterns — Networking",
+      "concept": "ALB vs. NLB — Load Balancer Selection",
+      "description": "AWS offers two primary load balancer types for production workloads. Application Load Balancer (ALB) operates at Layer 7 (HTTP/HTTPS) with content-based routing, host/path rules, and native integration with WAF and Cognito. Network Load Balancer (NLB) operates at Layer 4 (TCP/UDP) with ultra-low latency, static IP addresses, and TLS passthrough. The choice is driven by protocol requirements and routing complexity.",
+      "decision_rules": [
+        "USE ALB WHEN: HTTP/HTTPS workloads, path-based or host-based routing needed (microservices, multi-tenant SaaS), WebSocket support, WAF integration required, gRPC over HTTP/2",
+        "USE NLB WHEN: TCP/UDP protocols (non-HTTP), ultra-low latency required (<1ms), static IP or Elastic IP needed for whitelisting, high-throughput TCP (millions of requests/sec), TLS passthrough to backend",
+        "USE ALB with ECS and EKS for most web applications — native target group integration and health check flexibility",
+        "USE NLB in front of ALB ONLY when static IPs are required for ALB (NLB preserves source IP, ALB does not natively)",
+        "ENABLE ALB access logs to S3 for compliance and security analysis",
+        "CONFIGURE deletion protection on production load balancers — terraform apply cannot accidentally delete the LB"
+      ],
+      "tradeoffs": [
+        "ALB: rich L7 routing, WAF support vs. slightly higher latency than NLB, no static IPs natively",
+        "NLB: extreme throughput and lowest latency vs. no content-based routing, no WAF integration",
+        "ALB idle timeout: tunable connection keep-alive vs. must match backend timeout to avoid 504s",
+        "NLB TLS passthrough: end-to-end encryption vs. no SSL offload, certificates must be on every backend"
+      ],
+      "anti_patterns": [
+        "Using NLB for HTTP microservices that need path-based routing — NLB cannot inspect HTTP headers",
+        "Using ALB for non-HTTP protocols (raw TCP databases) — ALB does not support TCP pass-through",
+        "Exposing ALB without WAF in public-facing production environments — leaves application layer unprotected",
+        "Not setting idle timeout to match backend service timeout — causes spurious 504 errors under load",
+        "Using Classic Load Balancer (ELB) in new deployments — legacy, missing modern features, AWS discourages new use"
+      ],
+      "aws_alignment": [
+        "Security Pillar: ALB + WAF protects against OWASP Top 10 at the edge",
+        "Performance Efficiency: NLB for latency-sensitive TCP workloads avoids L7 processing overhead",
+        "Reliability Pillar: multi-AZ LB deployment absorbs AZ-level failures transparently"
+      ]
+    },
+    {
+      "id": "aws-iam-001",
+      "category": "AWS Infrastructure Patterns — IAM Design",
+      "concept": "IAM Design Principles — Least Privilege and Role Architecture",
+      "description": "IAM is the security control plane of AWS. Correct IAM design is the single most impactful security decision in any AWS architecture. The core principle is least privilege: every principal (human, service, instance, function) has the minimum permissions required to perform its function. IAM roles (not users) should be used for all machine identities. Permissions must be scoped to specific resources, not wildcards.",
+      "decision_rules": [
+        "USE IAM Roles for all machine identities — EC2 instance profiles, ECS task roles, Lambda execution roles, EKS IRSA",
+        "NEVER use IAM Users for programmatic access in production — use roles with AssumeRole",
+        "SCOPE all IAM policies to specific resource ARNs — never use Resource: '*' in production policies",
+        "SEPARATE IAM roles by function: one role per service, not a shared role for all services",
+        "USE Service Control Policies (SCPs) at the AWS Organizations level to enforce guardrails across all accounts",
+        "USE IAM Permission Boundaries when granting teams the ability to create roles — prevents privilege escalation",
+        "ENABLE IAM Access Analyzer to detect overly permissive policies and external access",
+        "USE AWS-managed policies as a baseline, then restrict — do not start from scratch for standard patterns",
+        "APPLY IRSA (IAM Roles for Service Accounts) for Kubernetes pods — pod-level IAM instead of node-level"
+      ],
+      "tradeoffs": [
+        "Least privilege: strong security vs. operational friction when missing permissions cause application errors",
+        "Role-per-service: precise isolation vs. IAM role limit per account (5000 default, can be increased)",
+        "Condition-based policies (MFA, VPC source): layered security vs. complex policy authoring and debugging",
+        "AWS-managed policies: easy to apply vs. may include more permissions than needed"
+      ],
+      "anti_patterns": [
+        "Attaching AdministratorAccess to application roles — any credential compromise = full account compromise",
+        "Sharing IAM roles across services — a breach of one service compromises all services sharing that role",
+        "Using IAM Users with long-lived access keys for CI/CD — key rotation is rarely enforced, leaks are permanent until rotated",
+        "Resource: '*' in production policies — violates least privilege, allows lateral movement",
+        "Not using permission boundaries when allowing teams to create IAM roles — allows self-escalation to admin",
+        "Inline policies on resources instead of managed policies — cannot be reused, audited, or version-tracked"
+      ],
+      "aws_alignment": [
+        "Security Pillar: IAM least privilege is the primary defense against lateral movement and privilege escalation",
+        "Reliability: scoped permissions prevent accidental destructive API calls by services",
+        "Operational Excellence: role-per-service enables precise security auditing and incident response"
+      ]
+    },
+    {
+      "id": "aws-iam-002",
+      "category": "AWS Infrastructure Patterns — IAM Design",
+      "concept": "Security Groups — Network-Level Access Control",
+      "description": "Security Groups are stateful virtual firewalls at the ENI level. They are the primary network-level access control mechanism in AWS. Unlike NACLs (stateless, subnet-level), Security Groups are stateful and attached to resources. The correct design uses Security Group chaining: SG references allow services to reference each other by security group ID rather than CIDR, providing precise service-to-service access control.",
+      "decision_rules": [
+        "USE Security Group references (not CIDRs) for service-to-service rules — sg-xxxxxxxx as source is self-documenting and precise",
+        "NEVER allow 0.0.0.0/0 on inbound rules except: port 443 and 80 on public ALB security groups",
+        "CREATE one security group per service/tier — SG per RDS, per EKS node group, per ALB",
+        "SEPARATE security groups by environment — dev and prod must never share SGs",
+        "RESTRICT outbound rules on sensitive resources (RDS, ElastiCache) to only allow inbound from application SGs",
+        "USE VPC Flow Logs to audit actual traffic and validate that security group rules match intent"
+      ],
+      "tradeoffs": [
+        "SG chaining: precise and readable vs. requires discipline when services are added — easy to forget to add SG rules",
+        "CIDR-based rules: simple for external access vs. brittle when IPs change, overly broad for internal traffic",
+        "Permissive outbound rules: zero friction for developers vs. outbound restrictions required for compliance (PCI, HIPAA)"
+      ],
+      "anti_patterns": [
+        "Allowing 0.0.0.0/0 inbound on RDS or application security groups — direct internet exposure of data tier",
+        "A single 'default' security group for all resources — no isolation between tiers",
+        "Opening port ranges instead of specific ports — unnecessary attack surface",
+        "Not regularly auditing unused security group rules — stale rules accumulate and create unintended access paths"
+      ],
+      "aws_alignment": [
+        "Security Pillar: micro-segmentation via SG chaining contains blast radius of compromised services",
+        "Reliability: least-privilege network rules prevent unintended cross-tier communication failures"
+      ]
+    },
+    {
+      "id": "aws-scaling-001",
+      "category": "AWS Infrastructure Patterns — Auto Scaling",
+      "concept": "Auto Scaling Design — Target Tracking vs. Step Scaling",
+      "description": "Auto Scaling enables infrastructure to match demand dynamically. Target Tracking is the modern, preferred approach — it continuously adjusts capacity to maintain a target metric (CPU, request count, custom CloudWatch metric). Step Scaling requires manual threshold definitions and is more brittle. Scheduled scaling handles predictable load patterns. The combination of Target Tracking + scheduled scale-out before known traffic spikes is the production best practice.",
+      "decision_rules": [
+        "USE Target Tracking scaling as default for all Auto Scaling groups and ECS services",
+        "SET CPU target at 60-70% for web services — leaves headroom for traffic spikes during scale-out delay",
+        "USE ALBRequestCountPerTarget metric for HTTP services — more responsive than CPU for stateless web workloads",
+        "COMBINE Target Tracking with Scheduled Scaling for predictable spikes (e.g., scale up before market open, batch processing windows)",
+        "SET scale-in cooldown higher than scale-out (scale-out: 60s, scale-in: 300s) — prevents thrashing",
+        "CONFIGURE minimum instances = number of AZs to maintain multi-AZ availability at minimum capacity",
+        "USE Predictive Scaling for recurring daily/weekly traffic patterns — pre-scales before demand arrives"
+      ],
+      "tradeoffs": [
+        "Target Tracking: simple, self-managing vs. black box — limited control over scaling behavior",
+        "Step Scaling: precise control over scale increments vs. threshold tuning requires ongoing operational effort",
+        "Low CPU target (50%): faster response to spikes vs. higher baseline cost from over-provisioning",
+        "Aggressive scale-in: lower cost vs. thrashing risk when load oscillates around threshold"
+      ],
+      "anti_patterns": [
+        "Fixed capacity (no auto scaling) for variable web workloads — either over-provisioned (wasted cost) or under-provisioned (poor UX)",
+        "Scaling on average CPU > 90% — by the time scaling triggers, service is already degraded",
+        "No warm-up period for scale-out — new instances serving traffic before application is ready causes 5xx errors",
+        "Using the same scaling policy for stateful services (databases) as stateless services — state makes horizontal scaling dangerous without design changes"
+      ],
+      "aws_alignment": [
+        "Cost Optimization: target tracking reduces idle capacity by matching supply to actual demand",
+        "Performance Efficiency: proactive scaling prevents performance degradation under load",
+        "Reliability: minimum capacity across AZs prevents single-AZ service disruption"
+      ]
+    }
+  ]
+}

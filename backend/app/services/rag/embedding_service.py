@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 NOMIC_EMBED_DIM = 768
 _DEFAULT_OLLAMA_URL = "http://localhost:11434"
 _DEFAULT_MODEL = "nomic-embed-text:v1.5"
-_BATCH_SIZE = 16          # chunks par requête HTTP
-_REQUEST_TIMEOUT = 60.0   # secondes
-_RETRY_DELAY = 2.0        # secondes entre les retry
+_BATCH_SIZE = 32          # chunks per HTTP request (safe upper bound for nomic-embed-text)
+_REQUEST_TIMEOUT = 90.0   # seconds — larger batches need more time
+_RETRY_DELAY = 2.0        # seconds between retries
 
 
 class EmbeddingService:
@@ -74,7 +74,7 @@ class EmbeddingService:
         """Enrichit chaque chunk avec son vecteur d'embedding.
 
         Args:
-            chunks:      Liste de dicts produits par GeminiChunkingService.
+            chunks:      Liste de dicts produits par le service de chunking (local Ollama ou fallback).
             content_key: Clé du champ texte dans chaque chunk.
 
         Returns:
@@ -112,21 +112,49 @@ class EmbeddingService:
     # ── Logique interne ──────────────────────────────────────────────────────
 
     def _batch_embed(self, texts: list[str]) -> list[list[float]]:
-        """Traitement par lots pour éviter les timeouts sur de grands corpus."""
+        """Batch embedding with throughput logging and zero-vector detection."""
+        import time as _time
+
         all_vectors: list[list[float]] = []
         total = len(texts)
+        zero_count = 0
+        t_start = _time.monotonic()
 
         for start in range(0, total, self._batch_size):
             batch = texts[start : start + self._batch_size]
-            logger.debug(
-                "Embedding batch %d–%d / %d",
-                start + 1,
-                min(start + self._batch_size, total),
-                total,
-            )
+            batch_end = min(start + self._batch_size, total)
+            t_batch = _time.monotonic()
+            logger.info("Embedding batch %d–%d / %d", start + 1, batch_end, total)
             vectors = self._call_ollama(batch)
+            batch_elapsed = _time.monotonic() - t_batch
+            batch_tps = len(batch) / batch_elapsed if batch_elapsed > 0 else 0
+            logger.debug(
+                "  batch done: %d chunks in %.2fs (%.1f chunks/s)",
+                len(batch), batch_elapsed, batch_tps,
+            )
+
+            for i, vec in enumerate(vectors):
+                if not any(vec):
+                    zero_count += 1
+                    logger.warning(
+                        "Zero-vector returned for text[%d]: %.80r…",
+                        start + i,
+                        texts[start + i],
+                    )
+
             all_vectors.extend(vectors)
 
+        elapsed = _time.monotonic() - t_start
+        throughput = total / elapsed if elapsed > 0 else 0
+        logger.info(
+            "Embedding complete: %d chunks in %.2fs — throughput %.1f chunks/s",
+            total, elapsed, throughput,
+        )
+        if zero_count:
+            logger.warning(
+                "Zero-vector count: %d/%d — these will be skipped during upsert",
+                zero_count, total,
+            )
         return all_vectors
 
     def _call_ollama(

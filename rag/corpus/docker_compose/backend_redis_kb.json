@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "id": "compose_backend_redis_kb",
+    "title": "Docker Compose — Backend with Redis",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "compose_backend_redis",
+      "category": "docker",
+      "concept": "Generic Backend + Redis Docker Compose",
+      "description": "Compose pattern for a generic backend service with Redis 7. Backend receives REDIS_URL from environment and depends_on redis. Redis uses redis:7 official image and publishes port 6379. REDIS_URL format for this compose: redis://redis:6379.",
+      "decision_rules": [
+        "Use when the backend requires Redis for caching, rate limiting, queuing, or session storage",
+        "Set REDIS_URL to redis://redis:6379 to use the compose service name as hostname"
+      ],
+      "tradeoffs": [
+        "No Redis persistence (no appendonly or named volume) — data lost on container restart",
+        "No Redis authentication — add requirepass via command: redis-server --requirepass ... for non-dev environments"
+      ],
+      "anti_patterns": [
+        "Do not run Redis without authentication in staging or production",
+        "Do not expose port 6379 to external networks"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

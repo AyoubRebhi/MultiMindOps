@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "id": "security_docker_notes_kb",
+    "title": "Security — Docker Artifact Reminders",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "security_docker_notes",
+      "category": "devsecops",
+      "concept": "Docker Security Baseline Reminders",
+      "description": "Core security reminders applied during Docker artifact generation: prefer minimal base images (alpine, distroless, slim), avoid embedding secrets in image layers or ENV instructions, expose only ports required by the service, use a non-root USER when the application supports it.",
+      "decision_rules": [
+        "Always prefer minimal base images: python:3.11-slim, node:20-alpine, eclipse-temurin:17-jre-alpine, or distroless variants",
+        "Never embed secrets via ENV or hardcoded ARG instructions — pass at runtime",
+        "Expose only the service port — do not expose debug or admin ports",
+        "Add USER appuser before CMD/ENTRYPOINT whenever the application does not require root"
+      ],
+      "tradeoffs": [],
+      "anti_patterns": [
+        "Using full OS images (ubuntu:latest, debian:latest) as base instead of slim/distroless",
+        "Setting ENV API_KEY=sk-secret123 or similar in Dockerfile",
+        "Running containers as root (UID 0) in production"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

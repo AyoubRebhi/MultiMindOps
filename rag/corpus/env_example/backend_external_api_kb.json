@@ -1,0 +1,25 @@
+{
+  "metadata": {
+    "id": "env_backend_external_api_kb",
+    "title": "Env Example — Backend External API",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "env_backend_external_api",
+      "category": "secrets",
+      "concept": "Generic External API .env.example Template",
+      "description": "Safe .env.example for backend services integrating with external APIs. Empty placeholders for API_BASE_URL (base URL of the external service) and API_KEY (authentication token). Generic template applicable to any third-party REST API.",
+      "decision_rules": [
+        "Use API_BASE_URL to allow URL switching between sandbox and production endpoints",
+        "Prefer bearer token (API_KEY) over username/password credentials for API authentication"
+      ],
+      "tradeoffs": [],
+      "anti_patterns": [
+        "Never hardcode API keys in source code or Dockerfiles",
+        "Do not reuse a single API key across multiple services — provision separate keys per service"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

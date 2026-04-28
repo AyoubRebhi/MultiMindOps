@@ -1,0 +1,25 @@
+{
+  "metadata": {
+    "id": "env_springboot_mysql_kb",
+    "title": "Env Example — Spring Boot with MySQL",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "env_springboot_mysql",
+      "category": "secrets",
+      "concept": "Spring Boot MySQL .env.example Template",
+      "description": "Safe .env.example for Spring Boot with MySQL. Empty placeholders for MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD. All values blank to prevent credential leakage.",
+      "decision_rules": [
+        "MYSQL_ROOT_PASSWORD is required by MySQL 8.0 container during initialization even when a regular user is also defined",
+        "Inject real values via CI/CD pipeline secrets (GitHub Actions secrets, GitLab CI variables, etc.) or a vault"
+      ],
+      "tradeoffs": [],
+      "anti_patterns": [
+        "Never set default passwords in .env.example",
+        "Never commit a populated .env file — use .gitignore to exclude .env"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

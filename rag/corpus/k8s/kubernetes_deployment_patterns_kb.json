@@ -1,0 +1,107 @@
+{
+  "metadata": {
+    "id": "kubernetes_deployment_patterns_kb",
+    "title": "Kubernetes Deployment Patterns — Production Ready",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "k8s_namespace_and_labels",
+      "category": "kubernetes",
+      "concept": "Namespace and label conventions for production",
+      "description": "Create a dedicated Namespace for each environment or team with labels: environment, managed-by, team. Standard labels applied to all resources: app (service name), version (semver), environment. Namespaces provide resource isolation, RBAC scope, and NetworkPolicy boundaries.",
+      "decision_rules": [
+        "Use one namespace per environment (production, staging, development) — do not mix environments",
+        "Apply consistent labels (app, version, environment) to all resources to enable selectors and monitoring",
+        "Set managed-by: terraform or managed-by: helm on namespaces created via IaC"
+      ],
+      "tradeoffs": [
+        "Fine-grained namespace-per-team increases isolation but requires more RBAC and NetworkPolicy configuration"
+      ],
+      "anti_patterns": [
+        "Deploying production workloads to the default namespace",
+        "Omitting labels — makes resource selection, monitoring dashboards, and GitOps tooling fragile"
+      ],
+      "aws_alignment": ["EKS namespaces map to IAM Roles for Service Accounts (IRSA) scope for granular AWS API access control"]
+    },
+    {
+      "id": "k8s_production_deployment",
+      "category": "kubernetes",
+      "concept": "Production-ready Deployment manifest",
+      "description": "Production Deployment: 3 replicas, RollingUpdate strategy (maxSurge: 1, maxUnavailable: 0 for zero-downtime), dedicated ServiceAccount (automountServiceAccountToken: false), podAntiAffinity across nodes, pod-level SecurityContext (runAsNonRoot, seccompProfile RuntimeDefault), container-level SecurityContext (allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities drop ALL), resource requests/limits, env from ConfigMap/Secret, liveness + readiness + startup probes, emptyDir volumes for writable paths, terminationGracePeriodSeconds: 60.",
+      "decision_rules": [
+        "Set maxUnavailable: 0 for zero-downtime rolling deployments — pods are added before old ones are removed",
+        "Use pinned image tags (myapp:1.0.0) — never :latest in production",
+        "Set terminationGracePeriodSeconds >= timeout of your longest in-flight request to allow graceful shutdown"
+      ],
+      "tradeoffs": [
+        "maxUnavailable: 0 requires cluster capacity for maxSurge extra pods during rollout",
+        "podAntiAffinity with preferredDuringScheduling may not spread pods if cluster nodes are insufficient"
+      ],
+      "anti_patterns": [
+        "Using :latest image tag — non-deterministic and bypasses rollback capability",
+        "Not setting terminationGracePeriodSeconds — pods may be killed mid-request",
+        "Missing startup probe for slow-starting apps — liveness probe will kill the pod before it finishes initializing"
+      ],
+      "aws_alignment": ["Use Karpenter on EKS for just-in-time node provisioning to support rolling surge capacity"]
+    },
+    {
+      "id": "k8s_service_and_ingress",
+      "category": "kubernetes",
+      "concept": "Service (ClusterIP) and Ingress with TLS",
+      "description": "Service type ClusterIP on port 80 -> targetPort 8000. Never NodePort or LoadBalancer directly for internal services. Ingress with nginx ingress class, cert-manager annotation (letsencrypt-prod), ssl-redirect: true, proxy-body-size: 10m, rate-limit: 100. TLS spec with hosts array and secretName for certificate.",
+      "decision_rules": [
+        "Use ClusterIP as the default Service type — expose externally only via Ingress",
+        "Set nginx.ingress.kubernetes.io/rate-limit on all public-facing Ingress resources",
+        "Use cert-manager with Let's Encrypt for automated TLS certificate management"
+      ],
+      "tradeoffs": [
+        "Nginx Ingress with rate-limit annotation is per-server, not distributed — use Redis-backed rate limiting for distributed enforcement"
+      ],
+      "anti_patterns": [
+        "Using NodePort or direct LoadBalancer Service types without an Ingress — bypasses centralized TLS and rate limiting",
+        "Not setting proxy-body-size — allows unbounded request body sizes"
+      ],
+      "aws_alignment": ["On EKS, use AWS Load Balancer Controller with Ingress class alb for native ALB integration and ACM certificate management"]
+    },
+    {
+      "id": "k8s_hpa",
+      "category": "kubernetes",
+      "concept": "Horizontal Pod Autoscaler (HPA) for automatic scaling",
+      "description": "HPA (autoscaling/v2): scaleTargetRef points to the Deployment, minReplicas: 2, maxReplicas: 10. Metrics: CPU target utilization 70%, Memory target utilization 80%. Kubernetes scales pod count up/down to maintain the target metric values.",
+      "decision_rules": [
+        "Set minReplicas >= 2 for production availability — 1 replica has no fault tolerance",
+        "Use CPU utilization 70% as a target — leaves headroom before pods become saturated",
+        "Combine HPA with PodDisruptionBudget to prevent all replicas from being disrupted simultaneously"
+      ],
+      "tradeoffs": [
+        "HPA reacts to current load — not suitable for sudden traffic spikes; use KEDA for event-driven scaling",
+        "Memory-based scaling can cause scale-thrash if memory is not released promptly after load drops"
+      ],
+      "anti_patterns": [
+        "Setting minReplicas: 1 in production — a single pod disruption causes a complete outage",
+        "Setting maxReplicas too high without resource quotas — a runaway HPA can exhaust cluster capacity"
+      ],
+      "aws_alignment": ["Combine HPA with Karpenter on EKS for both pod and node autoscaling", "Use KEDA with SQS queue depth metric for event-driven HPA on EKS"]
+    },
+    {
+      "id": "k8s_configmap_and_secret",
+      "category": "kubernetes",
+      "concept": "ConfigMap and Secret configuration management",
+      "description": "ConfigMap holds non-sensitive configuration: APP_ENV, LOG_LEVEL, CORS_ORIGINS, MAX_CONNECTIONS. Secrets hold sensitive values (DATABASE_URL) but in production should be managed via External Secrets Operator, not committed as plain Secret manifests. Reference ConfigMap values with valueFrom.configMapKeyRef, Secrets with valueFrom.secretKeyRef.",
+      "decision_rules": [
+        "ConfigMap is for non-sensitive configuration only — never put passwords or tokens in ConfigMap",
+        "In production: use External Secrets Operator to sync from AWS Secrets Manager into Kubernetes Secrets",
+        "Reference individual keys (configMapKeyRef, secretKeyRef) rather than envFrom for explicit env var declarations"
+      ],
+      "tradeoffs": [
+        "envFrom (whole ConfigMap/Secret as env vars) is simpler but makes pod environment unpredictable — prefer key-by-key references"
+      ],
+      "anti_patterns": [
+        "Storing sensitive values in ConfigMap data (not encrypted at rest by default)",
+        "Committing Secret manifests with base64-encoded values to git — base64 is encoding, not encryption"
+      ],
+      "aws_alignment": ["Use External Secrets Operator with AWS Secrets Manager SecretStore for EKS", "Use Secrets Store CSI Driver with AWS SSM Parameter Store as an alternative"]
+    }
+  ]
+}

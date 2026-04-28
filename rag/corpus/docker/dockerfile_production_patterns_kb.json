@@ -1,0 +1,103 @@
+{
+  "metadata": {
+    "id": "dockerfile_production_patterns_kb",
+    "title": "Dockerfile Production Patterns — Multi-stage Builds",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "dockerfile_python_fastapi_multistage",
+      "category": "docker",
+      "concept": "Python FastAPI multi-stage Dockerfile with non-root user and health check",
+      "description": "Two-stage Python production Dockerfile: builder stage (python:3.11-slim) installs packages with pip install --no-cache-dir --user, runtime stage (python:3.11-slim) creates non-root appuser (UID 1001), copies /root/.local from builder, sets PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1, adds HEALTHCHECK with httpx, exposes 8000. CMD: uvicorn with --workers 1 --no-access-log.",
+      "decision_rules": [
+        "Use --user flag in pip install to install to /root/.local, then copy to the runtime user's home",
+        "Set PYTHONDONTWRITEBYTECODE=1 to skip .pyc file generation in the runtime image",
+        "Add HEALTHCHECK with initialDelaySeconds=40s to accommodate application startup time"
+      ],
+      "tradeoffs": [
+        "Runtime stage still uses python:3.11-slim (not distroless) to allow httpx for health check — use distroless if health check is done via external probe"
+      ],
+      "anti_patterns": [
+        "Installing dependencies in the runtime stage — defeats the multi-stage cache benefit",
+        "Running uvicorn with multiple workers behind a container orchestrator — use 1 worker per container and scale horizontally"
+      ],
+      "aws_alignment": ["Map HEALTHCHECK to ECS container health check for load balancer target group deregistration"]
+    },
+    {
+      "id": "dockerfile_nodejs_multistage",
+      "category": "docker",
+      "concept": "Node.js multi-stage Dockerfile with npm ci and non-root user",
+      "description": "Two-stage Node.js Dockerfile: builder stage (node:20-alpine) runs npm ci --only=production and npm run build, runtime stage (node:20-alpine) creates non-root appuser (UID 1001), copies dist and node_modules with --chown, adds HEALTHCHECK with wget, exposes 3000. CMD: node dist/server.js.",
+      "decision_rules": [
+        "Use npm ci (not npm install) in builder stage — deterministic install from package-lock.json",
+        "Use --only=production in npm ci to exclude devDependencies from the runtime image",
+        "Use alpine variant to minimize image size"
+      ],
+      "tradeoffs": [
+        "Alpine uses musl libc — some native Node.js addons may have compatibility issues; use debian-slim variants if needed"
+      ],
+      "anti_patterns": [
+        "Using npm install instead of npm ci — non-deterministic and slower",
+        "Copying node_modules from host into the image — includes devDependencies and platform-specific binaries"
+      ],
+      "aws_alignment": []
+    },
+    {
+      "id": "dockerfile_java_spring_boot_layers",
+      "category": "docker",
+      "concept": "Java Spring Boot multi-stage Dockerfile with layer extraction",
+      "description": "Two-stage Spring Boot Dockerfile: builder stage (maven:3.9-eclipse-temurin-17) runs mvn dependency:go-offline -B to cache deps, then mvn package -DskipTests -B. Runtime stage (eclipse-temurin:17-jre-alpine) creates non-root appuser, runs java -Djarmode=layertools -jar app.jar extract to split JAR into layers for better Docker caching, adds HEALTHCHECK with wget on /actuator/health. JVM options: -XX:MaxRAMPercentage=75.0, -XX:+UseContainerSupport.",
+      "decision_rules": [
+        "Run mvn dependency:go-offline before copying src — creates a cacheable layer for Maven dependencies",
+        "Use -Djarmode=layertools to extract Spring Boot layers for optimized Docker caching on partial rebuilds",
+        "Use -XX:UseContainerSupport and -XX:MaxRAMPercentage=75.0 for proper JVM memory management in containers"
+      ],
+      "tradeoffs": [
+        "Layer extraction increases build steps but significantly reduces rebuild time when only application code changes"
+      ],
+      "anti_patterns": [
+        "Copying all Maven dependencies into the final image — use the JRE runtime stage only",
+        "Not setting -XX:UseContainerSupport — JVM may use host memory limits instead of container limits, causing OOMKills"
+      ],
+      "aws_alignment": ["Set JVM MaxRAMPercentage to leave headroom for the container memory limit overhead in ECS/EKS"]
+    },
+    {
+      "id": "dockerfile_dockerignore_template",
+      "category": "docker",
+      "concept": "Comprehensive .dockerignore template",
+      "description": "Exclude from Docker build context: version control (.git/, .gitignore, .gitattributes), secrets (.env, .env.*, *.pem, *.key, *.p12, *.pfx, secrets/), Python artifacts (__pycache__/, *.pyc, .venv/, dist/, .pytest_cache/, .mypy_cache/, htmlcov/), Node artifacts (node_modules/, npm-debug.log, .npm/), Docker files (Dockerfile*, docker-compose*, .dockerignore), IDE files (.idea/, .vscode/, .DS_Store), CI/CD files (.github/, Jenkinsfile), docs (docs/, *.md), tests (tests/, test/, spec/).",
+      "decision_rules": [
+        "Always include a .dockerignore in every project that has a Dockerfile",
+        "Exclude .env* patterns to prevent accidental secret inclusion in build context",
+        "Exclude tests/ to keep production images smaller"
+      ],
+      "tradeoffs": [
+        "Excluding Dockerfile and docker-compose files from context is safe but may complicate multi-stage builds that copy compose files — adjust as needed"
+      ],
+      "anti_patterns": [
+        "Not having a .dockerignore — entire repository including secrets is sent to Docker daemon",
+        "Using COPY . . without a .dockerignore"
+      ],
+      "aws_alignment": []
+    },
+    {
+      "id": "dockerfile_cache_optimization",
+      "category": "docker",
+      "concept": "Docker layer cache optimization strategy",
+      "description": "Optimize Docker build cache by separating frequently changing layers from stable layers. Pattern: COPY requirements.txt . (stable — cache hit), RUN pip install -r requirements.txt (cached unless requirements change), COPY . . (frequently changing — always invalidates). The wrong pattern copies all source before installing, invalidating the pip install cache on every code change.",
+      "decision_rules": [
+        "Always copy dependency manifests (requirements.txt, package.json, pom.xml) before copying source code",
+        "Place COPY . . as late as possible in the Dockerfile to maximize cache reuse of earlier layers"
+      ],
+      "tradeoffs": [
+        "Separate dependency and source COPY instructions add a line to the Dockerfile but dramatically reduce CI build times"
+      ],
+      "anti_patterns": [
+        "COPY . . followed by RUN pip install — invalidates pip cache on every code change",
+        "Combining dependency installation and source copy in a single RUN — prevents cache layering"
+      ],
+      "aws_alignment": ["Use GitHub Actions cache with type=gha for Docker BuildKit layer caching in CI (cache-from/cache-to gha)"]
+    }
+  ]
+}

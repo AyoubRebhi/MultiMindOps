@@ -5,6 +5,11 @@ from pathlib import Path
 from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve .env relative to this file's location so the key loads correctly
+# regardless of the working directory when running scripts like ingest_qdrant.py.
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 class Settings(BaseSettings):
     APP_NAME: str = "DevSecOps AI Platform"
@@ -37,18 +42,46 @@ class Settings(BaseSettings):
     # Ollama (embeddings locaux)
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_EMBED_MODEL: str = "nomic-embed-text:v1.5"
+    # Ollama (semantic chunking local)
+    OLLAMA_CHUNK_MODEL: str = "llama3.2:3b"
 
-    # Gemini (chunking sémantique)
+    # Chunking provider selection (ingestion/offline capable)
+    # - "local"    : Ollama semantic chunking (default)
+    # - "fallback" : deterministic (no LLM)
+    CHUNKING_PROVIDER: str = "local"
+    # Markdown-specific chunking policy (orthogonal to CHUNKING_PROVIDER):
+    # - "fallback" : deterministic fallback for markdown (default)
+    # - "local"    : always try local Ollama for markdown
+    # - "auto"     : local only for small/simple markdown, else fallback
+    MARKDOWN_CHUNKING_MODE: str = "fallback"
+    MARKDOWN_LOCAL_MAX_CHARS: int = 8000
+    MARKDOWN_LOCAL_MAX_CODEBLOCKS: int = 12
+
+    # Gemini (legacy chunking — deprecated)
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash-lite"
 
-    # Generic LLM provider — OpenAI-compatible endpoint (NVIDIA NIM, Together.ai, Groq, etc.)
-    # LLM_API_KEY falls back to GROQ_API_KEY when left empty.
-    LLM_API_KEY: str = ""
-    LLM_BASE_URL: str = "https://api.groq.com/openai/v1"
-    LLM_MODEL: str = "llama3-70b-8192"
+    # Lightning AI — primary provider for RAG (chunking + evaluation)
+    # OpenAI-compatible endpoint.  Set LIGHTNING_API_KEY to enable.
+    LIGHTNING_API_KEY: str = ""
+    LIGHTNING_BASE_URL: str = "https://api.lightning.ai/v1"
+    # 8B: fast + cheap for chunking ($0.05/1M tokens)
+    LIGHTNING_MODEL: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    # 70B: better reasoning for LLM-as-judge evaluation ($0.90/1M tokens)
+    LIGHTNING_EVAL_MODEL: str = "meta-llama/Meta-Llama-3.1-70B-Instruct"
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Provider selection for RAG tasks.
+    # "lightning" → always use Lightning AI
+    # "groq"      → always use Groq
+    # "auto"      → Lightning if LIGHTNING_API_KEY is set, else Groq
+    LLM_PROVIDER: str = "auto"
+
+    # Generic LLM provider (kept for backward-compat; NVIDIA NIM was here)
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
+    LLM_MODEL: str = "meta/llama3-70b-instruct"
+
+    model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
 
     def get_groq_api_keys(self) -> list[str]:
         return [item["value"] for item in self.get_groq_key_entries()]

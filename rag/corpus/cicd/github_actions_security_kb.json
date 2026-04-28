@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "id": "github_actions_security_kb",
+    "title": "GitHub Actions — Security and CI/CD Best Practices",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "github_actions_secure_workflow_structure",
+      "category": "cicd",
+      "concept": "Secure GitHub Actions workflow structure",
+      "description": "Structure a DevSecOps CI/CD pipeline with: (1) test job (lint + pytest), (2) sast job (Semgrep + CodeQL), (3) dependency-scan job (Gitleaks + OWASP Dependency-Check + Safety), (4) docker-build job with Trivy scan, (5) push-image job (main branch only, OIDC auth to ECR). Set global permissions: contents: read. Grant additional permissions per job only as needed.",
+      "decision_rules": [
+        "Set global permissions: contents: read at workflow level — override per job for elevated needs",
+        "Gate docker-build on test and sast completion via needs: [test, sast]",
+        "Restrict push-image to main branch only via if: github.ref == 'refs/heads/main'"
+      ],
+      "tradeoffs": [
+        "More pipeline stages add latency — parallelize independent jobs (test, sast, dependency-scan) to reduce wall-clock time"
+      ],
+      "anti_patterns": [
+        "Setting permissions: write-all at workflow level — grant minimum permissions per job",
+        "Pushing images before security scans pass"
+      ],
+      "aws_alignment": ["Use OIDC (id-token: write permission) for AWS authentication — no long-lived access keys"]
+    },
+    {
+      "id": "github_actions_secrets_security",
+      "category": "cicd",
+      "concept": "Secrets management in GitHub Actions",
+      "description": "Use ${{ secrets.NAME }} syntax for all sensitive values. Never echo or print secrets. Use OIDC (id-token: write) for AWS/GCP authentication instead of long-lived access key pairs. Never hardcode credentials (e.g. AWS_ACCESS_KEY: AKIAIOSFODNN7EXAMPLE) directly in workflow YAML.",
+      "decision_rules": [
+        "Reference all secrets via ${{ secrets.NAME }} — never inline credentials",
+        "Use OIDC role assumption (aws-actions/configure-aws-credentials with role-to-assume) instead of static AWS keys",
+        "Rotate any accidentally exposed secret immediately"
+      ],
+      "tradeoffs": [
+        "OIDC setup requires creating an IAM OIDC provider and IAM role with trust policy — one-time setup cost"
+      ],
+      "anti_patterns": [
+        "Hardcoding AWS_ACCESS_KEY_ID or any token directly in workflow YAML",
+        "Using echo or run: echo ${{ secrets.SECRET }} — GitHub may mask but this is risky",
+        "Storing long-lived AWS access keys as GitHub Secrets"
+      ],
+      "aws_alignment": ["Configure AWS IAM OIDC provider for github.com to enable keyless AWS authentication from GitHub Actions"]
+    },
+    {
+      "id": "github_actions_dependabot",
+      "category": "cicd",
+      "concept": "Dependabot for automated dependency updates",
+      "description": "Configure .github/dependabot.yml with update schedules for pip, docker, and github-actions ecosystems. Set interval: weekly, open-pull-requests-limit: 5, and labels for triage. Dependabot automatically creates PRs when new versions are available.",
+      "decision_rules": [
+        "Enable Dependabot for all three ecosystems: pip (Python deps), docker (base images), github-actions (action versions)",
+        "Set open-pull-requests-limit to prevent too many PRs from overwhelming the team"
+      ],
+      "tradeoffs": [
+        "Dependabot PRs require review — can generate noise if not triaged promptly",
+        "Auto-merge should only be enabled for patch-level updates with passing tests"
+      ],
+      "anti_patterns": [
+        "Not pinning action versions (e.g. uses: actions/checkout@main) — makes Dependabot updates non-deterministic",
+        "Ignoring Dependabot PRs — allows dependency CVEs to accumulate"
+      ],
+      "aws_alignment": []
+    },
+    {
+      "id": "github_actions_fastapi_ci_example",
+      "category": "cicd",
+      "concept": "Complete FastAPI CI pipeline with PostgreSQL service and Trivy",
+      "description": "GitHub Actions CI for FastAPI: uses postgres:15 as a service container with health check (pg_isready, --health-interval 10s), runs pytest with DATABASE_URL pointing to the service container, builds Docker image with docker build, runs Trivy scan on the built image with severity CRITICAL and exit-code 1.",
+      "decision_rules": [
+        "Use GitHub Actions service containers for integration testing with real databases",
+        "Set --health-cmd pg_isready with health-interval and health-retries to ensure PostgreSQL is ready before tests run",
+        "Run Trivy scan on the CI-built image before it can be promoted to any registry"
+      ],
+      "tradeoffs": [
+        "Service containers add startup time to the CI job — parallel job execution reduces overall pipeline time"
+      ],
+      "anti_patterns": [
+        "Mocking the database in integration tests — diverges from production behavior",
+        "Building and pushing Docker images without any vulnerability scan"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

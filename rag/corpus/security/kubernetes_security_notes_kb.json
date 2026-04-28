@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "id": "security_kubernetes_notes_kb",
+    "title": "Security — Kubernetes Manifest Reminders",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "security_kubernetes_notes",
+      "category": "kubernetes",
+      "concept": "Kubernetes Security Baseline Reminders",
+      "description": "Security reminders applied during Kubernetes manifest generation: avoid broad privileges in pods, prefer explicit container ports and label selectors, keep sensitive values out of plain Secret manifests committed to version control.",
+      "decision_rules": [
+        "Never set privileged: true or allow broad RBAC permissions (* verbs on resources)",
+        "Always specify explicit containerPort values and label selectors in Deployment and Service",
+        "Use External Secrets Operator or Sealed Secrets — avoid committing base64-encoded secrets in plain Secret manifests"
+      ],
+      "tradeoffs": [],
+      "anti_patterns": [
+        "Using privileged: true in pod specs — grants full kernel access",
+        "Committing Kubernetes Secret manifests with base64-encoded sensitive values to git",
+        "Using wildcard RBAC verbs (verbs: [\"*\"]) or wildcard resources"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

@@ -1,0 +1,163 @@
+{
+  "metadata": {
+    "id": "cis_kubernetes_benchmark_kb",
+    "title": "CIS Kubernetes Benchmark — Security Best Practices",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "cis_k8s_security_context",
+      "category": "kubernetes",
+      "concept": "Mandatory SecurityContext for all pods (CIS 5.2)",
+      "description": "Every Pod must define a restrictive SecurityContext. Pod-level: runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, fsGroup: 1001, seccompProfile.type: RuntimeDefault. Container-level: allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities.drop: [ALL]. Mount emptyDir for /tmp if read-only filesystem is set.",
+      "decision_rules": [
+        "Apply both pod-level and container-level SecurityContext — they are complementary",
+        "Use seccompProfile.type: RuntimeDefault to restrict system calls",
+        "Mount emptyDir volumes at paths that require write access (e.g. /tmp)"
+      ],
+      "tradeoffs": [
+        "readOnlyRootFilesystem may break applications that write to the container filesystem — identify and mount emptyDir for those paths"
+      ],
+      "anti_patterns": [
+        "Deploying pods without any SecurityContext",
+        "Setting allowPrivilegeEscalation: true or omitting it (defaults to true without explicit false)"
+      ],
+      "aws_alignment": ["EKS enforces Pod Security Standards — set namespace labels pod-security.kubernetes.io/enforce: restricted"]
+    },
+    {
+      "id": "cis_k8s_rbac_least_privilege",
+      "category": "kubernetes",
+      "concept": "RBAC with least privilege (CIS 5.1)",
+      "description": "Create a dedicated ServiceAccount per application with automountServiceAccountToken: false. Define a Role with only required verbs on required resources. Bind via RoleBinding. Do not grant access to secrets unless strictly necessary.",
+      "decision_rules": [
+        "Create a dedicated ServiceAccount for each workload — never use the default ServiceAccount",
+        "Set automountServiceAccountToken: false on ServiceAccount to prevent token auto-mounting",
+        "Grant only required verbs (get, list) on required resources — never use wildcard (*)"
+      ],
+      "tradeoffs": [
+        "Fine-grained RBAC requires understanding of which API resources each workload actually accesses"
+      ],
+      "anti_patterns": [
+        "Using the default ServiceAccount for application workloads",
+        "Granting cluster-admin or wildcard permissions to application ServiceAccounts",
+        "Adding secrets to the Role resource list without justification"
+      ],
+      "aws_alignment": ["Map to EKS IAM Roles for Service Accounts (IRSA) for AWS API access from pods"]
+    },
+    {
+      "id": "cis_k8s_network_policies",
+      "category": "kubernetes",
+      "concept": "Network isolation with default-deny NetworkPolicy (CIS 5.3)",
+      "description": "Apply a default-deny-all NetworkPolicy in each namespace (podSelector: {}, policyTypes: [Ingress, Egress]). Then add explicit allow policies per service. Example: allow Ingress from ingress-nginx namespace on port 8000 only for pods matching app=api.",
+      "decision_rules": [
+        "Start with a default-deny-all policy in every namespace",
+        "Add explicit ingress and egress allow rules only for required traffic paths",
+        "Use namespaceSelector for cross-namespace traffic (e.g. allowing ingress controller)"
+      ],
+      "tradeoffs": [
+        "NetworkPolicy requires a CNI plugin that supports it (Calico, Cilium, Weave) — does not work with Flannel alone"
+      ],
+      "anti_patterns": [
+        "Operating namespaces with no NetworkPolicy (all traffic allowed by default)",
+        "Using podSelector: {} in allow policies without scoping by policyTypes"
+      ],
+      "aws_alignment": ["Use VPC CNI with Calico on EKS for NetworkPolicy enforcement", "Complement with Security Groups for Pods on EKS for L4 controls"]
+    },
+    {
+      "id": "cis_k8s_secrets_management",
+      "category": "kubernetes",
+      "concept": "Secrets management with External Secrets Operator (CIS 5.4)",
+      "description": "Use External Secrets Operator (ESO) or Sealed Secrets instead of plain Kubernetes Secret manifests. ESO ExternalSecret references a SecretStore (e.g. vault-backend) and syncs secrets into a Kubernetes Secret. ConfigMaps should hold only non-sensitive configuration.",
+      "decision_rules": [
+        "Never commit plain Kubernetes Secret manifests with base64-encoded values to version control",
+        "Use External Secrets Operator to sync from AWS Secrets Manager, Vault, or GCP Secret Manager",
+        "Use ConfigMaps exclusively for non-sensitive configuration (APP_ENV, LOG_LEVEL)"
+      ],
+      "tradeoffs": [
+        "ESO adds operational complexity — requires installing the controller and configuring SecretStore",
+        "Sealed Secrets is simpler but less flexible — secrets can only be decrypted by the cluster"
+      ],
+      "anti_patterns": [
+        "Storing database URLs or passwords in ConfigMaps (not encrypted at rest)",
+        "Committing Kubernetes Secrets with real credentials to git repositories"
+      ],
+      "aws_alignment": ["Use ESO with AWS Secrets Manager provider on EKS", "Use Secrets Store CSI Driver with AWS SSM Parameter Store as an alternative"]
+    },
+    {
+      "id": "cis_k8s_resource_limits",
+      "category": "kubernetes",
+      "concept": "Mandatory resource requests and limits (CIS 5.2.4)",
+      "description": "Every container must define both resources.requests and resources.limits. Example: requests memory 128Mi cpu 100m, limits memory 512Mi cpu 500m. Without limits, a single pod can starve other workloads on the node.",
+      "decision_rules": [
+        "Define both requests (scheduler hint) and limits (enforcement) for every container",
+        "Use LimitRange objects to enforce defaults for namespaces missing explicit resource declarations"
+      ],
+      "tradeoffs": [
+        "Limits that are too tight cause OOMKilled events or CPU throttling — profile workloads before setting values"
+      ],
+      "anti_patterns": [
+        "Deploying containers with no resource limits to shared cluster nodes",
+        "Setting limits without requests — scheduler cannot make optimal placement decisions"
+      ],
+      "aws_alignment": ["EKS node autoscaling (Karpenter) uses requests to pack pods onto nodes efficiently"]
+    },
+    {
+      "id": "cis_k8s_health_probes",
+      "category": "kubernetes",
+      "concept": "Liveness and Readiness probes for workload health",
+      "description": "Define livenessProbe (restarts unhealthy pods: httpGet /health, initialDelaySeconds 15, periodSeconds 20, failureThreshold 3) and readinessProbe (removes unhealthy pods from Service endpoints: httpGet /ready, initialDelaySeconds 5, periodSeconds 10) for every container.",
+      "decision_rules": [
+        "Use readinessProbe to control traffic routing — pod is only added to Service endpoints when ready",
+        "Use livenessProbe to restart pods stuck in an unrecoverable state",
+        "Set startupProbe for slow-starting applications to prevent premature liveness failures"
+      ],
+      "tradeoffs": [
+        "Overly aggressive liveness probes (short timeouts, low failureThreshold) cause unnecessary restarts",
+        "Missing readiness probes cause traffic to be sent to not-yet-ready pods"
+      ],
+      "anti_patterns": [
+        "Using the same endpoint and thresholds for both liveness and readiness probes",
+        "Not defining any health probes — Kubernetes cannot detect application-level failures"
+      ],
+      "aws_alignment": []
+    },
+    {
+      "id": "cis_k8s_pod_disruption_budget",
+      "category": "kubernetes",
+      "concept": "Pod Disruption Budget for high availability",
+      "description": "A PodDisruptionBudget (PDB) limits voluntary disruptions (node drains, rolling updates). Example: minAvailable: 2 with selector app=api ensures at least 2 pods remain available during node maintenance.",
+      "decision_rules": [
+        "Create a PDB for every production Deployment with more than 1 replica",
+        "Use minAvailable (absolute) or maxUnavailable (percentage) depending on SLO requirements"
+      ],
+      "tradeoffs": [
+        "PDB with minAvailable equal to replicas will block node drains — leave at least 1 pod drainable"
+      ],
+      "anti_patterns": [
+        "Deploying multi-replica workloads without a PDB — all pods may be disrupted simultaneously",
+        "Setting minAvailable: 0 — defeats the purpose of the PDB"
+      ],
+      "aws_alignment": ["PDB works with EKS Managed Node Groups during node version upgrades"]
+    },
+    {
+      "id": "cis_k8s_ingress_tls",
+      "category": "kubernetes",
+      "concept": "Ingress with TLS termination",
+      "description": "Configure Ingress with TLS using cert-manager (cluster-issuer: letsencrypt-prod). Annotations: ssl-redirect: true, force-ssl-redirect: true. TLS spec references a Secret containing the certificate. All HTTP traffic redirected to HTTPS at the ingress level.",
+      "decision_rules": [
+        "Always terminate TLS at the Ingress — never expose plain HTTP to the internet",
+        "Use cert-manager with Let's Encrypt for automated certificate provisioning and renewal",
+        "Set nginx.ingress.kubernetes.io/ssl-redirect: true to enforce HTTPS"
+      ],
+      "tradeoffs": [
+        "Let's Encrypt rate limits apply — use staging issuer for testing",
+        "Certificate renewal requires outbound internet access from the cluster for ACME challenges"
+      ],
+      "anti_patterns": [
+        "Exposing services over HTTP in production",
+        "Using self-signed certificates without a trust chain (causes browser/client warnings)"
+      ],
+      "aws_alignment": ["Alternatively use AWS ALB Ingress Controller with ACM certificates on EKS"]
+    }
+  ]
+}

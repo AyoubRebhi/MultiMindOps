@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "id": "dockerfile_fastapi_uvicorn_kb",
+    "title": "Dockerfile — FastAPI with Uvicorn",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "dockerfile_fastapi_uvicorn",
+      "category": "docker",
+      "concept": "FastAPI Uvicorn Minimal Dockerfile",
+      "description": "Minimal Dockerfile for a FastAPI backend started with uvicorn. Base image: python:3.11-slim. WORKDIR /app. Copies requirements.txt first, runs pip install --no-cache-dir, then copies full source. Sets PYTHONUNBUFFERED=1, exposes port 8000. CMD: sh -c uvicorn backend.app.main:app --host 0.0.0.0 --port 8000.",
+      "decision_rules": [
+        "Use when project_type=api_backend, framework=fastapi, runtime=pip",
+        "Use python:3.11-slim to keep image size minimal",
+        "Set PYTHONUNBUFFERED=1 so log output is streamed immediately to stdout"
+      ],
+      "tradeoffs": [
+        "No multi-stage build — image includes pip and build tools, larger than distroless variants",
+        "No non-root USER defined — extend with USER directive for production hardening"
+      ],
+      "anti_patterns": [
+        "Do not hardcode secrets in ENV or ARG instructions inside the Dockerfile",
+        "Do not COPY . . before COPY requirements.txt — breaks Docker layer caching"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

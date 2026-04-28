@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "id": "compose_fastapi_streamlit_postgres_kb",
+    "title": "Docker Compose — FastAPI + Streamlit + PostgreSQL",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "compose_fastapi_streamlit_postgres",
+      "category": "docker",
+      "concept": "Full-stack FastAPI + Streamlit + PostgreSQL Compose",
+      "description": "Compose pattern for a three-service stack: FastAPI backend (port 8000) receiving DATABASE_URL and GROQ_API_KEY, Streamlit frontend (port 8501) depending on backend, and PostgreSQL 15 database. Frontend overrides CMD to run streamlit. All credentials supplied via environment variables.",
+      "decision_rules": [
+        "Use for full-stack Python applications with Streamlit UI, FastAPI API, and PostgreSQL",
+        "Frontend depends_on backend — Compose starts backend service first",
+        "Pass GROQ_API_KEY and other third-party API keys only via .env or Docker secrets"
+      ],
+      "tradeoffs": [
+        "No persistent volume for database — add a named volume under volumes: for data durability",
+        "No readiness healthchecks — services may connect before dependencies finish initializing"
+      ],
+      "anti_patterns": [
+        "Do not hardcode API keys (e.g. GROQ_API_KEY) inline in docker-compose.yml",
+        "Do not expose all internal service ports to the host unnecessarily"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

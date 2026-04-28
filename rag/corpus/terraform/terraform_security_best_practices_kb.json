@@ -1,0 +1,175 @@
+{
+  "metadata": {
+    "id": "terraform_security_best_practices_kb",
+    "title": "Terraform IaC Security Best Practices",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "terraform_project_structure",
+      "category": "terraform",
+      "concept": "Recommended Terraform project structure",
+      "description": "Organize Terraform projects with separate files: main.tf (resources), variables.tf (input declarations), outputs.tf (outputs), providers.tf (provider config), versions.tf (version constraints), locals.tf (computed locals), and a modules/ directory for reusable components.",
+      "decision_rules": [
+        "Separate concerns into dedicated files — do not put everything in main.tf",
+        "Place reusable infrastructure patterns in modules/ with their own variables.tf and outputs.tf"
+      ],
+      "tradeoffs": [
+        "More files increase organization but require tooling (terragrunt, workspaces) for multi-environment management"
+      ],
+      "anti_patterns": [
+        "Putting all resources, variables, and outputs into a single main.tf",
+        "Hardcoding environment-specific values inside resource definitions"
+      ],
+      "aws_alignment": []
+    },
+    {
+      "id": "terraform_secure_backend",
+      "category": "terraform",
+      "concept": "Secure remote state with S3 + DynamoDB backend",
+      "description": "Configure Terraform backend with S3 (encrypted, KMS key) and DynamoDB for state locking. Required fields: bucket, key, region, encrypt=true, kms_key_id, dynamodb_table. Prevents concurrent state modifications and encrypts sensitive state data at rest.",
+      "decision_rules": [
+        "Always use a remote backend for team environments — never rely on local state",
+        "Enable encrypt=true and provide a KMS key for state file encryption at rest",
+        "Use DynamoDB for state locking to prevent concurrent terraform apply conflicts"
+      ],
+      "tradeoffs": [
+        "S3 backend requires the bucket and DynamoDB table to be provisioned before running terraform init"
+      ],
+      "anti_patterns": [
+        "Committing terraform.tfstate files to version control — state may contain plaintext secrets",
+        "Using local backend for shared or production environments"
+      ],
+      "aws_alignment": ["S3 bucket for state should have versioning enabled and public access blocked", "Use a dedicated AWS account for Terraform state storage"]
+    },
+    {
+      "id": "terraform_sensitive_variables",
+      "category": "terraform",
+      "concept": "Handling sensitive variables in Terraform",
+      "description": "Mark sensitive variables with sensitive = true to suppress their values in plan/apply logs. Never set sensitive defaults. Inject real values at runtime via environment variables: export TF_VAR_db_password=$(aws secretsmanager get-secret-value ...).",
+      "decision_rules": [
+        "Add sensitive = true to any variable containing a password, token, or key",
+        "Inject secrets via TF_VAR_* environment variables populated from a secrets manager at CI/CD time",
+        "Never set a default value on a sensitive variable"
+      ],
+      "tradeoffs": [
+        "sensitive = true hides values in plan output but they are still stored in state — encrypt state"
+      ],
+      "anti_patterns": [
+        "variable \"db_password\" { default = \"mysecretpassword\" }",
+        "Passing secrets as CLI arguments (visible in shell history and process list)"
+      ],
+      "aws_alignment": ["Retrieve secrets from AWS Secrets Manager in CI/CD before running Terraform apply"]
+    },
+    {
+      "id": "terraform_secure_outputs",
+      "category": "terraform",
+      "concept": "Secure Terraform output declarations",
+      "description": "Mark outputs that expose sensitive values with sensitive = true. Non-sensitive outputs (e.g. DB endpoint) can be marked sensitive = false. Sensitive outputs are still stored in state — ensure state is encrypted.",
+      "decision_rules": [
+        "Set sensitive = true on any output that references a password, token, private key, or secret value",
+        "Use outputs only for values required by other modules or CI/CD steps"
+      ],
+      "tradeoffs": [
+        "sensitive = true prevents outputs from being displayed but does not prevent them from being read by a caller module"
+      ],
+      "anti_patterns": [
+        "Outputting raw DB passwords or private keys without sensitive = true",
+        "Exporting secrets via outputs when they can be referenced directly within the same module"
+      ],
+      "aws_alignment": []
+    },
+    {
+      "id": "terraform_vpc_private_subnets",
+      "category": "terraform",
+      "concept": "VPC with private and public subnets",
+      "description": "Structure VPC with three layers: public subnets (ALB only, map_public_ip_on_launch=false), private app subnets (ECS/EKS workloads), private data subnets (RDS). Use count and cidrsubnet() for multi-AZ subnet creation. Apply common tags via local.common_tags.",
+      "decision_rules": [
+        "Never assign public IPs to application or database instances — use private subnets",
+        "Use at least 2 availability zones for high availability",
+        "Set map_public_ip_on_launch=false even on public subnets — assign EIPs explicitly where needed"
+      ],
+      "tradeoffs": [
+        "NAT Gateway required for private subnet internet egress — adds cost (~$35/month per AZ)"
+      ],
+      "anti_patterns": [
+        "Placing RDS instances in public subnets",
+        "Using a single availability zone for production VPC"
+      ],
+      "aws_alignment": ["Use aws_nat_gateway in public subnets for outbound internet access from private subnets", "Use VPC Endpoints for S3 and DynamoDB to avoid NAT Gateway costs for AWS API traffic"]
+    },
+    {
+      "id": "terraform_security_groups",
+      "category": "terraform",
+      "concept": "Restrictive security group configuration",
+      "description": "Security groups should allow only required ingress traffic from specific sources (other SGs, not CIDRs where possible). Egress should be restricted to required protocols/ports. Never allow 0.0.0.0/0 ingress on ports 22 (SSH) or 3306 (MySQL). Add description to every rule.",
+      "decision_rules": [
+        "Reference other security groups (not CIDR blocks) for ingress between AWS services",
+        "Restrict egress to HTTPS (443) for services that only call external APIs",
+        "Add a description field to every ingress/egress rule for auditability"
+      ],
+      "tradeoffs": [
+        "SG-to-SG references are region-specific — cross-region traffic requires CIDR-based rules"
+      ],
+      "anti_patterns": [
+        "ingress from_port=22 cidr_blocks=[\"0.0.0.0/0\"] — exposes SSH to the internet",
+        "egress from_port=0 to_port=0 protocol=-1 cidr_blocks=[\"0.0.0.0/0\"] — allows all outbound traffic"
+      ],
+      "aws_alignment": ["Enable VPC Flow Logs to audit security group traffic", "Use AWS Config rule restricted-ssh to detect open SSH rules"]
+    },
+    {
+      "id": "terraform_iac_scanning",
+      "category": "terraform",
+      "concept": "IaC security scanning with tfsec and Checkov",
+      "description": "Integrate IaC scanners into CI/CD: tfsec (tfsec . --severity HIGH), Checkov (checkov -d . --framework terraform --check CKV_AWS_*), Terrascan (terrascan scan -t terraform -d .). Use aquasecurity/tfsec-action in GitHub Actions workflows.",
+      "decision_rules": [
+        "Run tfsec or Checkov in CI/CD and fail the pipeline on HIGH severity findings",
+        "Use --check CKV_AWS_* to apply AWS-specific CIS benchmark checks with Checkov"
+      ],
+      "tradeoffs": [
+        "Scanners may produce false positives for intentional deviations — use .tfsec/config.yml or checkov skip annotations to document exceptions"
+      ],
+      "anti_patterns": [
+        "Running terraform apply without IaC security scanning in CI/CD",
+        "Suppressing all scanner warnings without documentation"
+      ],
+      "aws_alignment": ["AWS Security Hub integrates with Checkov results via SARIF format"]
+    },
+    {
+      "id": "terraform_centralized_tags",
+      "category": "terraform",
+      "concept": "Centralized tagging with locals",
+      "description": "Define common_tags in locals.tf and apply via tags = local.common_tags on every resource. Standard tags: Environment, Project, ManagedBy (terraform), Owner, CostCenter. Use merge(local.common_tags, {...}) to add resource-specific tags.",
+      "decision_rules": [
+        "Apply common_tags to every taggable AWS resource for cost allocation and governance",
+        "Use merge() to extend common tags with resource-specific tags rather than duplicating the base set"
+      ],
+      "tradeoffs": [
+        "Tags are eventually consistent on some AWS services — not suitable for real-time access control"
+      ],
+      "anti_patterns": [
+        "Hardcoding tag values individually on each resource instead of using locals",
+        "Not tagging resources — prevents cost attribution and governance enforcement"
+      ],
+      "aws_alignment": ["AWS Cost Explorer and Cost Allocation Tags require consistent tagging", "AWS Config can enforce mandatory tags via required-tags managed rule"]
+    },
+    {
+      "id": "terraform_versioned_modules",
+      "category": "terraform",
+      "concept": "Use pinned versions for Terraform modules",
+      "description": "Always pin module sources to a specific version when using Terraform Registry or Git sources. Example: module vpc with source terraform-aws-modules/vpc/aws and version = \"5.5.1\". Never use \"latest\" or an unpinned source.",
+      "decision_rules": [
+        "Pin module version to a specific release tag — never omit the version field",
+        "Update module versions deliberately after reviewing the changelog for breaking changes"
+      ],
+      "tradeoffs": [
+        "Pinned versions require manual updates — use Dependabot for Terraform to automate version bump PRs"
+      ],
+      "anti_patterns": [
+        "Omitting the version field on registry modules — pulls the latest version on every init",
+        "Using a git branch reference (ref=main) instead of a tag — non-deterministic builds"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

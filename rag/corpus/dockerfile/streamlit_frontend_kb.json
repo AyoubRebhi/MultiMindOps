@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "id": "dockerfile_streamlit_frontend_kb",
+    "title": "Dockerfile — Streamlit Frontend",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "dockerfile_streamlit_frontend",
+      "category": "docker",
+      "concept": "Streamlit Web UI Dockerfile",
+      "description": "Dockerfile for a Streamlit web UI service. Base: python:3.11-slim. Installs pip requirements, copies source, exposes port 8501. CMD: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0.",
+      "decision_rules": [
+        "Use when framework=streamlit, project_type=web_ui",
+        "Always bind to --server.address 0.0.0.0 (not 127.0.0.1) so the container port is reachable externally",
+        "Default Streamlit port is 8501 — map to desired host port in docker-compose or Kubernetes"
+      ],
+      "tradeoffs": [
+        "Single-stage build — suitable for frontend UI services where image size is less critical",
+        "No non-root user — add USER directive for security-hardened deployments"
+      ],
+      "anti_patterns": [
+        "Do not bind to 127.0.0.1 (localhost) inside the container — traffic will not reach the service",
+        "Do not hardcode --server.port if flexible port binding across environments is needed"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

@@ -1,0 +1,224 @@
+{
+  "metadata": {
+    "id": "core_terraform_concepts_kb",
+    "title": "Core Terraform Concepts — Decision Intelligence Knowledge Base",
+    "description": "Structured reasoning entries for Terraform core concepts. Used by AI Infrastructure Agent to make architecture decisions.",
+    "tags": ["terraform", "iac", "providers", "modules", "state", "variables", "outputs", "backend"],
+    "version": "1.0.0",
+    "source_alignment": [
+      "HashiCorp Terraform Documentation (developer.hashicorp.com/terraform/docs)",
+      "AWS Well-Architected Framework",
+      "Terraform AWS Reference Architecture"
+    ]
+  },
+  "entries": [
+    {
+      "id": "tf-001",
+      "category": "Core Terraform Concepts",
+      "concept": "Terraform Providers",
+      "description": "Providers are plugins that allow Terraform to interact with cloud platforms, SaaS services, and APIs. Each provider exposes a set of resource types and data sources. For AWS, the hashicorp/aws provider is the authoritative interface to all AWS services. Provider version pinning is critical in production to prevent unintended drift from upstream API changes.",
+      "decision_rules": [
+        "ALWAYS pin provider versions using ~> (pessimistic constraint) to allow only patch upgrades — e.g., ~> 5.0 locks to 5.x but not 6.0",
+        "USE multiple provider aliases when managing resources across different AWS regions or accounts in the same root module",
+        "DECLARE provider requirements in a dedicated versions.tf or providers.tf — never inline in main.tf",
+        "USE the aws provider alias pattern for cross-region resources like Route53, CloudFront (us-east-1), and disaster recovery replicas",
+        "UPGRADE provider versions deliberately and in isolation — never upgrade providers mid-feature development"
+      ],
+      "tradeoffs": [
+        "Pinning versions: stability and reproducibility vs. missing new resource types or security patches",
+        "Multi-provider configs: enables cross-account automation but increases complexity and auth surface",
+        "Frequent upgrades: access to new AWS services vs. risk of breaking changes in resource schemas"
+      ],
+      "anti_patterns": [
+        "Leaving provider version unconstrained (no version = latest = breaking changes on every plan)",
+        "Hardcoding AWS credentials inside the provider block — always use IAM roles or environment variables",
+        "Using the same provider for both DR regions without explicit aliases — causes plan conflicts",
+        "Mixing provider versions across modules without constraint alignment — leads to version conflicts"
+      ],
+      "aws_alignment": [
+        "Security Pillar: credential management through IAM roles, not static keys",
+        "Operational Excellence: version pinning enables reproducible deployments"
+      ]
+    },
+    {
+      "id": "tf-002",
+      "category": "Core Terraform Concepts",
+      "concept": "Terraform Resources",
+      "description": "Resources are the fundamental building blocks of Terraform infrastructure. Each resource block maps to one real-world infrastructure object. Resource lifecycle, dependencies, and ordering are managed by Terraform's dependency graph. Understanding implicit vs. explicit dependencies and lifecycle hooks (create_before_destroy, prevent_destroy, ignore_changes) is critical for production-grade infrastructure.",
+      "decision_rules": [
+        "USE implicit dependencies (reference expressions) over explicit depends_on — Terraform resolves them more efficiently",
+        "USE depends_on ONLY when a dependency exists that Terraform cannot detect through references (e.g., IAM policy propagation timing)",
+        "APPLY create_before_destroy lifecycle rule for resources that cannot have downtime during replacement (e.g., Auto Scaling Launch Templates, TLS certificates)",
+        "APPLY prevent_destroy to stateful resources: RDS instances, S3 buckets with data, EFS volumes",
+        "USE ignore_changes for attributes managed outside Terraform (e.g., AMI IDs managed by autoscaling, tags set by AWS Config)"
+      ],
+      "tradeoffs": [
+        "Granular resources: full control and visibility vs. more code and higher state complexity",
+        "Using AWS modules vs. raw resources: faster development vs. less control over individual settings",
+        "Lifecycle rules: prevents accidental deletion vs. may require manual intervention for replacements"
+      ],
+      "anti_patterns": [
+        "Creating resources without tagging — violates cost attribution and compliance requirements",
+        "Hardcoding resource names with no randomness suffix when a resource must be unique — causes naming conflicts on recreation",
+        "Not using count or for_each for repeated patterns — leads to copy-paste IaC with drift risk",
+        "Importing existing resources without a plan to bring them fully under Terraform management"
+      ],
+      "aws_alignment": [
+        "Operational Excellence: lifecycle rules prevent unintended downtime",
+        "Reliability: prevent_destroy on stateful resources reduces blast radius of accidents",
+        "Cost Optimization: tagging strategy enables cost allocation per team/environment"
+      ]
+    },
+    {
+      "id": "tf-003",
+      "category": "Core Terraform Concepts",
+      "concept": "Terraform Modules",
+      "description": "Modules are reusable, composable units of Terraform configuration. They encapsulate related resources with a defined interface (input variables and outputs). Modules enforce consistency across environments and teams. There are two categories: root modules (what you execute) and child modules (what you call). The terraform-aws-modules GitHub organization provides battle-tested, AWS-specific modules like terraform-aws-modules/eks/aws that embed production defaults.",
+      "decision_rules": [
+        "CREATE a module when the same infrastructure pattern repeats across 2+ environments or teams",
+        "USE public registry modules (terraform-aws-modules) for foundational patterns: VPC, EKS, RDS — they embed AWS best practices",
+        "BUILD internal modules for business-specific patterns: application stacks, compliance baselines",
+        "COMPOSE modules from smaller modules rather than monolithic super-modules — easier to test and maintain",
+        "VERSION pin all module sources — both registry modules (~> 20.0) and Git sources (?ref=v2.1.0)",
+        "EXPOSE only the variables that callers need to change — default all production-safe values inside the module"
+      ],
+      "tradeoffs": [
+        "Module abstraction: reduced duplication vs. abstraction cost — debugging requires understanding multiple layers",
+        "Public registry modules: fast adoption of best practices vs. opinionated defaults may not fit all use cases",
+        "Deep module nesting: clean separation vs. difficult to trace resource origins in plans",
+        "Module versioning: stability guarantee vs. delayed adoption of upstream security fixes"
+      ],
+      "anti_patterns": [
+        "Creating a single God-module that contains all infrastructure — untestable, unmaintainable, prevents independent deployments",
+        "Calling modules without pinned versions — upstream changes break your infrastructure on next init",
+        "Exposing every resource attribute as a module variable — creates a passthrough module with no value",
+        "Mixing module outputs with direct resource references in the same root module — creates unclear ownership",
+        "Duplicating AWS modules from public registry internally without adding value — maintenance burden with no benefit"
+      ],
+      "aws_alignment": [
+        "Operational Excellence: modules enforce standards across teams, reduce human error",
+        "Security Pillar: security baselines encoded in modules cannot be bypassed per-deployment",
+        "Cost Optimization: standardized modules prevent over-provisioned outliers"
+      ]
+    },
+    {
+      "id": "tf-004",
+      "category": "Core Terraform Concepts",
+      "concept": "Remote State Management — S3 + DynamoDB",
+      "description": "Terraform state is the source of truth for managed infrastructure. In production, state must be stored remotely (S3) with encryption, versioning, and distributed locking (DynamoDB). State isolation between environments prevents a failed prod deployment from corrupting staging state. State should be organized by the blast radius of change — network state separate from application state.",
+      "decision_rules": [
+        "ALWAYS use remote S3 backend in production — local state is a single point of failure and a security risk",
+        "ENABLE S3 versioning on the state bucket — enables rollback to previous known-good state",
+        "ENABLE S3 server-side encryption (AES-256 or KMS) for state at rest — state contains sensitive values",
+        "CREATE a DynamoDB table for state locking — prevents concurrent applies from corrupting state",
+        "SEPARATE state files by: environment (dev/staging/prod) AND layer (network, compute, data) — limits blast radius",
+        "USE terraform_remote_state data source to share outputs across state files rather than duplicating resources",
+        "RESTRICT S3 state bucket access via IAM — only CI/CD roles and authorized engineers should read/write"
+      ],
+      "tradeoffs": [
+        "State isolation by layer: small blast radius vs. more state files to manage and coordinate",
+        "Single monolithic state: simple coordination vs. any failure/lock blocks all deployments",
+        "KMS encryption: strong security vs. additional cost and KMS API dependency",
+        "State locking: prevents corruption vs. a crashed apply holds the lock until DynamoDB TTL expires"
+      ],
+      "anti_patterns": [
+        "Committing state files to Git — exposes secrets and resource IDs, creates merge conflicts",
+        "Using a single state file for all environments — a plan mistake in prod destroys the ability to manage dev",
+        "Not enabling state versioning — no recovery path after accidental terraform destroy",
+        "Sharing state files across teams with different deployment cadences — constant lock contention",
+        "Storing the state bucket and lock table in the same account as the managed infrastructure without separate access control"
+      ],
+      "aws_alignment": [
+        "Security Pillar: encrypted state, least-privilege access to state bucket",
+        "Reliability Pillar: state versioning enables recovery from accidental destruction",
+        "Operational Excellence: state isolation by layer enables independent team deployments"
+      ]
+    },
+    {
+      "id": "tf-005",
+      "category": "Core Terraform Concepts",
+      "concept": "Variables and Outputs",
+      "description": "Variables define the interface of a Terraform configuration, allowing reuse across environments. Outputs expose resource attributes for consumption by other modules or root configurations. A disciplined variable strategy separates environment-specific values (tfvars files) from module defaults, and sensitive values from non-sensitive ones. Outputs should expose exactly what downstream consumers need — not raw resource objects.",
+      "decision_rules": [
+        "DECLARE variable types explicitly — prevents runtime errors from type mismatches",
+        "MARK variables as sensitive = true for passwords, tokens, and private keys — prevents Terraform from printing them in logs",
+        "USE .tfvars files per environment (dev.tfvars, prod.tfvars) — never commit prod values to Git",
+        "SET safe default values for optional variables, requiring only what must differ per environment",
+        "OUTPUT the minimum surface area: IDs, ARNs, DNS names — not full resource objects",
+        "USE output descriptions — downstream teams and modules need to know what an output represents",
+        "VALIDATE variables with custom validation blocks when the range of valid values is constrained"
+      ],
+      "tradeoffs": [
+        "Strict typing: catches errors early vs. requires more upfront definition work",
+        "Sensitive marking: protects secrets in logs vs. makes debugging harder when values are hidden",
+        "Many fine-grained variables: highly flexible module interface vs. complex caller experience",
+        "Defaulting everything: fast to call vs. hides important configuration that should be intentional"
+      ],
+      "anti_patterns": [
+        "Passing secrets as plain-text variables in tfvars committed to version control",
+        "Using string type for all variables — loses validation and readability benefits",
+        "Outputting entire resource objects — exposes unintended attributes and creates tight coupling",
+        "Not validating list or map variable lengths when the module expects specific counts",
+        "Using variable names that shadow Terraform built-in functions or keywords"
+      ],
+      "aws_alignment": [
+        "Security Pillar: sensitive variables prevent credential leakage in CI/CD logs",
+        "Operational Excellence: typed and validated variables reduce deployment errors"
+      ]
+    },
+    {
+      "id": "tf-006",
+      "category": "Core Terraform Concepts",
+      "concept": "Terraform Data Sources",
+      "description": "Data sources allow Terraform to read existing infrastructure state without managing it. They are the bridge between Terraform-managed resources and pre-existing AWS resources (shared VPCs, AMIs, account IDs, Route53 zones). Correct use of data sources prevents hardcoding IDs and ARNs, making configurations portable across accounts and regions.",
+      "decision_rules": [
+        "USE aws_caller_identity data source to get the current account ID dynamically — never hardcode account IDs",
+        "USE aws_availability_zones data source to enumerate AZs — prevents hardcoded AZ names that differ by region",
+        "USE aws_ami data source to find the latest approved AMI — ensures patched images without manual updates",
+        "USE aws_vpc or aws_subnet data sources when referencing shared network infrastructure not managed by this root module",
+        "USE aws_ssm_parameter data source to fetch secrets at plan time — keeps secrets out of tfvars"
+      ],
+      "tradeoffs": [
+        "Data sources vs. hardcoded values: portability and freshness vs. plan time API calls that can fail",
+        "Dynamic AMI lookup: always latest vs. unpredictable changes to instance startup behavior",
+        "Remote state data source vs. direct data source: explicit dependency graph vs. tight coupling between state files"
+      ],
+      "anti_patterns": [
+        "Hardcoding AMI IDs — becomes outdated immediately, breaks in other regions",
+        "Hardcoding account IDs — module is not portable across accounts",
+        "Using data sources to read resources managed by the same root module — creates circular dependencies",
+        "Not filtering data sources sufficiently — returns unexpected resources in complex accounts"
+      ],
+      "aws_alignment": [
+        "Operational Excellence: dynamic references prevent configuration drift from manual changes",
+        "Reliability: latest AMI data source ensures patched base images"
+      ]
+    },
+    {
+      "id": "tf-007",
+      "category": "Core Terraform Concepts",
+      "concept": "Terraform Workspaces vs. Directory-Based Environment Isolation",
+      "description": "Terraform offers two strategies for environment isolation: workspaces (logical separation within the same backend) and directory-based isolation (separate root modules per environment). Workspaces are a common source of production incidents because they share a codebase and can be accidentally targeted. Directory-based isolation is the AWS and HashiCorp recommended approach for prod/staging/dev separation.",
+      "decision_rules": [
+        "USE directory-based isolation (separate root modules) for production environments — dev/, staging/, prod/ each have their own state",
+        "USE workspaces ONLY for ephemeral, identical environments like PR preview environments or feature branch testing",
+        "NEVER use workspaces to separate prod from staging — the risk of running plan/apply in the wrong workspace is too high",
+        "STRUCTURE directories to mirror environment blast radius: changes to prod/ require explicit directory targeting"
+      ],
+      "tradeoffs": [
+        "Workspaces: DRY code vs. implicit environment selection — easy to apply to wrong environment",
+        "Directory isolation: explicit and safe vs. code duplication across environment directories (mitigated by shared modules)",
+        "Workspace approach: single codebase vs. single backend failure affects all environments"
+      ],
+      "anti_patterns": [
+        "Using workspaces for prod/staging/dev differentiation in critical systems",
+        "Not validating current workspace before destructive operations in CI/CD",
+        "Allowing workspace switching without MFA or approval gates in production pipelines"
+      ],
+      "aws_alignment": [
+        "Reliability Pillar: directory isolation prevents blast radius cross-contamination between environments",
+        "Security Pillar: explicit environment targeting reduces risk of accidental production changes"
+      ]
+    }
+  ]
+}

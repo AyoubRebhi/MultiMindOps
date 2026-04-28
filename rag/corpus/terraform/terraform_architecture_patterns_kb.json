@@ -1,0 +1,278 @@
+{
+  "metadata": {
+    "id": "terraform_architecture_patterns_kb",
+    "title": "Terraform Architecture Patterns — Decision Intelligence Knowledge Base",
+    "description": "Structured reasoning entries for Terraform architecture selection. Covers monolith, microservices, multi-account, EKS platform, and landing zone patterns used by the AI Infrastructure Agent.",
+    "tags": ["terraform", "aws", "architecture", "monolith", "microservices", "multi-account", "eks", "landing-zone", "hub-spoke", "platform-engineering"],
+    "version": "1.0.0",
+    "source_alignment": [
+      "HashiCorp Terraform Reference Architecture (developer.hashicorp.com/terraform/enterprise/deploy/replicated/architecture)",
+      "AWS Well-Architected Framework",
+      "Terraform AWS EKS Tutorial",
+      "AWS Organizations Landing Zone best practices"
+    ]
+  },
+  "entries": [
+    {
+      "id": "arch-001",
+      "category": "Terraform Architecture Patterns",
+      "concept": "Monolith Infrastructure Pattern",
+      "description": "The monolith infrastructure pattern deploys a complete application stack (VPC, compute, database, load balancer) as a single Terraform root module or tightly coupled set of modules. It is appropriate for single-team, single-application contexts where deployment coordination is simple and the application itself is a monolith. It is the correct starting point for new projects but must be planned for extraction before team growth.",
+      "decision_rules": [
+        "CHOOSE monolith infrastructure WHEN: single team, single application, early-stage project, team size < 5 engineers",
+        "CHOOSE monolith infrastructure WHEN: application is a monolith and microservices decomposition is not planned",
+        "STRUCTURE monolith infrastructure as: VPC module + compute module + data module in a single root module",
+        "PLAN module boundaries even in a monolith — clean module interfaces allow future extraction to separate state files",
+        "ACCEPT monolith infrastructure complexity until you feel the pain — do not pre-optimize for microservices",
+        "MIGRATE away from monolith infrastructure WHEN: > 2 teams deploying independently, > 50 Terraform resources in one state file, plan time > 5 minutes"
+      ],
+      "tradeoffs": [
+        "Monolith infra: simple coordination, one deployment unit vs. any change requires full plan, high blast radius",
+        "Monolith infra: fast initial development vs. becomes a bottleneck when teams deploy independently",
+        "Early extraction: future-proof vs. YAGNI — premature decomposition creates coordination overhead without benefit"
+      ],
+      "anti_patterns": [
+        "Keeping monolith infrastructure beyond team/application scale — plan times grow to 20+ minutes, deployment conflicts increase",
+        "No module boundaries in monolith — resources directly in root module makes future extraction painful",
+        "Multiple teams sharing a monolith state file — any team's merge blocks all other teams' deployments",
+        "Monolith infrastructure for microservices applications — compute layer changes require network layer plan"
+      ],
+      "aws_alignment": [
+        "Operational Excellence: starting with monolith and extracting when pain is felt avoids premature complexity",
+        "Cost Optimization: monolith infrastructure reduces overhead cost of managing many state files early in project lifecycle"
+      ]
+    },
+    {
+      "id": "arch-002",
+      "category": "Terraform Architecture Patterns",
+      "concept": "Microservices Infrastructure Pattern",
+      "description": "The microservices infrastructure pattern separates infrastructure by service ownership, change cadence, and blast radius. Each service team owns their Terraform modules for application-layer resources. Platform teams own shared infrastructure (VPC, EKS/ECS cluster, RDS). This mirrors the Conway's Law alignment where team structure should match system structure. Services consume shared platform outputs via terraform_remote_state or SSM.",
+      "decision_rules": [
+        "CHOOSE microservices infrastructure WHEN: multiple independent teams, services deploy at different cadences, or application has >10 distinct services",
+        "SEPARATE infrastructure into: platform layer (shared EKS/ECS, VPC, databases) and service layer (per-service ALB rules, IAM, task definitions)",
+        "ALLOW service teams to own their application Terraform modules — they define their service's resources",
+        "REQUIRE service teams to consume platform outputs via interfaces — they do not reach into platform state",
+        "USE a platform team to maintain shared infrastructure — clear ownership prevents platform drift",
+        "PROVIDE a service template/scaffold module that encodes platform standards (tagging, security groups, IAM baseline)"
+      ],
+      "tradeoffs": [
+        "Per-service modules: independent deployments, clear ownership vs. proliferation of small state files to manage",
+        "Platform/service split: clean boundaries vs. coordination required when platform changes break service contracts",
+        "Service team autonomy: fast deployments vs. risk of diverging from platform standards without guardrails",
+        "Shared platform: efficient resource use vs. platform team becomes a bottleneck for service teams"
+      ],
+      "anti_patterns": [
+        "Giving service teams direct access to modify platform (VPC, EKS) infrastructure — accidental network changes affect all services",
+        "Service teams duplicating VPC and cluster resources — costly and creates network segmentation confusion",
+        "No platform team — platform infrastructure accumulates tech debt and drift with no clear ownership",
+        "Service modules that reach directly into another service's state — tight coupling between service deployments"
+      ],
+      "aws_alignment": [
+        "Operational Excellence: Conway's Law alignment reduces coordination overhead between teams",
+        "Reliability: independent deployment of services limits blast radius of infrastructure changes",
+        "Security Pillar: service-level IAM isolation through per-service task roles and IRSA"
+      ]
+    },
+    {
+      "id": "arch-003",
+      "category": "Terraform Architecture Patterns",
+      "concept": "Multi-Account AWS Strategy",
+      "description": "Multi-account AWS architecture uses AWS Organizations to create hard isolation boundaries between environments, workloads, and business units. Account-level isolation is the strongest security and blast radius boundary available in AWS — it cannot be bypassed by IAM misconfiguration. The AWS recommended account vending structure uses a management account, shared services account (logging, security tooling), and workload accounts per environment and business domain.",
+      "decision_rules": [
+        "USE multi-account WHEN: production security requirements mandate strict isolation, compliance (PCI, HIPAA, SOC 2) is required, or organization > 20 engineers",
+        "MINIMUM viable multi-account: management account (billing, Organizations), log archive account, security tooling account, prod workload account, non-prod workload account",
+        "CENTRALIZE CloudTrail logs and GuardDuty in a dedicated log archive account — prevents tampering by individual workload accounts",
+        "USE AWS Control Tower for new multi-account setups — automates baseline guardrails, log aggregation, and account vending",
+        "USE AWS Transit Gateway for cross-account VPC connectivity — hub-and-spoke routing over individual VPC peering at scale",
+        "PROVISION accounts with Terraform via aws_organizations_account resource and account-level Terraform modules",
+        "DEFINE Service Control Policies to enforce: MFA requirement, region restriction, prohibited service usage (e.g., no root account usage)"
+      ],
+      "tradeoffs": [
+        "Multi-account: strongest isolation, compliance-ready vs. significant initial setup overhead, cross-account IAM complexity",
+        "Control Tower: fast standardized setup vs. opinionated — deviating from Control Tower defaults is difficult",
+        "Transit Gateway: scalable hub-and-spoke routing vs. hourly cost per attachment and data processing fees",
+        "Account-per-environment vs. environment VPCs in shared account: hard isolation vs. simpler networking"
+      ],
+      "anti_patterns": [
+        "All workloads in a single AWS account — IAM misconfiguration, runaway Lambda, or cost anomaly affects all workloads",
+        "Manual account creation without Terraform — accounts drift from baseline immediately after creation",
+        "No Service Control Policies — individual account admins can deviate from organization security baseline",
+        "VPC peering mesh between many accounts — O(n²) peering relationships become unmanageable; use Transit Gateway",
+        "Sharing IAM roles across accounts without explicit trust policies — implicit cross-account access"
+      ],
+      "aws_alignment": [
+        "Security Pillar: account isolation is the AWS recommended primary security boundary",
+        "Operational Excellence: account vending automation via Terraform enables consistent baseline across accounts",
+        "Cost Optimization: per-account cost visibility and enforcement via AWS Budgets per account"
+      ]
+    },
+    {
+      "id": "arch-004",
+      "category": "Terraform Architecture Patterns",
+      "concept": "EKS Platform Pattern — Production-Grade Kubernetes Infrastructure",
+      "description": "A production EKS platform is more than a cluster — it is a set of shared infrastructure components that platform teams maintain and service teams consume. This includes: VPC with private subnets and VPC Endpoints, EKS cluster with managed node groups, cluster add-ons (Cluster Autoscaler/Karpenter, AWS Load Balancer Controller, External DNS, External Secrets Operator, metrics-server), and GitOps delivery (ArgoCD/Flux). The terraform-aws-modules/eks/aws module is the authoritative baseline.",
+      "decision_rules": [
+        "USE terraform-aws-modules/eks/aws as the cluster foundation — it encodes production defaults (private endpoint, log types, managed add-ons)",
+        "ENABLE private cluster endpoint for production — control plane API is not exposed to internet",
+        "DEPLOY AWS Load Balancer Controller via Helm — enables ALB/NLB creation from Kubernetes Ingress/Service objects",
+        "DEPLOY External DNS — automatically manages Route53 records for Kubernetes service hostnames",
+        "DEPLOY External Secrets Operator — syncs AWS Secrets Manager secrets into Kubernetes secrets without storing values in Git",
+        "DEPLOY Cluster Autoscaler or Karpenter — Karpenter for new clusters, Cluster Autoscaler for existing",
+        "ENABLE IRSA (IAM Roles for Service Accounts) — each workload gets a dedicated IAM role scoped to its permissions",
+        "CONFIGURE OIDC provider for the EKS cluster — required for IRSA to function",
+        "SEPARATE system node group (kube-system) from application node group — prevent workload eviction of system components"
+      ],
+      "tradeoffs": [
+        "Private endpoint only: strong security vs. kubectl access requires VPN or bastion host",
+        "Public + private endpoint: developer ergonomics vs. API surface exposed to internet (mitigated by IP allowlist)",
+        "Karpenter: superior scaling vs. more complex initial IRSA and CRD setup than Cluster Autoscaler",
+        "Managed Node Groups: simplified lifecycle vs. cannot customize kubelet flags or use custom bootstrap scripts"
+      ],
+      "anti_patterns": [
+        "Public EKS API endpoint without IP restrictions — Kubernetes API exposed to internet, brute-force risk",
+        "No IRSA — all pods inherit node IAM role permissions, violating least privilege",
+        "Not installing AWS Load Balancer Controller — falls back to deprecated in-tree controller with no ALB/NLB support",
+        "Not configuring Pod Security Admission or OPA Gatekeeper — pods can run as root, privileged, with host network",
+        "Single node group for all workloads — system pods compete with application pods for resources",
+        "Not enabling EKS control plane logging (audit, api, authenticator) — no visibility into Kubernetes API activity"
+      ],
+      "aws_alignment": [
+        "Security Pillar: private endpoint, IRSA, and pod security policies implement defense in depth",
+        "Reliability Pillar: multiple node groups, Karpenter, and cluster add-ons ensure workload availability",
+        "Operational Excellence: GitOps delivery and managed add-ons reduce cluster operational overhead"
+      ]
+    },
+    {
+      "id": "arch-005",
+      "category": "Terraform Architecture Patterns",
+      "concept": "Serverless Infrastructure Pattern — Lambda + API Gateway + DynamoDB",
+      "description": "The serverless infrastructure pattern eliminates EC2/container management entirely. AWS Lambda executes functions on-demand, API Gateway provides the HTTP layer, DynamoDB provides single-digit millisecond storage, and S3 handles object storage. This pattern achieves zero idle cost — you pay only for actual executions. It is optimal for event-driven workloads, APIs with highly variable traffic, and teams that want to eliminate infrastructure operations entirely.",
+      "decision_rules": [
+        "CHOOSE serverless WHEN: event-driven workloads (S3 events, SNS, SQS triggers), APIs with spiky or unpredictable traffic, startup or MVP with minimal operational capacity",
+        "CHOOSE serverless WHEN: function execution time < 15 minutes and function is stateless",
+        "USE Lambda provisioned concurrency for latency-sensitive functions — eliminates cold starts at cost of pre-warmed instances",
+        "USE DynamoDB on-demand capacity for new serverless applications — scales to zero, no capacity planning",
+        "USE DynamoDB provisioned + Auto Scaling when read/write pattern is predictable — 30-50% cheaper than on-demand",
+        "USE SQS + Lambda for decoupled asynchronous processing — natural backpressure and retry behavior",
+        "USE Step Functions for complex multi-step serverless workflows — visual debugging, built-in error handling"
+      ],
+      "tradeoffs": [
+        "Lambda: zero idle cost vs. cold starts add 100-3000ms latency for first request per container",
+        "Serverless: no infrastructure management vs. distributed tracing and debugging is harder",
+        "DynamoDB on-demand: zero capacity planning vs. 6-7x more expensive than provisioned for steady traffic",
+        "Lambda: infinite concurrency by default vs. can accidentally DDoS downstream services (set reserved concurrency)"
+      ],
+      "anti_patterns": [
+        "Running long-running jobs on Lambda — 15-minute timeout kills incomplete operations, use ECS Fargate instead",
+        "Lambda with synchronous chains longer than 3 hops — cumulative latency degrades UX and complicates debugging",
+        "No DLQ (Dead Letter Queue) on Lambda — failed invocations are silently lost",
+        "Not setting Lambda reserved concurrency — function can consume entire account concurrency limit (1000 default)",
+        "Using Lambda for CPU-intensive tasks (video encoding, ML inference) — EC2 or SageMaker are more cost-effective",
+        "Monolith Lambda (one function handles all routes) — loses independent deployability and cold start isolation"
+      ],
+      "aws_alignment": [
+        "Cost Optimization: pay-per-execution eliminates idle infrastructure cost completely",
+        "Operational Excellence: no server management reduces undifferentiated operational work",
+        "Reliability Pillar: Lambda's built-in AZ-level redundancy and automatic retry on async invocations"
+      ]
+    },
+    {
+      "id": "arch-006",
+      "category": "Terraform Architecture Patterns",
+      "concept": "Hub-and-Spoke Networking Pattern — Transit Gateway",
+      "description": "Hub-and-spoke networking uses AWS Transit Gateway as a central routing hub connecting multiple VPCs (spokes) across accounts and regions. This replaces a mesh of VPC peering connections that becomes unmanageable beyond 5-10 VPCs. Transit Gateway enables centralized network security inspection, route table management, and consistent connectivity policies. It is required for multi-account architectures with >5 VPCs.",
+      "decision_rules": [
+        "USE Transit Gateway WHEN: > 5 VPCs need connectivity, multi-account architecture, or centralized network inspection required",
+        "USE VPC Peering WHEN: ≤ 3 VPCs with simple connectivity requirements — lower cost and complexity",
+        "ATTACH a network security VPC (inspection VPC with AWS Network Firewall or third-party appliance) to Transit Gateway for egress inspection",
+        "CONFIGURE Transit Gateway route tables to segment traffic: dev VPCs cannot route to prod VPCs directly",
+        "SHARE Transit Gateway across accounts via AWS Resource Access Manager (RAM) — one TGW per region serves all accounts",
+        "PLAN Transit Gateway CIDR carefully — VPC CIDRs across all attached VPCs must not overlap"
+      ],
+      "tradeoffs": [
+        "Transit Gateway: scalable, centrally managed vs. $0.05/GB data processing + $0.07/hour per attachment",
+        "VPC Peering: free data transfer within AZ vs. O(n²) connections become unmanageable",
+        "Centralized inspection: consistent security policy vs. all traffic traverses inspection VPC (latency and cost)",
+        "Full mesh vs. hub-spoke: lower latency vs. unmanageable at scale"
+      ],
+      "anti_patterns": [
+        "VPC peering mesh for >10 VPCs — each new VPC requires n-1 new peering connections",
+        "Not segmenting Transit Gateway route tables — dev and prod VPCs can route to each other without restriction",
+        "Overlapping CIDRs across VPCs attached to the same Transit Gateway — routing becomes ambiguous or broken",
+        "Not using RAM to share Transit Gateway — creates redundant TGWs per account, multiplying cost"
+      ],
+      "aws_alignment": [
+        "Security Pillar: centralized inspection VPC enforces consistent egress and east-west traffic policies",
+        "Operational Excellence: single TGW per region simplifies network topology for operations teams",
+        "Reliability: Transit Gateway multi-AZ and multi-region routing provides network-level fault tolerance"
+      ]
+    },
+    {
+      "id": "arch-007",
+      "category": "Terraform Architecture Patterns",
+      "concept": "Infrastructure as Code Maturity Model",
+      "description": "IaC maturity is not binary — organizations progress through stages from manual provisioning to fully automated, policy-driven infrastructure. Understanding the maturity model allows an AI agent to recommend the correct level of automation complexity for the organization's current state, rather than recommending advanced patterns to teams that will fail to maintain them.",
+      "decision_rules": [
+        "STAGE 1 — Getting Started: single root module, local or S3 state, manual apply, one environment. Appropriate for: proof of concept, single engineer",
+        "STAGE 2 — Structured: separate modules per component, remote state with locking, environments via directories, pipeline for apply. Appropriate for: small teams (2-5 engineers), single application",
+        "STAGE 3 — Standardized: module library, policy scanning (tfsec/Checkov), tagging enforcement, secrets in Secrets Manager, multi-environment pipelines. Appropriate for: growing teams, production-critical workloads",
+        "STAGE 4 — Platform: self-service infrastructure, internal module registry, automated account vending, drift detection, cost allocation dashboards. Appropriate for: platform teams, 10+ engineering teams",
+        "RECOMMEND the current stage's practices, not aspirational — teams at Stage 1 should not implement Stage 4 tooling",
+        "PRIORITIZE removing manual toil at each stage before advancing — automate the most painful process first"
+      ],
+      "tradeoffs": [
+        "Higher maturity: more automation, less toil vs. higher upfront investment and tooling complexity",
+        "Advancing too fast: technical debt from immature practices vs. overwhelming teams with too many tools simultaneously",
+        "Platform investment: enables other teams vs. platform team is a cost center until critical mass"
+      ],
+      "anti_patterns": [
+        "Implementing Terraform Enterprise/Cloud for a 2-person team — enterprise tooling costs exceed the team's value from it",
+        "Skipping Stage 2 fundamentals (remote state, module structure) and jumping to Stage 4 tooling",
+        "Treating IaC maturity as complete — infrastructure automation is a continuous improvement discipline",
+        "Platform team building self-service tools before anyone uses the platform manually — automate observed pain, not imagined pain"
+      ],
+      "aws_alignment": [
+        "Operational Excellence: the maturity model aligns with AWS's guidance on operational capability building",
+        "Cost Optimization: each maturity stage adds visibility and control that reduces infrastructure waste"
+      ]
+    },
+    {
+      "id": "arch-008",
+      "category": "Terraform Architecture Patterns",
+      "concept": "Application Profile to Infrastructure Mapping — Decision Framework",
+      "description": "An application profile describes the workload characteristics that drive infrastructure decisions. The AI infrastructure agent must translate profile attributes into infrastructure choices. This entry codifies the mapping rules that a senior architect uses to move from 'application description' to 'infrastructure recommendation'. It integrates all previous patterns into a unified decision tree.",
+      "decision_rules": [
+        "IF traffic_pattern = spiky OR event_driven AND execution_time < 15min → recommend Lambda + API Gateway",
+        "IF traffic_pattern = steady AND team_kubernetes_maturity = low AND services < 10 → recommend ECS Fargate",
+        "IF traffic_pattern = steady AND team_kubernetes_maturity = high OR services > 10 → recommend EKS",
+        "IF workload = batch_processing AND duration < 15min → recommend Lambda + SQS",
+        "IF workload = batch_processing AND duration > 15min → recommend ECS Fargate + SQS or AWS Batch",
+        "IF data_model = relational AND scale = moderate → recommend RDS PostgreSQL/MySQL Multi-AZ",
+        "IF data_model = relational AND scale = high AND workload = variable → recommend Aurora Serverless v2",
+        "IF data_model = key_value OR document AND scale = high AND latency = single_digit_ms → recommend DynamoDB",
+        "IF team_size < 5 AND stage = early → recommend single-account, single-region, monolith infrastructure",
+        "IF team_size > 20 OR compliance_required = true → recommend multi-account AWS Organizations",
+        "IF availability_requirement = 99.99% → require 3-AZ deployment, Multi-AZ RDS, ALB, Auto Scaling",
+        "IF security_sensitivity = high (PCI, HIPAA) → require private subnets, VPC Endpoints, private EKS endpoint, Secrets Manager, CloudTrail, GuardDuty"
+      ],
+      "tradeoffs": [
+        "Lambda-first: zero infrastructure vs. cold start latency and 15-min limit constraint",
+        "EKS-first: maximum flexibility vs. highest operational overhead — only justified at scale",
+        "Multi-account early: best isolation vs. operational overhead before team has scale to manage it",
+        "Aurora Serverless: variable cost vs. cold start for infrequently accessed databases"
+      ],
+      "anti_patterns": [
+        "Recommending EKS to every application regardless of scale — Kubernetes is a platform, not a default",
+        "Recommending Lambda for CPU-bound or stateful workloads — fundamental mismatch",
+        "Recommending single-AZ for any production workload — availability requirement eliminates single-AZ",
+        "Recommending RDS single-AZ for databases with RPO < 1 hour",
+        "Ignoring team maturity in infrastructure recommendations — the best architecture for the wrong team creates operational risk"
+      ],
+      "aws_alignment": [
+        "Performance Efficiency: matching infrastructure to workload characteristics is the core Performance Efficiency pillar practice",
+        "Cost Optimization: right-fit infrastructure avoids over/under-provisioning penalties",
+        "Reliability: matching HA architecture to availability requirements without gold-plating low-criticality workloads"
+      ]
+    }
+  ]
+}

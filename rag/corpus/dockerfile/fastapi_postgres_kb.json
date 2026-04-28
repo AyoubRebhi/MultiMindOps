@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "id": "dockerfile_fastapi_postgres_kb",
+    "title": "Dockerfile — FastAPI with PostgreSQL",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "dockerfile_fastapi_postgres",
+      "category": "docker",
+      "concept": "FastAPI PostgreSQL-backed Dockerfile",
+      "description": "FastAPI Dockerfile aligned with a PostgreSQL-backed service. Base image: python:3.11-slim. Installs pip requirements, sets ENV PORT=8000, exposes 8000. CMD uses ${PORT:-8000} for configurable port binding at runtime.",
+      "decision_rules": [
+        "Use when framework=fastapi, project_type=api_backend, dependencies include postgres",
+        "Use PORT env variable to allow dynamic port assignment in orchestration environments"
+      ],
+      "tradeoffs": [
+        "No multi-stage build — simpler but larger final image than a distroless multi-stage variant",
+        "No non-root user — extend with USER directive before CMD for production security"
+      ],
+      "anti_patterns": [
+        "Do not embed DATABASE_URL or credentials in the Dockerfile",
+        "Do not expose the database port inside the application container Dockerfile"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

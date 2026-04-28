@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "id": "security_compose_notes_kb",
+    "title": "Security — Docker Compose Reminders",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "security_compose_notes",
+      "category": "devsecops",
+      "concept": "Docker Compose Security Baseline Reminders",
+      "description": "Security reminders applied during Docker Compose generation: reference all secrets via environment variable substitution (${VAR}), limit published ports to those required externally, add persistent volumes only where genuinely needed.",
+      "decision_rules": [
+        "Use ${VAR} syntax for all credentials — values come from .env file or Docker secrets",
+        "Only publish ports (host:container) for services that need external access",
+        "Add named volumes only for stateful services (databases, caches with persistence requirements)"
+      ],
+      "tradeoffs": [],
+      "anti_patterns": [
+        "Hardcoding passwords, tokens, or API keys directly in docker-compose.yml",
+        "Publishing all internal service ports to 0.0.0.0 on the host",
+        "Adding unnecessary volumes to stateless API containers"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

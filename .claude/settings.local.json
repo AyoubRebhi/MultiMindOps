@@ -12,7 +12,11 @@
       "Bash(python -m pytest tests/test_encoding_fix.py -v)",
       "Bash(python -c ' *)",
       "Bash(python -c \"from backend.app.agents.planner_agent import PlannerAgent; print\\('OK'\\)\")",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(PYTHONPATH=. python backend/app/services/rag/lightning_chunking_service.py)",
+      "Bash(cat requirements.txt)",
+      "Bash(cat backend/requirements.txt)",
+      "Bash(venv/Scripts/pip show *)"
     ]
   }
 }

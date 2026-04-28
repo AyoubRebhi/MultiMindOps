@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "id": "security_terraform_notes_kb",
+    "title": "Security — Terraform Generation Reminders",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "security_terraform_notes",
+      "category": "terraform",
+      "concept": "Terraform Security Baseline Reminders",
+      "description": "Security reminders applied during Terraform code generation: always pin provider versions with version constraints, never set sensitive values as hardcoded variable defaults, mark outputs containing sensitive data with sensitive = true.",
+      "decision_rules": [
+        "Pin all provider versions with constraints (e.g. version = \"~> 5.0\") — never omit or use \"latest\"",
+        "Declare sensitive variables with sensitive = true to suppress them in plan/apply logs",
+        "Default values for sensitive variables should be null or omitted — require explicit injection"
+      ],
+      "tradeoffs": [],
+      "anti_patterns": [
+        "Using no version constraint or version = \"latest\" for Terraform providers",
+        "Setting default = \"mysecretpassword\" on a sensitive variable",
+        "Outputting sensitive values (DB passwords, private keys) without sensitive = true"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

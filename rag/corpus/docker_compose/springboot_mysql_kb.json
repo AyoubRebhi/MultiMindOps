@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "id": "compose_springboot_mysql_kb",
+    "title": "Docker Compose — Spring Boot with MySQL",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "compose_springboot_mysql",
+      "category": "docker",
+      "concept": "Spring Boot + MySQL Docker Compose",
+      "description": "Compose pattern for Spring Boot backend (port 8080) with MySQL 8.0 database (port 3306). Both services receive MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD from environment. Backend depends_on db.",
+      "decision_rules": [
+        "Use when language=java, framework=spring_boot, dependencies include mysql",
+        "MYSQL_ROOT_PASSWORD is required for MySQL 8.0 container initialization even when a regular user is defined"
+      ],
+      "tradeoffs": [
+        "No persistent volume — MySQL data is lost on container removal; add a named volume for durability",
+        "No healthcheck on db — Spring Boot may attempt JDBC connections before MySQL is accepting them"
+      ],
+      "anti_patterns": [
+        "Do not hardcode MYSQL_ROOT_PASSWORD or MYSQL_PASSWORD in the compose file",
+        "Do not expose port 3306 to 0.0.0.0 in internet-facing environments"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

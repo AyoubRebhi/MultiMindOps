@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "id": "kubernetes_backend_deployment_service_kb",
+    "title": "Kubernetes — Backend Deployment and Service",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "kubernetes_backend_deployment_service",
+      "category": "kubernetes",
+      "concept": "Minimal Kubernetes Deployment and ClusterIP Service",
+      "description": "Minimal Kubernetes Deployment and Service manifests for a backend container. Deployment (apps/v1): 1 replica, selector app=backend, container image backend:latest on containerPort 8080. Service (v1): ClusterIP type, selector app=backend, port 8080 -> targetPort 8080.",
+      "decision_rules": [
+        "Use as a baseline template for any backend service Kubernetes deployment",
+        "Service type ClusterIP — accessible only within the cluster; add Ingress for external access"
+      ],
+      "tradeoffs": [
+        "Single replica with no HPA — not suitable for production traffic without scaling configuration",
+        "No resource requests/limits — must be added to prevent resource starvation",
+        "No SecurityContext — extend with runAsNonRoot, readOnlyRootFilesystem, capabilities drop ALL per CIS Kubernetes Benchmark"
+      ],
+      "anti_patterns": [
+        "Do not use image:latest in production — pin to a specific tag or image digest",
+        "Do not deploy without resource limits to shared cluster namespaces"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

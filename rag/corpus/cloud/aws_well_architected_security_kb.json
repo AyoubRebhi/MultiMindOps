@@ -1,0 +1,141 @@
+{
+  "metadata": {
+    "id": "aws_well_architected_security_kb",
+    "title": "AWS Well-Architected Framework — Security Pillar",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "aws_iam_least_privilege",
+      "category": "cloud",
+      "concept": "IAM least privilege and access analysis",
+      "description": "IAM policies should grant only the minimum actions required. Example: allow s3:GetObject and s3:ListBucket on specific bucket ARN only. Use IAM Access Analyzer to find unused permissions: aws accessanalyzer create-analyzer --type ACCOUNT. Generate policies from CloudTrail activity: aws iam generate-service-last-accessed-details.",
+      "decision_rules": [
+        "Start with deny-all and add only required actions on specific resources (not Action: '*')",
+        "Run IAM Access Analyzer to detect overly broad permissions quarterly",
+        "Use IAM Access Advisor to remove permissions unused for 90+ days"
+      ],
+      "tradeoffs": [
+        "Fine-grained IAM policies require more maintenance as application requirements change"
+      ],
+      "anti_patterns": [
+        "Action: '*' or Resource: '*' in production IAM policies",
+        "Using the AWS managed AdministratorAccess policy for application roles",
+        "Long-lived IAM access keys — use IAM roles and temporary credentials"
+      ],
+      "aws_alignment": ["Enable IAM Access Analyzer for every AWS account", "Use AWS Organizations SCPs to prevent privilege escalation across accounts"]
+    },
+    {
+      "id": "aws_kms_encryption",
+      "category": "cloud",
+      "concept": "Encryption at rest and in transit with KMS",
+      "description": "Create dedicated KMS keys per environment with enable_key_rotation=true and deletion_window_in_days=30. Apply SSE-KMS to S3 buckets with bucket_key_enabled=true for cost optimization. Enforce TLS 1.2+ for all data in transit.",
+      "decision_rules": [
+        "Create one KMS key per environment (dev/staging/prod) — do not share keys across environments",
+        "Enable automatic key rotation (enable_key_rotation=true) on all KMS keys",
+        "Enable bucket_key_enabled=true on S3 SSE-KMS to reduce KMS API call costs"
+      ],
+      "tradeoffs": [
+        "SSE-KMS adds latency compared to SSE-S3 — acceptable for sensitive data, consider SSE-S3 for high-throughput non-sensitive data"
+      ],
+      "anti_patterns": [
+        "Using the AWS-managed key (aws/s3) instead of a customer-managed KMS key — no key rotation control",
+        "Transmitting data over HTTP in production — enforce TLS via bucket policies and ALB listeners"
+      ],
+      "aws_alignment": ["Use aws_kms_key with deletion_window_in_days >= 7 and enable_key_rotation = true", "Apply aws_s3_bucket_server_side_encryption_configuration with sse_algorithm = aws:kms"]
+    },
+    {
+      "id": "aws_vpc_multi_layer",
+      "category": "cloud",
+      "concept": "VPC multi-layer architecture",
+      "description": "Three-tier VPC: public subnets (ALB only, map_public_ip_on_launch=false), private app subnets (ECS/EKS), private data subnets (RDS). Use at least 2 AZs. Route private subnets through NAT Gateway. Use VPC Endpoints for S3 and DynamoDB to avoid NAT Gateway costs.",
+      "decision_rules": [
+        "Place ALB in public subnets, application workloads in private app subnets, databases in private data subnets",
+        "Never assign public IPs to EC2, ECS tasks, or RDS instances directly",
+        "Use VPC Endpoints (Gateway type for S3/DynamoDB, Interface for other services) to keep traffic on the AWS network"
+      ],
+      "tradeoffs": [
+        "NAT Gateway costs ~$35/month per AZ — use VPC Endpoints to reduce egress costs for high-volume AWS API traffic"
+      ],
+      "anti_patterns": [
+        "Placing RDS or ElastiCache in public subnets",
+        "Using a single NAT Gateway for multi-AZ deployments — creates an availability bottleneck"
+      ],
+      "aws_alignment": ["Use aws_vpc_endpoint for S3 and DynamoDB (Gateway type — free)", "Deploy NAT Gateways in each AZ for high-availability outbound internet access from private subnets"]
+    },
+    {
+      "id": "aws_cloudtrail_audit",
+      "category": "cloud",
+      "concept": "CloudTrail for complete audit logging",
+      "description": "Configure CloudTrail with is_multi_region_trail=true, include_global_service_events=true, enable_log_file_validation=true, KMS encryption, and S3 data event logging. Delivers comprehensive audit trail of all API activity across all regions.",
+      "decision_rules": [
+        "Enable a multi-region trail — a single-region trail misses global service events (IAM, STS)",
+        "Enable log file validation to detect tampering of delivered log files",
+        "Encrypt CloudTrail logs with a dedicated KMS key (separate from application keys)"
+      ],
+      "tradeoffs": [
+        "CloudTrail logs for S3 data events generate high volume — filter to specific buckets to control costs"
+      ],
+      "anti_patterns": [
+        "Disabling CloudTrail or limiting it to a single region",
+        "Storing CloudTrail logs in the same account and bucket without separate S3 access controls — logs could be tampered by a compromised account"
+      ],
+      "aws_alignment": ["Use a dedicated Log Archive account in AWS Organizations for CloudTrail logs", "Enable AWS Config to detect CloudTrail being disabled (cloud-trail-enabled rule)"]
+    },
+    {
+      "id": "aws_guardduty_threat_detection",
+      "category": "cloud",
+      "concept": "GuardDuty for automated threat detection",
+      "description": "Enable GuardDuty with S3 log analysis, Kubernetes audit log analysis, and EBS malware protection. GuardDuty uses ML and threat intelligence to detect anomalous API calls, crypto mining, compromised credentials, and lateral movement.",
+      "decision_rules": [
+        "Enable GuardDuty in every AWS account and every region",
+        "Enable all three data sources: s3_logs, kubernetes audit_logs, malware_protection for EBS",
+        "Set up SNS notifications or EventBridge rules to alert on HIGH/CRITICAL findings"
+      ],
+      "tradeoffs": [
+        "GuardDuty pricing is based on data volume analyzed — S3 data events can be costly for high-traffic buckets"
+      ],
+      "anti_patterns": [
+        "Not enabling GuardDuty — leaves the account without automated threat detection",
+        "Enabling GuardDuty without acting on findings — security theater"
+      ],
+      "aws_alignment": ["Use AWS Security Hub to aggregate GuardDuty findings with other security services", "Enable GuardDuty at the AWS Organizations level via delegated administrator"]
+    },
+    {
+      "id": "aws_waf_api_protection",
+      "category": "cloud",
+      "concept": "WAF for public API protection",
+      "description": "Attach AWS WAFv2 WebACL to ALB or API Gateway. Configure rate limiting rule (2000 requests per 5 minutes per IP) and AWSManagedRulesCommonRuleSet (OWASP Top 10 protections). Enable CloudWatch metrics and sampled request logging for visibility.",
+      "decision_rules": [
+        "Attach WAF to every public-facing ALB or API Gateway endpoint",
+        "Start with AWSManagedRulesCommonRuleSet and add custom rules for application-specific needs",
+        "Set rate_based_statement limit at 2000/5-min as a starting baseline — tune based on traffic patterns"
+      ],
+      "tradeoffs": [
+        "WAF managed rules may produce false positives for legitimate traffic — use Count mode before switching to Block",
+        "WAF adds latency (~1ms) — negligible for most workloads"
+      ],
+      "anti_patterns": [
+        "Exposing ALBs or API Gateways to the internet without WAF",
+        "Using WAF in Count mode permanently — rules do not block malicious traffic"
+      ],
+      "aws_alignment": ["Use AWS Shield Standard (included) for DDoS protection at L3/L4", "Add AWS Shield Advanced for volumetric DDoS protection on critical endpoints"]
+    },
+    {
+      "id": "aws_security_checklist",
+      "category": "cloud",
+      "concept": "AWS Security Baseline Checklist",
+      "description": "Minimum security baseline for all AWS accounts: MFA on all IAM users (especially root), no root access keys, automatic KMS key rotation, S3 bucket versioning and public access block, CloudTrail enabled all regions, GuardDuty enabled, Security Hub with CIS standards, Config Rules configured, VPC Flow Logs enabled, TLS 1.2+ enforced, secrets in Secrets Manager (not env vars).",
+      "decision_rules": [
+        "Enforce this checklist for every new AWS account before deploying any workloads",
+        "Use AWS Security Hub CIS AWS Foundations Benchmark to track compliance automatically"
+      ],
+      "tradeoffs": [],
+      "anti_patterns": [
+        "Storing secrets in EC2 userdata, Lambda environment variables, or SSM Parameter Store Standard (not encrypted by default)",
+        "Not enabling MFA on AWS root account — single point of compromise for entire account"
+      ],
+      "aws_alignment": ["Use AWS Organizations SCPs to enforce this baseline across all member accounts", "Use AWS Config conformance packs (Operational Best Practices for CIS) for automated compliance"]
+    }
+  ]
+}

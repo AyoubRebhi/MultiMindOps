@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "id": "dockerfile_python_simple_kb",
+    "title": "Dockerfile — Generic Python Backend",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "dockerfile_python_simple",
+      "category": "docker",
+      "concept": "Generic Python Backend Dockerfile",
+      "description": "Simple fallback Dockerfile for a Python backend service when no specialized framework (FastAPI, Flask, Streamlit) is detected. Base: python:3.11-slim. Installs pip requirements, copies source. Sets PYTHONUNBUFFERED=1. CMD: sh -c python main.py.",
+      "decision_rules": [
+        "Use when language=python, framework=generic, project_type=backend_service",
+        "Fall back to this template only when no framework-specific Dockerfile exists"
+      ],
+      "tradeoffs": [
+        "Assumes main.py as entrypoint — must be updated if the entrypoint differs",
+        "No multi-stage build and no non-root user — extend for production hardening"
+      ],
+      "anti_patterns": [
+        "Do not use python:latest — always pin to a specific version (e.g. python:3.11-slim)",
+        "Do not copy source before installing requirements — always install deps first"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

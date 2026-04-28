@@ -1,0 +1,209 @@
+{
+  "metadata": {
+    "id": "aws_infra_kb_index",
+    "title": "AWS Infrastructure Knowledge Base — Master Index",
+    "description": "Master index for the RAG-ready AWS Infrastructure Decision Intelligence knowledge base. Points to all knowledge base files and their entry counts. Designed for Qdrant vector database ingestion.",
+    "version": "1.1.0",
+    "total_entries": 56,
+    "ingestion_notes": "Each 'entries' array element in the referenced files is a self-contained RAG chunk. Embed the full entry as the document text and store category/concept/id as Qdrant payload metadata for filtering."
+  },
+  "knowledge_base_files": [
+    {
+      "file": "rag/corpus/kubernetes/eks_decision_intelligence_kb.json",
+      "section": "AWS EKS & Kubernetes Decision Intelligence",
+      "entry_count": 26,
+      "entry_ids": [
+        "eks-001", "eks-002", "eks-003", "eks-004", "eks-005", "eks-006",
+        "eks-007", "eks-008", "eks-009", "eks-010", "eks-011",
+        "eks-012", "eks-013", "eks-014",
+        "eks-015", "eks-016", "eks-017", "eks-018", "eks-019", "eks-020",
+        "eks-021", "eks-022", "eks-023", "eks-024", "eks-025", "eks-026"
+      ],
+      "concepts_covered": [
+        "eks-001: Pods — scheduling unit, multi-container sidecars, ephemeral design",
+        "eks-002: Deployments — stateless workload controller, RollingUpdate vs Recreate",
+        "eks-003: Services — ClusterIP vs NodePort vs LoadBalancer selection rules",
+        "eks-004: Ingress — ALB routing, IngressGroup cost optimization, TLS at ALB",
+        "eks-005: ConfigMaps & Secrets — External Secrets Operator, KMS envelope encryption",
+        "eks-006: Persistent Volumes — EBS vs EFS, StatefulSets, managed services decision",
+        "eks-007: Stateless Applications — ideal Kubernetes workload, horizontal scaling",
+        "eks-008: Stateful Applications — StatefulSets, Operators, managed-service-first rule",
+        "eks-009: REST/GraphQL APIs — HPA metrics, connection pooling, EKS vs Lambda decision",
+        "eks-010: Background Workers — KEDA, SQS scaling, scale-to-zero pattern",
+        "eks-011: Batch Jobs — CronJob, Argo Workflows, Spot for batch compute",
+        "eks-012: Rolling Updates — maxUnavailable/maxSurge configuration, zero-downtime",
+        "eks-013: Blue/Green Deployment — ALB weighted target groups, instant rollback",
+        "eks-014: Canary Deployment — Argo Rollouts, automated promotion/rollback metrics",
+        "eks-015: EKS vs ECS vs Lambda — master compute decision framework (CRITICAL)",
+        "eks-016: AWS Load Balancer Controller — ALB/NLB, IngressGroup, WAF integration",
+        "eks-017: IRSA — IAM Roles for Service Accounts, per-service least-privilege",
+        "eks-018: HPA — Horizontal Pod Autoscaler, CPU vs custom metrics, KEDA",
+        "eks-019: Cluster Autoscaler vs Karpenter — Spot integration, node consolidation",
+        "eks-020: Managed Node Groups vs Fargate — compute plane selection, Bottlerocket",
+        "eks-021: Resource Requests & Limits — QoS classes, VPA recommendations",
+        "eks-022: Health Checks — liveness, readiness, startup probe design rules",
+        "eks-023: Observability — AMP, CloudWatch Container Insights, FluentBit, X-Ray",
+        "eks-024: RBAC — EKS Access Entries, namespace-scoped roles, CI/CD permissions",
+        "eks-025: Network Policies — default-deny, VPC CNI enforcement, micro-segmentation",
+        "eks-026: EKS Security Hardening — Pod Security Standards, Kyverno, ECR scanning"
+      ]
+    },
+    {
+      "file": "rag/corpus/terraform/core_terraform_concepts_kb.json",
+      "section": "Core Terraform Concepts",
+      "entry_count": 7,
+      "entry_ids": ["tf-001", "tf-002", "tf-003", "tf-004", "tf-005", "tf-006", "tf-007"],
+      "concepts_covered": [
+        "Terraform Providers — version pinning, aliases, credential management",
+        "Terraform Resources — lifecycle hooks, dependencies, count/for_each",
+        "Terraform Modules — reusability, public registry, versioning",
+        "State Management — S3 backend, DynamoDB locking, state isolation strategy",
+        "Variables and Outputs — sensitive marking, typed variables, output surface",
+        "Data Sources — dynamic references, AMI lookup, SSM parameter fetch",
+        "Workspaces vs. Directory Isolation — when each is appropriate"
+      ]
+    },
+    {
+      "file": "rag/corpus/cloud/aws_infrastructure_patterns_kb.json",
+      "section": "AWS Infrastructure Patterns",
+      "entry_count": 10,
+      "entry_ids": [
+        "aws-vpc-001", "aws-vpc-002", "aws-vpc-003",
+        "aws-compute-001", "aws-compute-002",
+        "aws-storage-001",
+        "aws-networking-001",
+        "aws-iam-001", "aws-iam-002",
+        "aws-scaling-001"
+      ],
+      "concepts_covered": [
+        "VPC Multi-AZ Subnet Design — public/private/data tier separation",
+        "NAT Gateway vs. NAT Instance — production vs. cost-sensitive choices",
+        "VPC Endpoints — Gateway (S3/DynamoDB free) vs. Interface Endpoints",
+        "Compute Selection — EC2 vs ECS Fargate vs EKS vs Lambda decision framework",
+        "EKS Node Group Strategy — Spot/On-Demand, Karpenter, Managed Node Groups",
+        "Storage Selection — S3 vs EBS vs EFS vs RDS vs DynamoDB decision framework",
+        "Load Balancer Selection — ALB (L7) vs NLB (L4) with decision rules",
+        "IAM Design — Least Privilege, IRSA, role-per-service, SCPs",
+        "Security Groups — SG chaining, tiered rules, VPC Flow Logs",
+        "Auto Scaling — Target Tracking, scheduled scaling, scale-in protection"
+      ]
+    },
+    {
+      "file": "rag/corpus/terraform/production_best_practices_kb.json",
+      "section": "Production Best Practices",
+      "entry_count": 8,
+      "entry_ids": [
+        "prod-001", "prod-002", "prod-003", "prod-004",
+        "prod-005", "prod-006", "prod-007", "prod-008"
+      ],
+      "concepts_covered": [
+        "Environment Separation — separate accounts, separate state, staging = prod topology",
+        "Module Structuring — layered architecture (network/platform/application), thin root modules",
+        "Secrets Management — SSM SecureString vs. Secrets Manager selection rules",
+        "Tagging Strategy — required tags, provider default_tags, tag enforcement",
+        "Cost Optimization — Reserved Instances, Savings Plans, Spot, right-sizing, lifecycle policies",
+        "Observability — CloudWatch metrics/logs/traces, X-Ray, retention policies",
+        "Disaster Recovery — RTO/RPO objectives, 4 DR strategies selection rules",
+        "CI/CD for Terraform — pipeline architecture, policy scanning, OIDC auth, approval gates"
+      ]
+    },
+    {
+      "file": "rag/corpus/terraform/terraform_architecture_patterns_kb.json",
+      "section": "Terraform Architecture Patterns",
+      "entry_count": 8,
+      "entry_ids": [
+        "arch-001", "arch-002", "arch-003", "arch-004",
+        "arch-005", "arch-006", "arch-007", "arch-008"
+      ],
+      "concepts_covered": [
+        "Monolith Infrastructure Pattern — when to use, when to migrate away",
+        "Microservices Infrastructure Pattern — platform/service split, Conway's Law",
+        "Multi-Account AWS Strategy — Organizations, Control Tower, SCPs, account vending",
+        "EKS Platform Pattern — cluster add-ons, IRSA, private endpoint, node group strategy",
+        "Serverless Pattern — Lambda + API Gateway + DynamoDB, cold starts, DLQ",
+        "Hub-and-Spoke Networking — Transit Gateway, inspection VPC, route table segmentation",
+        "IaC Maturity Model — Stage 1-4 progression, right complexity for team size",
+        "Application Profile to Infrastructure Mapping — unified decision tree for AI agent"
+      ]
+    }
+  ],
+  "qdrant_ingestion_schema": {
+    "description": "Recommended Qdrant payload schema for each knowledge base entry",
+    "payload_fields": {
+      "id": "string — unique entry identifier (e.g., tf-001)",
+      "category": "string — top-level category for filtering",
+      "concept": "string — concept name for semantic search boosting",
+      "section": "string — one of: Core Terraform Concepts | AWS Infrastructure Patterns | Production Best Practices | Terraform Architecture Patterns",
+      "tags": "string[] — topic tags for hybrid search filtering",
+      "aws_pillars": "string[] — Well-Architected pillars this entry supports"
+    },
+    "embedding_text_strategy": "Embed the full entry JSON as a formatted string: 'Concept: {concept}. Description: {description}. Decision Rules: {decision_rules joined}. Tradeoffs: {tradeoffs joined}. Anti-Patterns: {anti_patterns joined}.'",
+    "recommended_chunk_overlap": "Each entry is a complete, self-contained chunk. No splitting required. Average token count per entry: 400-600 tokens."
+  },
+  "query_examples": [
+    {
+      "user_query": "Should I use EKS or ECS for my containerized microservices application?",
+      "relevant_entry_ids": ["eks-015", "aws-compute-001", "aws-compute-002", "arch-002"]
+    },
+    {
+      "user_query": "My application is a simple REST API with low traffic, what should I deploy it on?",
+      "relevant_entry_ids": ["eks-015", "eks-009", "arch-005"]
+    },
+    {
+      "user_query": "How should I scale my Kubernetes pods based on SQS queue depth?",
+      "relevant_entry_ids": ["eks-010", "eks-018", "eks-019"]
+    },
+    {
+      "user_query": "What is the safest way to deploy a new version without downtime on EKS?",
+      "relevant_entry_ids": ["eks-012", "eks-013", "eks-014", "eks-002"]
+    },
+    {
+      "user_query": "How do I give my Kubernetes pod access to an S3 bucket without hardcoded credentials?",
+      "relevant_entry_ids": ["eks-017", "eks-005", "aws-iam-001"]
+    },
+    {
+      "user_query": "Should I run my PostgreSQL database inside Kubernetes or use RDS?",
+      "relevant_entry_ids": ["eks-008", "eks-006", "aws-storage-001"]
+    },
+    {
+      "user_query": "How should I expose my internal API services on EKS?",
+      "relevant_entry_ids": ["eks-003", "eks-004", "eks-016"]
+    },
+    {
+      "user_query": "What autoscaler should I use for my EKS cluster, Karpenter or Cluster Autoscaler?",
+      "relevant_entry_ids": ["eks-019", "eks-018", "eks-020"]
+    },
+    {
+      "user_query": "How do I secure my EKS cluster against container escape and privilege escalation?",
+      "relevant_entry_ids": ["eks-026", "eks-024", "eks-025"]
+    },
+    {
+      "user_query": "My application has batch ML training jobs that run for 4 hours, what platform should I use?",
+      "relevant_entry_ids": ["eks-011", "eks-015", "eks-008"]
+    },
+    {
+      "user_query": "How should I design the VPC for a production workload?",
+      "relevant_entry_ids": ["aws-vpc-001", "aws-vpc-002", "aws-vpc-003"]
+    },
+    {
+      "user_query": "What Terraform state strategy should I use for multiple environments?",
+      "relevant_entry_ids": ["tf-004", "tf-007", "prod-001"]
+    },
+    {
+      "user_query": "How do I manage secrets in my AWS infrastructure?",
+      "relevant_entry_ids": ["prod-003", "aws-iam-001"]
+    },
+    {
+      "user_query": "My application has spiky traffic and short-lived jobs, what compute should I use?",
+      "relevant_entry_ids": ["aws-compute-001", "arch-005", "arch-008"]
+    },
+    {
+      "user_query": "What is the best DR strategy for my RDS database?",
+      "relevant_entry_ids": ["prod-007", "aws-storage-001"]
+    },
+    {
+      "user_query": "How should I structure Terraform for a team of 30 engineers?",
+      "relevant_entry_ids": ["arch-002", "arch-003", "arch-007", "prod-001", "prod-002"]
+    }
+  ]
+}

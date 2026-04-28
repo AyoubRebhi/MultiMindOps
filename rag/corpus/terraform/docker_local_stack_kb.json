@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "id": "terraform_docker_local_stack_kb",
+    "title": "Terraform — Local Docker Stack",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "terraform_docker_local_stack",
+      "category": "terraform",
+      "concept": "Terraform Local Docker Provider Pattern",
+      "description": "Minimal Terraform configuration for a local Docker-based workload. Requires Terraform >= 1.5.0. Uses kreuzwerker/docker provider ~> 3.0. Accepts build_context string variable. Outputs a container_name placeholder.",
+      "decision_rules": [
+        "Use for local development and testing environments managed via Terraform + Docker",
+        "Pin kreuzwerker/docker provider to ~> 3.0 for compatibility and stability"
+      ],
+      "tradeoffs": [
+        "Local state only — not suitable for team collaboration without a remote backend (S3 + DynamoDB)",
+        "Docker provider may not be available in all CI environments"
+      ],
+      "anti_patterns": [
+        "Do not use this pattern for production workloads — use AWS ECS, EKS, or equivalent",
+        "Do not omit required_version — version constraints prevent accidental upgrades"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}

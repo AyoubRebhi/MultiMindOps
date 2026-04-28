@@ -1,0 +1,137 @@
+{
+  "metadata": {
+    "id": "observability_patterns_kb",
+    "title": "Observability — Decision Intelligence Knowledge Base",
+    "description": "Production observability patterns: the three pillars (logs, metrics, traces), SLOs and burn-rate alerting, OpenTelemetry adoption, log hygiene, and the CloudWatch vs Prometheus vs Datadog tradeoff space.",
+    "domain": "observability",
+    "difficulty": "expert",
+    "type": "pattern",
+    "tags": ["observability", "monitoring", "slo", "sli", "logs", "metrics", "traces", "opentelemetry", "prometheus", "cloudwatch", "alerting"],
+    "version": "1.0.0",
+    "source_alignment": [
+      "Google SRE Book — Service Level Objectives",
+      "OpenTelemetry Specification (opentelemetry.io)",
+      "Prometheus Best Practices",
+      "AWS Observability Best Practices Guide",
+      "USE Method (Brendan Gregg) and RED Method (Tom Wilkie)"
+    ]
+  },
+  "entries": [
+    {
+      "id": "obs-001",
+      "category": "Foundations",
+      "concept": "The three pillars and when each is the right tool",
+      "description": "Logs, metrics, and traces answer different questions. Metrics ('how many requests, what latency, what error rate') aggregate well and are cheap; they answer 'is something wrong?'. Logs ('the exact event, with all fields') are expensive at scale but answer 'what exactly happened on this request?'. Traces ('the request's path across services') answer 'where did the latency come from?'. A production observability stack uses all three with deliberate boundaries — logs for forensics, metrics for alerting, traces for performance debugging.",
+      "decision_rules": [
+        "ALERT on metrics, never on logs — log-based alerts are slow, expensive, and unreliable",
+        "USE structured logs (JSON) with a common schema (trace_id, span_id, request_id, user_id) — flat text logs cripple every downstream tool",
+        "SAMPLE traces aggressively in steady state (1-5%) and tail-sample errors and high-latency requests",
+        "STORE high-cardinality data in traces, not metrics — metrics with millions of label combinations are a known foot-gun",
+        "PROPAGATE trace context across every async boundary (queues, jobs, workers) — broken propagation makes traces useless"
+      ],
+      "tradeoffs": [
+        "Logs: maximum fidelity vs highest cost — sample or sample-and-aggregate",
+        "Metrics: cheap and fast vs limited cardinality — Prometheus 1M series is a soft ceiling per replica",
+        "Traces: rich context vs intrusive instrumentation — OpenTelemetry auto-instrumentation amortizes the cost"
+      ],
+      "anti_patterns": [
+        "Alerting on `grep ERROR` over a log stream — slow, brittle, and bills explode under load",
+        "Logging the entire request body — PII risk plus log-bill blowup",
+        "High-cardinality labels in metrics (user_id, request_id) — kills Prometheus / inflates Datadog bill",
+        "Unstructured `printf` logs in production — every parsing tool downstream is a liability"
+      ]
+    },
+    {
+      "id": "obs-002",
+      "category": "SLOs and Alerting",
+      "concept": "Defining SLOs and burn-rate alerts (Google SRE pattern)",
+      "description": "An SLO (Service Level Objective) is a numeric target on a Service Level Indicator (SLI) over a time window — e.g. 99.9% of requests succeed over 30 days. The error budget is `1 - SLO` (43.2 minutes of failure per month at 99.9%). Alerts should fire on burn-rate (how fast the budget is being consumed) using multi-window alerts (fast: 1h+5m, slow: 6h+30m) — this catches both sudden incidents and slow degradations while avoiding alert fatigue.",
+      "decision_rules": [
+        "DEFINE SLOs from user-visible signals: availability (success rate), latency (p99), correctness — NOT internal metrics like CPU",
+        "PICK SLO targets from observed historical performance + business need — 99.9% is common; 99.99% is expensive and rarely needed",
+        "ALERT on multi-window burn rate (Google SRE workbook chapter 5): page on fast burn (2% of monthly budget in 1h), ticket on slow burn (10% in 6h)",
+        "EXEMPT planned events from SLO calculation only via explicit burn-budget freezes, not by silencing alerts",
+        "REVIEW SLOs quarterly — if you never miss an SLO, it is too lax; if you constantly miss, it is too strict or the system is unhealthy"
+      ],
+      "tradeoffs": [
+        "Tighter SLO: better user experience vs disproportionate engineering cost (each 9 is ~10x harder)",
+        "Multi-window alerts: low false-positive rate vs more complex Prometheus rules / Sloth config",
+        "Per-endpoint SLOs: precise but proliferate vs per-service rolled-up SLOs that hide endpoint regressions"
+      ],
+      "anti_patterns": [
+        "Alerting on 'CPU > 80%' — that is a saturation symptom, not a user-visible problem",
+        "One alert that pages whenever error rate is non-zero — alert fatigue, real pages get ignored",
+        "Treating an unmet SLO as a personal failure rather than a signal — error budgets exist to be spent"
+      ]
+    },
+    {
+      "id": "obs-003",
+      "category": "OpenTelemetry Adoption",
+      "concept": "OpenTelemetry as the vendor-neutral instrumentation standard",
+      "description": "OpenTelemetry (OTel) is the CNCF-backed standard for emitting telemetry. Adopt OTel SDKs in code, run an OTel Collector as the egress point, and let the Collector route to your backend (Prometheus, Tempo, Loki, Datadog, New Relic — anything that speaks OTLP or has a Collector exporter). This decouples instrumentation from vendor and is now the default in 2025+. The Collector also performs sampling, redaction, and enrichment — keep these in the Collector, not the application.",
+      "decision_rules": [
+        "INSTRUMENT services with OpenTelemetry SDK + auto-instrumentation packages — direct vendor SDKs are legacy",
+        "DEPLOY the OTel Collector as a DaemonSet or sidecar — apps export to localhost:4317, Collector handles upstream",
+        "DO sampling, redaction, attribute enrichment in the Collector — keeps app code clean and centralizes policy",
+        "PROPAGATE W3C Trace Context (traceparent header) across every service boundary",
+        "ADOPT OpenTelemetry Logs (now stable) once your runtime supports it — unifies the three pillars under one SDK"
+      ],
+      "tradeoffs": [
+        "OTel: vendor-neutral but the spec is still evolving for some signals (logs more recent than traces)",
+        "Collector as DaemonSet vs sidecar: DaemonSet is simpler ops; sidecar gives stronger pod-level isolation",
+        "Auto-instrumentation: zero code change vs less precise spans than manual"
+      ],
+      "anti_patterns": [
+        "Vendor-locked SDKs (e.g. agent-only Datadog) — migration cost grows with adoption",
+        "Sampling in the application — moves policy into N services instead of one Collector",
+        "No trace context propagation — traces look like disconnected fragments per service"
+      ]
+    },
+    {
+      "id": "obs-004",
+      "category": "Stack Choice",
+      "concept": "CloudWatch vs Prometheus vs Datadog/New Relic — when to choose each",
+      "description": "There is no single right answer; the choice is driven by team size, cardinality, and cost tolerance. CloudWatch is the path of least resistance on AWS (zero ops, native integration, billing tied to AWS) but expensive at scale and limited cardinality. Prometheus + Grafana + Loki + Tempo is the best price/performance for medium-large teams with platform engineers. Datadog/New Relic offer the best UX and time-to-value but bills scale aggressively and lock-in is real.",
+      "decision_rules": [
+        "PICK CloudWatch when: small team, AWS-only workload, low log volume, no dedicated SRE",
+        "PICK Prometheus stack when: Kubernetes-heavy, platform team exists, cardinality matters, cost-sensitive",
+        "PICK Datadog/New Relic when: time-to-value > cost, multi-cloud, no platform team to operate Prometheus",
+        "DECOUPLE via OpenTelemetry — you can switch backends later without re-instrumenting",
+        "ESTIMATE cost up-front: log GB/day × retention + metrics series count + APM host count → annual bill — surprises here are common"
+      ],
+      "tradeoffs": [
+        "CloudWatch: zero-ops vs $0.50/GB ingest, $0.03/GB storage, $0.005 per metric — bill scales fast",
+        "Prometheus: cheap and powerful vs cluster ops, federation complexity at multi-cluster",
+        "Datadog: best UX vs ~$15-30/host/month + per-custom-metric + log indexing — large bills are normal"
+      ],
+      "anti_patterns": [
+        "Choosing Datadog and instrumenting with their SDK directly — locks in vendor; OTel + Datadog exporter is the right path",
+        "Running Prometheus without retention policy — disk fills, alerts go silent",
+        "Shipping every CloudWatch log line to a third-party indexer — log bills become the largest cloud line item"
+      ]
+    },
+    {
+      "id": "obs-005",
+      "category": "Log Hygiene",
+      "concept": "Structured logs, redaction, and retention",
+      "description": "Logs become a liability if they contain PII, are unstructured, or are retained forever. A production logging policy specifies: a structured schema (JSON with required fields), a redaction pipeline (in the Collector or shipper), tiered retention (7 days hot / 30 days warm / 1 year cold), and an out-of-band path for sensitive data (audit logs separated from app logs).",
+      "decision_rules": [
+        "EMIT JSON logs with required fields: timestamp (RFC3339), level, service, version, trace_id, span_id, message",
+        "REDACT PII at the collector/shipper, not the application — centralizes policy",
+        "TIER retention: hot (queryable, 7-14 days), warm (slower query, 30-90 days), cold (S3/Glacier, 1+ year for compliance)",
+        "SEPARATE audit logs (who did what) from application logs — different retention, different access controls",
+        "RATE-LIMIT logs at the application — runaway logs are a self-DoS and a bill spike"
+      ],
+      "tradeoffs": [
+        "JSON logs: machine-readable but slightly larger than text — compression mitigates",
+        "Redaction in collector: central policy vs requires the policy author to know every field name",
+        "Long retention: better forensics vs storage cost — compliance often dictates"
+      ],
+      "anti_patterns": [
+        "Logging passwords, tokens, or full credit card numbers — if you are not sure, redact",
+        "Logging at DEBUG in production permanently — bill explodes, signal disappears",
+        "Logs as the primary forensic trail without integrity protection — attacker who reaches the host can edit them"
+      ]
+    }
+  ]
+}

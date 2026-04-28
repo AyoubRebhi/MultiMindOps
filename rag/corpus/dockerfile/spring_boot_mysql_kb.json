@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "id": "dockerfile_spring_boot_mysql_kb",
+    "title": "Dockerfile — Spring Boot with MySQL",
+    "version": "1.0"
+  },
+  "entries": [
+    {
+      "id": "dockerfile_spring_boot_mysql",
+      "category": "docker",
+      "concept": "Spring Boot MySQL Dockerfile",
+      "description": "Multi-stage Dockerfile for Spring Boot with MySQL. Build stage: maven:3.9-eclipse-temurin-17. Runtime stage: eclipse-temurin:17-jre. Supports JAVA_OPTS env variable for JVM tuning. ENTRYPOINT uses sh -c to expand $JAVA_OPTS at container startup.",
+      "decision_rules": [
+        "Use when language=java, framework=spring_boot, dependencies include mysql",
+        "JAVA_OPTS pattern allows tuning heap/GC flags without rebuilding the image"
+      ],
+      "tradeoffs": [
+        "sh -c entrypoint adds a shell process but enables env var expansion in JAVA_OPTS",
+        "No non-root user defined — add USER directive before ENTRYPOINT for production hardening"
+      ],
+      "anti_patterns": [
+        "Do not hardcode MYSQL_PASSWORD or connection URL in the Dockerfile",
+        "Do not use a JDK image in the runtime stage"
+      ],
+      "aws_alignment": []
+    }
+  ]
+}
