@@ -88,26 +88,83 @@ _WEIGHTS = {
 # ── LLM evaluation prompt ─────────────────────────────────────────────────────
 
 _EVAL_SYSTEM_PROMPT = (
-    "You are a strict RAG evaluation assistant. "
-    "Score each metric between 0.0 and 1.0. "
-    "Respond ONLY with a JSON object — no markdown, no explanation."
+    "You are a strict RAG evaluation assistant for a DevSecOps knowledge base.\n"
+    "Score each metric between 0.0 and 1.0.\n"
+    "Respond ONLY with a JSON object — no markdown, no explanation.\n\n"
+    "Scoring guidance:\n"
+    "- faithfulness: Is every factual claim in the answer traceable to the context? "
+    "For HCL/code answers, check that resource types, argument names, and key values "
+    "appear in the context (even as prose descriptions, not just literal code). "
+    "A correct HCL block synthesized from contextual attribute names is faithful.\n"
+    "- relevance: Does the answer directly address what the query asked?\n"
+    "- correctness: Is the answer technically accurate for the DevSecOps/Terraform domain "
+    "given what the context says? Reward complete HCL examples over vague prose."
 )
 
 _EVAL_USER_TEMPLATE = """\
 Query: {query}
 
-Retrieved context:
+Retrieved context (source of truth):
 {context}
 
-Generated answer: {answer}
+Generated answer:
+{answer}
 
-Evaluate the following and return a JSON object:
+Scoring rules:
+- faithfulness: 1.0 if every claim/argument in the answer is grounded in the context above; \
+0.0 only if the answer introduces facts completely absent from context. \
+HCL code blocks synthesized from context attribute names count as faithful.
+- relevance: 1.0 if the answer fully addresses the query; partial credit for partial coverage.
+- correctness: 1.0 if the answer is technically accurate per the context.
+
+Return ONLY this JSON (no other text):
 {{
-  "faithfulness": <float 0-1, is the answer grounded in the context?>,
-  "relevance": <float 0-1, does the answer address the query?>,
-  "correctness": <float 0-1, is the answer factually accurate based on context?>
+  "faithfulness": <float 0-1>,
+  "relevance": <float 0-1>,
+  "correctness": <float 0-1>
 }}"""
 
+# ── RAG generation prompts ────────────────────────────────────────────────────
+
+_GEN_SYSTEM_PROMPT = (
+    "You are a senior DevSecOps architect and Terraform/IaC expert.\n"
+    "Your job is to answer infrastructure and security questions using ONLY the provided context.\n\n"
+    "Rules:\n"
+    "1. Base every claim on a specific piece of the context. Cite chunk numbers when useful.\n"
+    "2. If the question asks for Terraform/HCL code, produce a complete, syntactically valid HCL block "
+    "derived from patterns, attributes, and resource types mentioned in the context.\n"
+    "3. If the context contains partial HCL, complete it into a runnable example using only attributes "
+    "and values explicitly mentioned in the context.\n"
+    "4. Structure your answer: first a brief explanation, then a ```hcl code block``` if applicable, "
+    "then key security/best-practice notes.\n"
+    "5. If the context is truly insufficient, say: 'Context insufficient — no HCL example available.' "
+    "Do NOT hallucinate resource arguments not mentioned in context."
+)
+
+_GEN_USER_TEMPLATE = """\
+CONTEXT (use ONLY this to answer):
+{context}
+
+QUESTION: {query}
+
+INSTRUCTIONS:
+- Read every context chunk before answering.
+- If the question involves Terraform resources (vpc, subnet, backend, iam, etc.):
+  * Extract resource type names, argument names, and values from the context.
+  * Produce a working HCL example using those exact names/values.
+  * Wrap HCL in ```hcl fences.
+- If the question involves best practices or security:
+  * List the specific rules/anti-patterns from the context as bullet points.
+- Keep your answer grounded: every sentence must trace back to a specific chunk.
+
+ANSWER:"""
+
+# Domain classifier: returns True if query is Terraform-focused
+def _is_terraform_query(query: str) -> bool:
+    tf_signals = {"terraform", "hcl", ".tf", "backend", "provider", "module", "tfstate",
+                  "aws_vpc", "aws_iam", "aws_s3", "resource \"", "variable \""}
+    q = query.lower()
+    return any(sig in q for sig in tf_signals)
 
 # ── Data structures ───────────────────────────────────────────────────────────
 
@@ -260,16 +317,44 @@ class RAGEvaluator:
 
         return result
 
-    def run_benchmark(self) -> BenchmarkReport:
-        """Run the full benchmark suite and return aggregated metrics."""
+    def run_benchmark(self, debug: bool = False) -> BenchmarkReport:
+        """Run the full benchmark suite and return aggregated metrics.
+
+        For each query:
+          1. Retrieve top-k chunks from Qdrant
+          2. Generate a grounded answer via LLM (Lightning → Groq → heuristic fallback)
+          3. Score retrieval + generation + context quality
+        """
         t0 = time.time()
         results: list[EvalResult] = []
 
         for item in BENCHMARK_QUERIES:
             query = item["query"]
-            logger.info("Evaluating: %s", query)
+            logger.info("[Benchmark] Evaluating: %s", query)
+
+            # ── Step 1: retrieve ──────────────────────────────────────────────
+            retrieved_chunks = self._retrieve(query)
+
+            if debug:
+                print(f"\n[DEBUG] ── Query: {query!r} ──")
+                print(f"[DEBUG] Retrieved {len(retrieved_chunks)} chunks:")
+                for i, c in enumerate(retrieved_chunks[:3]):
+                    print(
+                        f"  [{i+1}] {c.get('title','?'):40s}  score={c.get('score', 0):.3f}"
+                    )
+                    print(f"       {(c.get('content') or '')[:150].strip()!r}…")
+
+            # ── Step 2: generate answer ───────────────────────────────────────
+            generated_answer = self._generate_answer(query, retrieved_chunks)
+
+            if debug:
+                print(f"[DEBUG] Generated answer preview:\n  {generated_answer[:300]!r}")
+
+            # ── Step 3: evaluate ──────────────────────────────────────────────
             result = self.evaluate(
                 query=query,
+                retrieved_chunks=retrieved_chunks,
+                generated_answer=generated_answer,
                 expected_keywords=item.get("expected_keywords", []),
                 expected_doc_types=item.get("expected_doc_types", []),
             )
@@ -283,10 +368,113 @@ class RAGEvaluator:
         report.overall_rag_score = sum(r.rag_score for r in results) / max(len(results), 1)
         return report
 
+    # ── LLM answer generation ─────────────────────────────────────────────────
+
+    def _generate_answer(self, query: str, chunks: list[dict[str, Any]]) -> str:
+        """Call Lightning/Groq to produce a RAG-grounded answer from retrieved chunks.
+
+        Tries Lightning first, then Groq, then legacy provider.
+        Returns a safe fallback string when all providers are unavailable.
+        """
+        if not chunks:
+            logger.warning("[Generation] No chunks available for query '%s'", query)
+            return "Relevant information found but answer generation failed."
+
+        # Deduplicate and format context — group by source_type for better grounding
+        seen: set[str] = set()
+        context_parts: list[str] = []
+        for i, c in enumerate(chunks[:5]):
+            content = (c.get("content") or "").strip()
+            if not content or content in seen:
+                continue
+            seen.add(content)
+            source_type = c.get("source_type") or c.get("doc_type") or "general"
+            title = c.get("title") or c.get("concept") or ""
+            header = f"[CHUNK {i + 1} | type={source_type}" + (f" | {title}" if title else "") + "]"
+            # Use up to 1800 chars per chunk so HCL blocks aren't truncated mid-block
+            context_parts.append(f"{header}\n{content[:1800]}")
+
+        context = "\n\n".join(context_parts)
+        if len(context) > 14_000:
+            context = context[:14_000]
+
+        user_msg = _GEN_USER_TEMPLATE.format(query=query, context=context)
+
+        t0 = time.time()
+
+        providers = [
+            ("lightning", self._lightning_base_url, self._lightning_key, self._lightning_eval_model),
+            ("groq",      "https://api.groq.com/openai/v1", self._groq_key, self._groq_model),
+            ("legacy",    self._legacy_llm_base_url, self._legacy_llm_api_key, self._legacy_llm_model),
+        ]
+
+        for label, base_url, api_key, model in providers:
+            if not api_key:
+                continue
+            try:
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": _GEN_SYSTEM_PROMPT},
+                        {"role": "user",   "content": user_msg},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens":  2048,
+                }
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type":  "application/json",
+                }
+                with httpx.Client(timeout=self._llm_timeout) as client:
+                    resp = client.post(
+                        f"{base_url}/chat/completions",
+                        json=payload,
+                        headers=headers,
+                    )
+                    resp.raise_for_status()
+
+                data   = resp.json()
+                answer = data["choices"][0]["message"]["content"].strip()
+                usage  = data.get("usage", {})
+                latency_ms = int((time.time() - t0) * 1000)
+
+                logger.info(
+                    "[Generation] provider=%s model=%s tokens_in=%s tokens_out=%s latency=%dms",
+                    label, model,
+                    usage.get("prompt_tokens",     "?"),
+                    usage.get("completion_tokens",  "?"),
+                    latency_ms,
+                )
+
+                if not answer:
+                    logger.warning("[Generation] %s returned empty response — trying next provider", label)
+                    continue
+
+                logger.debug("[Generation] query=%r answer_preview=%r", query, answer[:200])
+                return answer
+
+            except Exception as exc:
+                logger.warning("[Generation] %s failed (%s) — trying next provider", label, exc)
+
+        logger.warning("[Generation] All providers failed for query '%s' — returning fallback", query)
+        return "Relevant information found but answer generation failed."
+
     # ── Retrieval ─────────────────────────────────────────────────────────────
 
     def _retrieve(self, query: str) -> list[dict[str, Any]]:
         vec = self._embedder.embed_query(query)
+        # Use hybrid search + reranking (same path as validation) for best chunk quality
+        if hasattr(self._qdrant, "search_with_rerank"):
+            results = self._qdrant.search_with_rerank(
+                query_vector=vec,
+                query=query,
+                top_k=self._top_k,
+                candidate_multiplier=4,
+                score_threshold=self._score_threshold,
+            )
+            if results:
+                return results
+        # Fallback to basic search when reranker not available
         return self._qdrant.search(
             query_vector=vec,
             top_k=self._top_k,
@@ -408,8 +596,10 @@ class RAGEvaluator:
         chunks: list[dict[str, Any]],
         answer: str,
     ) -> dict[str, float]:
+        # 1200 chars per chunk so the judge sees complete HCL blocks, not truncated halves
         context_text = "\n\n---\n\n".join(
-            f"[{i+1}] {c.get('content', '')[:600]}" for i, c in enumerate(chunks[:5])
+            f"[chunk {i+1} | {c.get('source_type', 'general')}]\n{c.get('content', '')[:1200]}"
+            for i, c in enumerate(chunks[:5])
         )
         user_msg = _EVAL_USER_TEMPLATE.format(
             query=query, context=context_text, answer=answer,

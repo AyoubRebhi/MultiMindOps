@@ -1,0 +1,164 @@
+{
+  "overall_rag_score": 0.7869,
+  "averages": {
+    "precision_at_k": 0.9714,
+    "recall_at_k": 0.9306,
+    "hit_rate": 1.0,
+    "mrr": 1.0,
+    "faithfulness": 0.5406,
+    "relevance": 0.8429,
+    "correctness": 0.7411,
+    "coverage": 0.6669,
+    "redundancy": 0.1561
+  },
+  "duration_seconds": 51.97,
+  "per_query": [
+    {
+      "query": "terraform aws vpc",
+      "retrieval": {
+        "precision_at_k": 1.0,
+        "recall_at_k": 1.0,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "k": 5
+      },
+      "generation": {
+        "faithfulness": 1.0,
+        "relevance": 1.0,
+        "correctness": 1.0,
+        "scored_by": "groq"
+      },
+      "context": {
+        "coverage": 0.6902,
+        "redundancy": 0.1818
+      },
+      "rag_score": 0.9599
+    },
+    {
+      "query": "kubernetes deployment example",
+      "retrieval": {
+        "precision_at_k": 1.0,
+        "recall_at_k": 1.0,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "k": 5
+      },
+      "generation": {
+        "faithfulness": 0.9,
+        "relevance": 0.9,
+        "correctness": 0.9,
+        "scored_by": "groq"
+      },
+      "context": {
+        "coverage": 0.6901,
+        "redundancy": 0.1463
+      },
+      "rag_score": 0.9067
+    },
+    {
+      "query": "docker security best practices",
+      "retrieval": {
+        "precision_at_k": 1.0,
+        "recall_at_k": 1.0,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "k": 5
+      },
+      "generation": {
+        "faithfulness": 0.6,
+        "relevance": 1.0,
+        "correctness": 0.6627,
+        "scored_by": "heuristic"
+      },
+      "context": {
+        "coverage": 0.6627,
+        "redundancy": 0.1219
+      },
+      "rag_score": 0.8296
+    },
+    {
+      "query": "cicd pipeline security scanning",
+      "retrieval": {
+        "precision_at_k": 1.0,
+        "recall_at_k": 0.7143,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "k": 5
+      },
+      "generation": {
+        "faithfulness": 0.0,
+        "relevance": 0.0,
+        "correctness": 0.5997,
+        "scored_by": "heuristic"
+      },
+      "context": {
+        "coverage": 0.5997,
+        "redundancy": 0.0741
+      },
+      "rag_score": 0.4677
+    },
+    {
+      "query": "aws iam roles and policies",
+      "retrieval": {
+        "precision_at_k": 1.0,
+        "recall_at_k": 1.0,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "k": 5
+      },
+      "generation": {
+        "faithfulness": 0.3067,
+        "relevance": 1.0,
+        "correctness": 0.7764,
+        "scored_by": "heuristic"
+      },
+      "context": {
+        "coverage": 0.7764,
+        "redundancy": 0.2822
+      },
+      "rag_score": 0.7913
+    },
+    {
+      "query": "kubernetes ingress nginx configuration",
+      "retrieval": {
+        "precision_at_k": 0.8,
+        "recall_at_k": 0.8,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "k": 5
+      },
+      "generation": {
+        "faithfulness": 0.4569,
+        "relevance": 1.0,
+        "correctness": 0.5974,
+        "scored_by": "heuristic"
+      },
+      "context": {
+        "coverage": 0.5974,
+        "redundancy": 0.1157
+      },
+      "rag_score": 0.7449
+    },
+    {
+      "query": "terraform state management backend",
+      "retrieval": {
+        "precision_at_k": 1.0,
+        "recall_at_k": 1.0,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "k": 5
+      },
+      "generation": {
+        "faithfulness": 0.5203,
+        "relevance": 1.0,
+        "correctness": 0.6517,
+        "scored_by": "heuristic"
+      },
+      "context": {
+        "coverage": 0.6517,
+        "redundancy": 0.1704
+      },
+      "rag_score": 0.8085
+    }
+  ]
+}

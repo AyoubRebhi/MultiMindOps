@@ -891,7 +891,7 @@ def main() -> int:
             top_k=5,
             score_threshold=0.25,
         )
-        report = evaluator.run_benchmark()
+        report = evaluator.run_benchmark(debug=args.verbose)
         print_benchmark_report(report)
 
         import json as _json

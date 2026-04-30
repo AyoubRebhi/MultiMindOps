@@ -20,6 +20,7 @@ import re
 import textwrap
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -195,6 +196,13 @@ class LocalChunkingService:
         if len(content) > _MAX_CONTENT_CHARS:
             logger.warning("[Chunking] '%s' truncated from %d to %d chars (safeguard)", source, len(content), _MAX_CONTENT_CHARS)
             content = content[:_MAX_CONTENT_CHARS]
+
+        # HCL files (.tf/.hcl) always use block-boundary splitting — never the
+        # sliding-window fallback or Ollama, because a split HCL block is invalid.
+        source_ext = Path(source).suffix.lower() if source else ""
+        if source_ext in (".tf", ".hcl") or doc_type == "terraform":
+            raw_chunks = self._chunk_hcl_blocks(content, source, doc_type)
+            return self._enrich_chunks(raw_chunks, source, doc_type, content, chunking_source="hcl_block")
 
         t0 = time.monotonic()
         cache_key = self._hash_doc(content, source, doc_type)
@@ -424,6 +432,88 @@ class LocalChunkingService:
             )
 
         return chunks
+
+    # ── HCL-aware chunker (Terraform .tf files) ──────────────────────────────
+
+    def _chunk_hcl_blocks(
+        self,
+        content: str,
+        source: str,
+        doc_type: str = "terraform",
+    ) -> list[dict[str, Any]]:
+        """
+        Split a Terraform HCL file into atomic chunks at block boundaries.
+
+        Each top-level block (resource, variable, output, module, provider,
+        terraform, data, locals) becomes exactly ONE chunk.  Blocks are NEVER
+        split mid-block regardless of size, because a truncated HCL block is
+        syntactically invalid and causes the LLM to hallucinate arguments.
+
+        A prose header chunk is emitted when the file starts with ≥3 comment lines
+        (# ...) so the file-level description is searchable separately.
+        """
+        chunks: list[dict[str, Any]] = []
+
+        # ── 1. Extract file-level comment header ──────────────────────────────
+        header_lines: list[str] = []
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped == "":
+                header_lines.append(line)
+            else:
+                break
+        header_text = "\n".join(header_lines).strip()
+        if len(header_text) > 60:
+            chunks.append({
+                "content":    header_text,
+                "title":      f"{Path(source).stem} — file description",
+                "chunk_type": "prose",
+                "keywords":   self._extract_keywords(header_text),
+                "context_tag": doc_type,
+                "use_case":   "documentation",
+            })
+
+        # ── 2. Split on top-level block boundaries ────────────────────────────
+        block_re = re.compile(
+            r'^(resource|data|variable|output|module|provider|terraform|locals)\s*'
+            r'(?:"[^"]*"\s*)?(?:"[^"]*"\s*)?\{',
+            re.MULTILINE,
+        )
+        positions = [m.start() for m in block_re.finditer(content)]
+        positions.append(len(content))
+
+        for i, start in enumerate(positions[:-1]):
+            end   = positions[i + 1]
+            block = content[start:end].strip()
+            if len(block) < 20:
+                continue
+
+            m          = block_re.match(block)
+            block_kind = m.group(1) if m else "unknown"
+
+            # Extract resource type from the block header for richer metadata
+            resource_type = ""
+            rt_match = re.match(r'resource\s+"([^"]+)"', block)
+            if rt_match:
+                resource_type = rt_match.group(1)
+
+            title = resource_type or f"{Path(source).stem} — {block_kind}"
+
+            chunks.append({
+                "content":       block,
+                "title":         title,
+                "chunk_type":    "config",
+                "keywords":      self._extract_keywords(block),
+                "context_tag":   doc_type,
+                "use_case":      "infrastructure",
+                "block_type":    block_kind,
+                "resource_type": resource_type,
+            })
+
+        logger.info(
+            "[Chunking] HCL block-split | source='%s' | blocks=%d", source, len(chunks)
+        )
+        return chunks if chunks else self._fallback_chunk(content, source, doc_type)
 
     # ── Deterministic fallback chunker ───────────────────────────────────────
 
