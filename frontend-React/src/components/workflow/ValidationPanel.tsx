@@ -29,12 +29,12 @@ export function ValidationPanel({ onDecision, isLoading, rejectedMessage, classN
   const [showModify, setShowModify] = useState(false)
 
   const handleApprove = async () => {
-    await onDecision('approve')
+    await onDecision('approved')
     setPanelState('approved')
   }
 
   const handleReject = async () => {
-    await onDecision('reject')
+    await onDecision('rejected')
     setPanelState('rejected')
   }
 
@@ -44,7 +44,7 @@ export function ValidationPanel({ onDecision, isLoading, rejectedMessage, classN
       return
     }
     setFeedbackError('')
-    await onDecision('modify', feedback.trim())
+    await onDecision('modified', feedback.trim())
     setFeedback('')
     setShowModify(false)
     setPanelState('idle')

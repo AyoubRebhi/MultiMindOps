@@ -8,6 +8,22 @@ export type TaskStatus =
   | 'human_approved'
   | 'human_approved_with_changes'
 
+// ─── Pipeline step status ─────────────────────────────────────────────────────
+export type PipelineStepStatus = 'pending' | 'running' | 'completed' | 'failed'
+
+// ─── Terraform outputs contract (consumed by KubernetesAgent) ─────────────────
+export interface TerraformOutputs {
+  cluster_endpoint?: string
+  cluster_name?: string
+  load_balancer_dns?: string
+  ecr_repository_url?: string
+  vpc_id?: string
+  subnet_ids?: string
+  security_group_id?: string
+  rds_endpoint?: string
+  [key: string]: string | undefined
+}
+
 // ─── Request schemas ──────────────────────────────────────────────────────────
 export interface TaskCreate {
   prompt: string
@@ -160,6 +176,12 @@ export interface TaskResponse {
   plan?: PlanData
   logs: LogEntry[]
   result?: TaskResult
+  // New top-level fields from multi-agent backend (V3)
+  infra?: InfrastructureResult
+  terraform_outputs?: TerraformOutputs
+  validation?: ValidationResult
+  cicd?: Record<string, string>
+  cost_estimation?: { monthly_cost?: number; cost_profile?: string; [key: string]: unknown }
   error_message?: string
   created_at: string
   updated_at: string
@@ -179,7 +201,7 @@ export interface PlanPreviewResponse {
 }
 
 // ─── Plan validation ───────────────────────────────────────────────────────────
-export type PlanValidationDecision = 'approve' | 'reject' | 'modify'
+export type PlanValidationDecision = 'approved' | 'rejected' | 'modified'
 
 export interface ValidatePlanRequest {
   task_id: string

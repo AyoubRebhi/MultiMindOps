@@ -604,19 +604,19 @@ export default function NewTask() {
       try {
         const result = await validatePlan.mutateAsync({ task_id: taskId, decision, feedback })
 
-        if (decision === 'reject') {
+        if (decision === 'rejected') {
           setRejectedMsg(result.message ?? 'The plan has been rejected. You can start a new task.')
           return
         }
 
-        if (decision === 'approve') {
+        if (decision === 'approved') {
           // Backend continues execution — navigate to the generating/polling view
           // Use the task_id from the validate-plan response
           setWizard({ step: 'generating', task: { id: result.task_id } as Parameters<typeof setWizard>[0]['task'] })
           return
         }
 
-        if (decision === 'modify') {
+        if (decision === 'modified') {
           // Reload the updated plan returned by the backend
           if (result.plan) {
             const updatedPreview = {

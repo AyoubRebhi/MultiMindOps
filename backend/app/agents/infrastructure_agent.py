@@ -1,24 +1,16 @@
 """
-InfrastructureAgent — generates DevSecOps artifacts (Dockerfile, docker-compose,
-Kubernetes manifests, Terraform configs, CI/CD workflows, etc.).
+InfrastructureAgent — Docker-only artifact generator (thin coordinator).
 
-Upgrades over the previous single-shot version
------------------------------------------------
-1. **ReAct loop** (inherited from EnhancedBaseAgent)
-   - Up to 3 LLM iterations.
-   - Quality evaluated after each iteration.
-   - Issues fed back as a structured refinement prompt.
-   - Result cached in agent memory to avoid recomputation.
+After the TerraformAgent / KubernetesAgent split this agent is responsible
+ONLY for Docker artifacts:
 
-2. **Domain-specific quality evaluator** (``_evaluate_infra_quality``)
-   - Checks that all expected artifacts are present and non-generic.
-   - Checks Dockerfile validity via ValidationService.
-   - Checks docker-compose validity when expected.
-   - Reports per-artifact issues back into the ReAct loop.
+    • Dockerfile
+    • .dockerignore
+    • docker-compose.yml  (when expected)
+    • .env.example        (when expected)
 
-3. **Structured validation** (``ValidationService``)
-   - Every generated artifact is validated before being returned.
-   - Issues are surfaced in the response under ``validation_summary``.
+Terraform HCL generation  → TerraformAgent
+Kubernetes YAML generation → KubernetesAgent
 
 All existing public surface (constructor, ``run()`` signature, return dict shape)
 is preserved — no breaking changes to callers (OrchestratorAgent, etc.).
@@ -44,7 +36,11 @@ logger = logging.getLogger(__name__)
 
 class InfrastructureAgent(EnhancedBaseAgent):
     """
-    Generates infrastructure artifacts using a ReAct loop backed by LLM + RAG.
+    Generates Docker artifacts (Dockerfile, .dockerignore, docker-compose,
+    .env.example) using a ReAct loop backed by LLM + RAG.
+
+    Terraform and Kubernetes generation have been moved to TerraformAgent
+    and KubernetesAgent respectively to eliminate DSL bleeding.
 
     Inherits from EnhancedBaseAgent — gains:
     • ``self.memory``     (AgentMemory)
@@ -72,7 +68,7 @@ class InfrastructureAgent(EnhancedBaseAgent):
         approved_artifacts: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Generate infrastructure artifacts for the given prompt and plan.
+        Generate Docker artifacts for the given prompt and plan.
 
         Returns the same dict shape as the previous implementation, plus:
         - ``react_iterations``   — number of ReAct iterations actually used.
@@ -147,7 +143,7 @@ RAG retrieval result:
 Deterministic artifact hints:
 {compact_fallback}
 
-Approved artifacts to generate:
+Approved artifacts to generate (Docker artifacts only):
 {approved_artifacts or []}
 """.strip()
 
@@ -160,7 +156,7 @@ Approved artifacts to generate:
             approved_artifacts=approved_artifacts or [],
         )
 
-        iterations_used = [0]  # mutable container so the closure can write to it
+        iterations_used = [0]
 
         def _counted_evaluate(response: Dict[str, Any]) -> List[str]:
             iterations_used[0] += 1
@@ -215,35 +211,6 @@ Approved artifacts to generate:
             if reason:
                 fallback_reasons["docker_compose"] = reason
 
-        if expectations.get("needs_kubernetes"):
-            for key in (
-                "kubernetes_manifests",
-                "kubernetes_deployment",
-                "kubernetes_service",
-                "kubernetes_configmap",
-            ):
-                artifacts[key], used, reason = self._choose_best_artifact(
-                    artifact_key=key,
-                    generated=artifacts.get(key),
-                    fallback=fallback_artifacts.get(key, ""),
-                    rag_result=rag_result,
-                )
-                fallback_used = fallback_used or used
-                if reason:
-                    fallback_reasons[key] = reason
-
-        if expectations.get("needs_terraform"):
-            for key in ("terraform_main", "terraform_variables", "terraform_outputs"):
-                artifacts[key], used, reason = self._choose_best_artifact(
-                    artifact_key=key,
-                    generated=artifacts.get(key),
-                    fallback=fallback_artifacts.get(key, ""),
-                    rag_result=rag_result,
-                )
-                fallback_used = fallback_used or used
-                if reason:
-                    fallback_reasons[key] = reason
-
         # ── 6. Artifact-level validation ──────────────────────────────────────
         validation_results = self.validation.validate_artifacts(artifacts)
         validation_summary = self.validation.aggregate_validation(validation_results)
@@ -281,35 +248,31 @@ Approved artifacts to generate:
         mapped_context: Dict[str, Any],
         approved_artifacts: List[str],
     ) -> Callable[[Dict[str, Any]], List[str]]:
-        """
-        Return a closure that evaluates infrastructure artifact quality.
-        Captured context is used to check which artifacts are *expected*.
-        """
         expectations = mapped_context.get("artifact_expectations", {})
 
         def evaluate(response: Dict[str, Any]) -> List[str]:
-            return self._evaluate_infra_quality(response, expectations, approved_artifacts)
+            return self._evaluate_docker_quality(response, expectations, approved_artifacts)
 
         return evaluate
 
-    def _evaluate_infra_quality(
+    def _evaluate_docker_quality(
         self,
         response: Dict[str, Any],
         expectations: Dict[str, Any],
         approved_artifacts: List[str],
     ) -> List[str]:
         """
-        Domain-specific quality checks for infrastructure generation output.
+        Docker-focused quality checks.
 
-        Returns a list of issue strings (empty = acceptable).
+        Terraform and Kubernetes checks have been removed — those DSLs
+        are now handled by TerraformAgent and KubernetesAgent respectively.
         """
         issues: List[str] = []
         artifacts = (response or {}).get("artifacts") or {}
 
-        # -- Base quality checks from EnhancedBaseAgent -----------------------
         issues.extend(self._default_evaluate(response))
 
-        # -- Dockerfile: required and valid ------------------------------------
+        # Dockerfile: always required ─────────────────────────────────────────
         dockerfile = str(artifacts.get("dockerfile") or "").strip()
         if not dockerfile:
             issues.append("Artifact 'dockerfile' is missing or empty — it is always required")
@@ -319,7 +282,7 @@ Approved artifacts to generate:
             df_result = self.validation.validate_dockerfile(dockerfile)
             issues.extend(df_result.issues)
 
-        # -- docker-compose: required when expected ---------------------------
+        # docker-compose: required when expected ──────────────────────────────
         if expectations.get("needs_docker_compose"):
             compose = str(artifacts.get("docker_compose") or "").strip()
             if not compose:
@@ -328,21 +291,10 @@ Approved artifacts to generate:
                 dc_result = self.validation.validate_docker_compose(compose)
                 issues.extend(dc_result.issues)
 
-        # -- Kubernetes: required when expected --------------------------------
-        if expectations.get("needs_kubernetes"):
-            for k8s_key in ("kubernetes_deployment", "kubernetes_service"):
-                if not str(artifacts.get(k8s_key) or "").strip():
-                    issues.append(f"Artifact '{k8s_key}' is missing but was expected")
-
-        # -- Terraform: required when expected --------------------------------
-        if expectations.get("needs_terraform"):
-            if not str(artifacts.get("terraform_main") or "").strip():
-                issues.append("Artifact 'terraform_main' is missing but was expected")
-
-        # -- Generic content check for all artifacts --------------------------
+        # Generic content check for all remaining Docker artifacts ────────────
         for key, content in artifacts.items():
             if key == "dockerfile":
-                continue  # already checked above with richer validation
+                continue
             if content and self.validation.is_generic_content(str(content)):
                 issues.append(
                     f"Artifact '{key}' appears to contain generic placeholder content"
@@ -390,19 +342,14 @@ Approved artifacts to generate:
         ]
         return any(marker in lowered for marker in generic_markers)
 
-    # ── Context / prompt helpers (unchanged from original) ────────────────────
+    # ── Context / prompt helpers ──────────────────────────────────────────────
 
     def _requested_artifact_keys(self, mapped_context: Dict[str, Any]) -> List[str]:
+        """Return Docker-scoped artifact keys only."""
         expectations = mapped_context.get("artifact_expectations") or {}
         keys = ["dockerfile", "dockerignore", "docker_compose"]
         if expectations.get("needs_env_example"):
             keys.append("env_example")
-        if expectations.get("needs_kubernetes"):
-            keys.extend(
-                ["kubernetes_manifests", "kubernetes_deployment", "kubernetes_service", "kubernetes_configmap"]
-            )
-        if expectations.get("needs_terraform"):
-            keys.extend(["terraform_main", "terraform_variables", "terraform_outputs"])
         keys.append("security_notes")
         return keys
 
@@ -428,34 +375,6 @@ Approved artifacts to generate:
             "deploy_script": "scripts/deploy.sh",
             "security_scan_config": ".github/workflows/security-scan.yml",
             "readme_snippet": "README_infrastructure.md",
-            "kubernetes_manifests": (
-                (artifact_targets.get("kubernetes") or ["kubernetes/app.yaml"])[0]
-            ),
-            "kubernetes_deployment": (
-                self._find_target_path(artifact_targets.get("kubernetes") or [], "deployment.yaml")
-                or "kubernetes/deployment.yaml"
-            ),
-            "kubernetes_service": (
-                self._find_target_path(artifact_targets.get("kubernetes") or [], "service.yaml")
-                or "kubernetes/service.yaml"
-            ),
-            "kubernetes_configmap": (
-                self._find_target_path(artifact_targets.get("kubernetes") or [], "configmap.yaml")
-                or "kubernetes/configmap.yaml"
-            ),
-            "terraform_main": (
-                self._find_target_path(artifact_targets.get("terraform") or [], "main.tf")
-                or "terraform/main.tf"
-            ),
-            "terraform_variables": (
-                self._find_target_path(artifact_targets.get("terraform") or [], "variables.tf")
-                or "terraform/variables.tf"
-            ),
-            "terraform_outputs": (
-                self._find_target_path(artifact_targets.get("terraform") or [], "output.tf")
-                or self._find_target_path(artifact_targets.get("terraform") or [], "outputs.tf")
-                or "terraform/output.tf"
-            ),
         }
         generated = {
             name

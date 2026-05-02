@@ -16,7 +16,8 @@
       "Bash(PYTHONPATH=. python backend/app/services/rag/lightning_chunking_service.py)",
       "Bash(cat requirements.txt)",
       "Bash(cat backend/requirements.txt)",
-      "Bash(venv/Scripts/pip show *)"
+      "Bash(venv/Scripts/pip show *)",
+      "Bash(python -c \"from backend.app.agents.terraform_agent import TerraformAgent; from backend.app.agents.kubernetes_agent import KubernetesAgent; from backend.app.agents.state import OrchestratorState; print\\('imports OK'\\)\")"
     ]
   }
 }

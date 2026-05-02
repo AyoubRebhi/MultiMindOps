@@ -1,36 +1,30 @@
 """
 OrchestratorAgent — LangGraph-based multi-agent workflow coordinator.
 
-Upgrades over the previous static orchestrator
------------------------------------------------
-1. **Dynamic routing after planner**
-   - If the plan produces no artifacts and no reasoning → skip to finalize.
-   - Otherwise proceed normally to infrastructure generation.
+Generation pipeline (after plan selection)
+-------------------------------------------
+Step 3  docker_phase      InfrastructureAgent  → Dockerfile, .dockerignore, docker-compose
+Step 4  terraform_phase   TerraformAgent       → providers.tf, vpc.tf, eks.tf, outputs.tf …
+Step 5  kubernetes_phase  KubernetesAgent      → deployment.yaml, service.yaml
+                          (inputs terraform_outputs from step 4 — no hardcoded values)
+Step 6  security_scan     Trivy placeholder    → security_notes (expandable)
+Step 7  cicd              CICDAgent            → GitHub Actions workflows
+Step 8  finalize          aggregate result
 
-2. **Dynamic routing after artifact validation**
-   - If validation reports INVALID (all required artifacts missing) → skip
-     CI/CD and finalize with a clear error status.
-   - If validation is PARTIAL or VALID → proceed to CI/CD as normal.
+Graph topology (unchanged externally — generation_phase entry point preserved)
+-------------------------------------------------------------------------------
+START → initialize
+      ├─ (repo_url?) → analyze_repository → planning_phase
+      └─ (no url)   → planning_phase
+planning_phase → human_validation → cost_estimation → multi_plan_phase
+multi_plan_phase → plan_selection (interactive) | generation_phase (auto)
+plan_selection  → generation_phase | finalize
+generation_phase (docker) → terraform_phase → kubernetes_phase → security_scan_phase
+  → validation_phase → cicd → finalize → END
 
-3. **Context-aware routing after repository analysis**
-   - Security-blocked repos are routed to finalize immediately (unchanged).
-   - Repos with no agent_context (e.g. empty repo) go straight to planner
-     without error.
-
-4. **Routing decision logging**
-   - Every routing decision is appended to ``state["logs"]`` for
-     full observability in the task history.
-
-5. **Multi-phase workflow with human-in-the-loop plan selection**
-   - New phases: planning_phase → multi_plan_phase → plan_selection (pause)
-     → generation_phase → validation_phase.
-   - run_until_plan_selection(): executes up to multi_plan_phase then stops.
-   - resume_with_plan(selected_plan_id): resumes from generation_phase with
-     the chosen plan injected into state.
-   - auto_mode=True skips plan_selection and picks the first available plan.
-
-All execution modes (``run``, ``run_plan_preview``, ``run_generation``,
-``run_until_plan_selection``, ``resume_with_plan``) are supported.
+All existing execution-mode methods are preserved:
+  run(), run_plan_preview(), run_generation(),
+  run_until_plan_selection(), resume_with_plan(), resume_with_human_decision()
 """
 
 from __future__ import annotations
@@ -44,6 +38,8 @@ from backend.app.agents.base_agent import BaseAgent
 from backend.app.agents.codebase_analysis_agent import CodebaseAnalysisAgent
 from backend.app.agents.cost_estimation_agent import CostEstimationAgent
 from backend.app.agents.infrastructure_agent import InfrastructureAgent
+from backend.app.agents.terraform_agent import TerraformAgent
+from backend.app.agents.kubernetes_agent import KubernetesAgent
 from backend.app.agents.multi_plan_agent import MultiPlanAgent
 from backend.app.agents.planner_agent import PlannerAgent
 from backend.app.agents.state import OrchestratorState
@@ -59,46 +55,10 @@ class OrchestratorAgent(BaseAgent):
     """
     Adaptive multi-agent orchestrator.
 
-    Graph topology
-    --------------
-
-    START
-      │
-      ▼
-    initialize
-      │
-      ├── (repo_url?) ──────────────────────────────┐
-      │                                              ▼
-      │                                    analyze_repository
-      │                                              │
-      │                          ┌───────────────────┤
-      │                          │ security_blocked?  │ ok?
-      │                          ▼                    ▼
-      │                       finalize          planning_phase ◄──── (no repo_url)
-      │                                              │
-      │                                       multi_plan_phase
-      │                                              │
-      │                          ┌───────────────────┤
-      │                          │ auto_mode=True     │ default
-      │                          │ (pick first plan)  ▼
-      │                          │             plan_selection
-      │                          │             (awaiting_user_input)
-      │                          │                    │
-      │                          │              selected_plan?
-      │                          │             yes /        \ no
-      │                          ▼            ▼              ▼
-      │                    generation_phase  generation_phase  END (partial)
-      │    (≡infrastructure)     │
-      │                   artifact_validation (validation_phase)
-      │                                              │
-      │                       ┌──────────────────────┤
-      │                       │ fully_invalid?        │ ok / partial?
-      │                       ▼                       ▼
-      │                    finalize                 cicd
-      │                                              │
-      │                                           finalize
-      │                                              │
-      └──────────────────────────────────────────── END
+    Generation sub-graph (new)
+    --------------------------
+    generation_phase → terraform_phase → kubernetes_phase
+      → security_scan_phase → validation_phase → cicd → finalize
     """
 
     def __init__(
@@ -130,22 +90,21 @@ class OrchestratorAgent(BaseAgent):
             '"steps" (array of strings following this order: 1.Define Terraform infrastructure, '
             '2.Create Dockerfile, 3.Build container image, 4.Define Kubernetes manifests, '
             '5.Configure GitHub Actions CI/CD, 6.Deploy infrastructure and application), '
-            '"required_artifacts" (array of file path strings — MUST include terraform/main.tf '
+            '"required_artifacts" (array of file path strings — MUST include terraform/providers.tf '
             'and Dockerfile; include kubernetes/deployment.yaml for microservices), '
             '"estimated_complexity" ("low"|"medium"|"high"), '
             '"reasoning_summary" (string — MUST explain why Terraform is used and why '
             'Kubernetes is or is not chosen based on the application architecture).'
         )
+        # Docker-only system prompt — Terraform and K8s handled by specialist agents
         default_infrastructure = (
-            "You are a DevSecOps infrastructure generation agent. Respond with ONLY a valid JSON "
+            "You are a Docker artifact generation agent. Respond with ONLY a valid JSON "
             "object — no markdown, no prose, no code fences. "
             'The JSON must have an "artifacts" key (object) whose values are plain strings: '
-            '"dockerfile", "dockerignore", "docker_compose", "env_example", "terraform_main", '
-            '"terraform_variables", "terraform_outputs", "kubernetes_deployment", '
-            '"kubernetes_service", "kubernetes_configmap", "kubernetes_manifests", '
-            '"security_notes". '
+            '"dockerfile", "dockerignore", "docker_compose", "env_example", "security_notes". '
             'Also include "generated_artifacts" (array of generated keys) and "summary" (string). '
-            "Only include artifacts relevant to the approved list. Never inject real secrets."
+            "Only include Docker artifacts — Terraform HCL and Kubernetes YAML are handled "
+            "by specialist agents. Never inject real secrets."
         )
 
         planner_prompt = planner_prompt or _read("planner_prompt.txt", default_planner)
@@ -156,6 +115,12 @@ class OrchestratorAgent(BaseAgent):
         self.planner_agent = PlannerAgent(prompt_template=planner_prompt)
         self.codebase_agent = CodebaseAnalysisAgent()
         self.infrastructure_agent = InfrastructureAgent(prompt_template=infrastructure_prompt)
+        self.terraform_agent = TerraformAgent(
+            prompt_template=_read("terraform_prompt.txt", "")  # falls back to agent default
+        )
+        self.kubernetes_agent = KubernetesAgent(
+            prompt_template=_read("kubernetes_prompt.txt", "")  # falls back to agent default
+        )
         self.cicd_agent = CICDAgent()
         self.cost_estimation_agent = CostEstimationAgent()
         self.multi_plan_agent = MultiPlanAgent()
@@ -164,7 +129,7 @@ class OrchestratorAgent(BaseAgent):
         self.graph = self._build_graph()
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # Graph nodes
+    # Graph nodes — unchanged
     # ═══════════════════════════════════════════════════════════════════════════
 
     def _initialize_node(self, state: OrchestratorState) -> OrchestratorState:
@@ -210,14 +175,14 @@ class OrchestratorAgent(BaseAgent):
 
         if application_profile is None:
             logger.error(
-                "[OrchestratorAgent] application_profile key absent from analysis output (cache_status=%s) — profiling pipeline did not set it",
+                "[OrchestratorAgent] application_profile key absent from analysis output (cache_status=%s)",
                 cache_status,
             )
             raise Exception("Application profiling failed: key missing from analysis output")
 
         if not application_profile:
             logger.error(
-                "[OrchestratorAgent] application_profile is an empty dict (cache_status=%s) — profiling returned no usable data",
+                "[OrchestratorAgent] application_profile is an empty dict (cache_status=%s)",
                 cache_status,
             )
             raise Exception("Application profiling failed: empty profile returned")
@@ -255,13 +220,6 @@ class OrchestratorAgent(BaseAgent):
         return self._planning_phase_node(state)
 
     def _planning_phase_node(self, state: OrchestratorState) -> OrchestratorState:
-        """Phase 1 — run PlannerAgent and store the primary plan.
-
-        Always sets ``requires_user_input=True`` so the human_validation node
-        decides whether to proceed (auto_mode) or pause for API input.
-        If ``human_feedback`` is present in state the prompt is augmented with
-        the modification request so the planner regenerates accordingly.
-        """
         logger.info("[OrchestratorAgent] Entering planning_phase")
         agent_context = state.get("agent_context") or {}
         planner_context = dict(agent_context.get("planner_context") or {})
@@ -285,7 +243,6 @@ class OrchestratorAgent(BaseAgent):
         if state.get("repo_url") and not application_profile:
             raise Exception("Application profile missing in orchestrator state")
 
-        # Augment the prompt when the user has requested plan modifications.
         base_prompt = state["prompt"]
         human_feedback = (state.get("human_feedback") or "").strip()
         if human_feedback:
@@ -314,11 +271,9 @@ class OrchestratorAgent(BaseAgent):
         else:
             logs.append({"step": "planning_phase", "message": "Planning phase completed"})
 
-        # Signal that a human decision is required before execution continues.
         return {**state, "plan": plan, "logs": logs, "requires_user_input": True}
 
     def _cost_estimation_node(self, state: OrchestratorState) -> OrchestratorState:
-        """Estimate monthly AWS cost from the infrastructure blueprint in the plan."""
         logger.info("[OrchestratorAgent] Entering cost_estimation")
         plan = state.get("plan") or {}
         planner_context = (state.get("agent_context") or {}).get("planner_context") or {}
@@ -348,11 +303,6 @@ class OrchestratorAgent(BaseAgent):
         return {**state, "cost_estimation": cost_estimation, "logs": logs}
 
     def _multi_plan_phase_node(self, state: OrchestratorState) -> OrchestratorState:
-        """
-        Phase 2 — generate three infrastructure plan variants (low_cost,
-        balanced, high_performance) via MultiPlanAgent and store them in
-        ``state["plans"]`` for the subsequent plan_selection node.
-        """
         logger.info("[OrchestratorAgent] Entering multi_plan_phase")
         plan = state.get("plan") or {}
         cost_estimation = state.get("cost_estimation")
@@ -380,13 +330,6 @@ class OrchestratorAgent(BaseAgent):
         return {**state, "plans": plans, "logs": logs}
 
     def _plan_selection_node(self, state: OrchestratorState) -> OrchestratorState:
-        """
-        Blocking node — workflow pauses here until the user injects a selected_plan.
-
-        In run_until_plan_selection() the graph is invoked but the conditional
-        edge after this node routes to END when selected_plan is None, so no
-        further processing happens until resume_with_plan() is called.
-        """
         logs = list(state.get("logs", []))
         logs.append({
             "step": "plan_selection",
@@ -396,20 +339,8 @@ class OrchestratorAgent(BaseAgent):
         return {**state, "awaiting_user_input": True, "logs": logs}
 
     def _human_validation_node(self, state: OrchestratorState) -> OrchestratorState:
-        """Bloc 7 — human-in-the-loop gate between planning and execution.
-
-        Behaviour
-        ---------
-        * ``auto_mode=True``           → auto-approve and clear the gate.
-        * ``human_decision`` not set   → stay paused (graph will route to finalize).
-        * ``human_decision=approved``  → clear the gate, continue.
-        * ``human_decision=rejected``  → mark status as rejected, stop.
-        * ``human_decision=modified``  → re-plan with feedback (graph path only;
-          the API path handles this loop via ``resume_with_human_decision``).
-        """
         logs = list(state.get("logs", []))
 
-        # ── Auto-approve for batch / automated runs ───────────────────────────
         if state.get("auto_mode"):
             logs.append({
                 "step": "human_validation",
@@ -420,7 +351,6 @@ class OrchestratorAgent(BaseAgent):
 
         decision = (state.get("human_decision") or "").strip().lower()
 
-        # ── No decision yet — workflow is paused ─────────────────────────────
         if not decision:
             logs.append({
                 "step": "human_validation",
@@ -429,7 +359,6 @@ class OrchestratorAgent(BaseAgent):
             logger.info("[OrchestratorAgent] human_validation: paused, no decision received")
             return {**state, "requires_user_input": True, "logs": logs}
 
-        # ── Approved ─────────────────────────────────────────────────────────
         if decision == "approved":
             logs.append({
                 "step": "human_validation",
@@ -438,7 +367,6 @@ class OrchestratorAgent(BaseAgent):
             logger.info("[OrchestratorAgent] human_validation: approved")
             return {**state, "requires_user_input": False, "logs": logs}
 
-        # ── Rejected ─────────────────────────────────────────────────────────
         if decision == "rejected":
             reason = (state.get("human_feedback") or "No reason provided")
             logs.append({
@@ -448,20 +376,176 @@ class OrchestratorAgent(BaseAgent):
             logger.info("[OrchestratorAgent] human_validation: rejected")
             return {**state, "status": "rejected", "requires_user_input": False, "logs": logs}
 
-        # ── Modified (graph path only — API path uses resume_with_human_decision)
         logs.append({
             "step": "human_validation",
             "message": "Modification requested — replanning required via API",
         })
         return {**state, "status": "awaiting_replanning", "requires_user_input": True, "logs": logs}
 
-    # generation_phase and validation_phase are thin aliases so the graph uses
-    # the new phase names while delegating to the existing heavy-lift nodes.
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Generation sub-pipeline (Step 3–6)
+    # ═══════════════════════════════════════════════════════════════════════════
 
     def _generation_phase_node(self, state: OrchestratorState) -> OrchestratorState:
-        """Phase alias → infrastructure generation."""
-        logger.info("[OrchestratorAgent] Entering generation_phase")
+        """Step 3 — Docker artifacts (Dockerfile, .dockerignore, docker-compose)."""
+        logger.info("[OrchestratorAgent] Entering generation_phase (docker)")
         return self._infrastructure_node(state)
+
+    def _terraform_phase_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Step 4 — Terraform HCL (providers.tf, vpc.tf, eks/ecs.tf, outputs.tf …)."""
+        logger.info("[OrchestratorAgent] Entering terraform_phase")
+
+        plan = state.get("plan") or {}
+        required_artifacts = plan.get("required_artifacts") or []
+        needs_terraform = any("terraform" in str(a).lower() for a in required_artifacts)
+
+        if not needs_terraform:
+            logger.info("[OrchestratorAgent] terraform_phase skipped — not in required_artifacts")
+            return state
+
+        infrastructure_context = (state.get("agent_context") or {}).get("infrastructure_context")
+
+        try:
+            tf_result = self.terraform_agent.run(
+                prompt=state["prompt"],
+                plan=plan,
+                infrastructure_context=infrastructure_context,
+                approved_artifacts=state.get("approved_artifacts"),
+            )
+        except Exception as exc:
+            logger.warning("[OrchestratorAgent] TerraformAgent failed (%s) — skipping.", exc)
+            return state
+
+        # Merge TerraformAgent artifacts into state["infra"]["artifacts"]
+        infra = dict(state.get("infra") or {})
+        infra_artifacts = dict(infra.get("artifacts") or {})
+        tf_artifacts = tf_result.get("artifacts") or {}
+        infra_artifacts.update(tf_artifacts)
+        infra["artifacts"] = infra_artifacts
+
+        # Extend generated_artifacts list
+        existing_generated = set(infra.get("generated_artifacts") or [])
+        new_generated = set(tf_result.get("generated_artifacts") or [])
+        infra["generated_artifacts"] = sorted(existing_generated | new_generated)
+
+        logs = list(state.get("logs", []))
+        react_iters = tf_result.get("react_iterations", 0)
+        arch_type = tf_result.get("architecture_type", "unknown")
+        logs.append({
+            "step": "terraform",
+            "message": (
+                f"Terraform artifacts generated — arch={arch_type} "
+                f"(ReAct iterations: {react_iters})"
+            ),
+        })
+        rag_info = tf_result.get("rag") or {}
+        if rag_info.get("available"):
+            logs.append({
+                "step": "terraform_rag",
+                "message": (
+                    f"Terraform RAG enabled — {rag_info.get('results_count', 0)} "
+                    "terraform-tagged chunks retrieved"
+                ),
+            })
+
+        # Store structured contract so KubernetesAgent can consume it
+        terraform_outputs = tf_result.get("terraform_outputs") or {}
+
+        return {
+            **state,
+            "infra": infra,
+            "terraform_outputs": terraform_outputs,
+            "logs": logs,
+        }
+
+    def _kubernetes_phase_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Step 5 — Kubernetes YAML (deployment.yaml, service.yaml).
+
+        CONSUMES terraform_outputs from state — no hardcoded values allowed.
+        """
+        logger.info("[OrchestratorAgent] Entering kubernetes_phase")
+
+        plan = state.get("plan") or {}
+        required_artifacts = plan.get("required_artifacts") or []
+        needs_kubernetes = any(
+            "kubernetes" in str(a).lower() or "k8s" in str(a).lower()
+            for a in required_artifacts
+        )
+
+        if not needs_kubernetes:
+            logger.info("[OrchestratorAgent] kubernetes_phase skipped — not in required_artifacts")
+            return state
+
+        terraform_outputs = state.get("terraform_outputs") or {}
+        if not terraform_outputs:
+            logger.warning(
+                "[OrchestratorAgent] kubernetes_phase — terraform_outputs is empty; "
+                "KubernetesAgent will use symbolic references"
+            )
+
+        # Build app_config from state context
+        app_config = self._build_app_config(state)
+
+        try:
+            k8s_result = self.kubernetes_agent.run(
+                terraform_outputs=terraform_outputs,
+                app_config=app_config,
+                plan=plan,
+            )
+        except Exception as exc:
+            logger.warning("[OrchestratorAgent] KubernetesAgent failed (%s) — skipping.", exc)
+            return state
+
+        # Merge into state["infra"]["artifacts"]
+        infra = dict(state.get("infra") or {})
+        infra_artifacts = dict(infra.get("artifacts") or {})
+        k8s_artifacts = k8s_result.get("artifacts") or {}
+        infra_artifacts.update(k8s_artifacts)
+        infra["artifacts"] = infra_artifacts
+
+        existing_generated = set(infra.get("generated_artifacts") or [])
+        new_generated = set(k8s_result.get("generated_artifacts") or [])
+        infra["generated_artifacts"] = sorted(existing_generated | new_generated)
+
+        logs = list(state.get("logs", []))
+        react_iters = k8s_result.get("react_iterations", 0)
+        logs.append({
+            "step": "kubernetes",
+            "message": (
+                f"Kubernetes manifests generated using terraform_outputs contract "
+                f"(ReAct iterations: {react_iters})"
+            ),
+        })
+
+        return {**state, "infra": infra, "logs": logs}
+
+    def _security_scan_phase_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Step 6 — Security scan placeholder (Trivy image scan).
+
+        Full Trivy integration is out of scope.  This node logs the intent
+        and attaches a security_notes artifact as a placeholder so the
+        contract slot is always filled and CI/CD workflows can reference it.
+        """
+        logger.info("[OrchestratorAgent] Entering security_scan_phase (placeholder)")
+        logs = list(state.get("logs", []))
+
+        infra = dict(state.get("infra") or {})
+        artifacts = dict(infra.get("artifacts") or {})
+
+        if not artifacts.get("security_notes"):
+            artifacts["security_notes"] = (
+                "# Security Scan Placeholder\n"
+                "# Run: trivy image <ecr_repository_url>:latest\n"
+                "# Integrate into CI/CD pipeline (see .github/workflows/)\n"
+                "# Recommended: fail build on CRITICAL/HIGH severity findings\n"
+            )
+            infra["artifacts"] = artifacts
+            logs.append({
+                "step": "security_scan",
+                "message": "Trivy scan placeholder added — integrate in CI/CD pipeline",
+            })
+
+        return {**state, "infra": infra, "logs": logs}
 
     def _validation_phase_node(self, state: OrchestratorState) -> OrchestratorState:
         """Phase alias → artifact validation."""
@@ -469,6 +553,7 @@ class OrchestratorAgent(BaseAgent):
         return self._artifact_validation_node(state)
 
     def _infrastructure_node(self, state: OrchestratorState) -> OrchestratorState:
+        """Docker artifact generation (InfrastructureAgent — Docker-only)."""
         infrastructure_context = (state.get("agent_context") or {}).get("infrastructure_context")
         infra = self.infrastructure_agent.run(
             prompt=state["prompt"],
@@ -482,7 +567,7 @@ class OrchestratorAgent(BaseAgent):
         logs.append({
             "step": "infrastructure",
             "message": (
-                f"Infrastructure artifacts generated "
+                f"Docker artifacts generated "
                 f"(ReAct iterations used: {react_iters})"
             ),
         })
@@ -498,7 +583,6 @@ class OrchestratorAgent(BaseAgent):
                 ),
             })
 
-        # Surface validation issues from InfrastructureAgent
         val_summary = infra.get("validation_summary") or {}
         if val_summary.get("issues"):
             logs.append({
@@ -522,6 +606,7 @@ class OrchestratorAgent(BaseAgent):
         artifacts = infra.get("artifacts", {})
 
         artifact_key_to_file = {
+            # ── Docker artifacts ──────────────────────────────────────────────
             "dockerfile": artifact_targets.get("dockerfile") or "Dockerfile",
             "dockerignore": ".dockerignore",
             "docker_compose": artifact_targets.get("docker_compose") or "docker-compose.yml",
@@ -535,6 +620,8 @@ class OrchestratorAgent(BaseAgent):
             "test_script": "scripts/test.sh",
             "security_scan_config": ".github/workflows/security-scan.yml",
             "readme_snippet": "README_infrastructure.md",
+            "security_notes": "security_notes.txt",
+            # ── Kubernetes artifacts (from KubernetesAgent) ───────────────────
             "kubernetes_manifests": (
                 (artifact_targets.get("kubernetes") or ["kubernetes/app.yaml"])[0]
             ),
@@ -547,17 +634,17 @@ class OrchestratorAgent(BaseAgent):
             "kubernetes_configmap": self._find_target_path(
                 artifact_targets.get("kubernetes") or [], "configmap.yaml"
             ) or "kubernetes/configmap.yaml",
-            "terraform_main": self._find_target_path(
-                artifact_targets.get("terraform") or [], "main.tf"
-            ) or "terraform/main.tf",
-            "terraform_variables": self._find_target_path(
-                artifact_targets.get("terraform") or [], "variables.tf"
-            ) or "terraform/variables.tf",
-            "terraform_outputs": (
-                self._find_target_path(artifact_targets.get("terraform") or [], "output.tf")
-                or self._find_target_path(artifact_targets.get("terraform") or [], "outputs.tf")
-                or "terraform/output.tf"
-            ),
+            # ── Terraform artifacts (from TerraformAgent — split files) ───────
+            "terraform_providers": "terraform/providers.tf",
+            "terraform_backend":   "terraform/backend.tf",
+            "terraform_vpc":       "terraform/vpc.tf",
+            "terraform_eks":       "terraform/eks.tf",
+            "terraform_ecs":       "terraform/ecs.tf",
+            "terraform_tfvars":    "terraform/terraform.tfvars",
+            # backward-compat keys (same file paths as before)
+            "terraform_main":      "terraform/main.tf",
+            "terraform_variables": "terraform/variables.tf",
+            "terraform_outputs":   "terraform/outputs.tf",
         }
 
         filtered_artifacts: dict = {}
@@ -665,6 +752,8 @@ class OrchestratorAgent(BaseAgent):
             "artifact_statuses": base_contract.get("artifact_statuses") or [],
             "execution_policy": base_contract.get("execution_policy") or {},
             "prototype_scope": base_contract.get("prototype_scope") or "artifact_generation_only",
+            # Pass terraform_outputs so CI/CD workflows can reference them
+            "terraform_outputs": state.get("terraform_outputs") or {},
         }
 
         cicd = self.cicd_agent.run(
@@ -752,7 +841,6 @@ class OrchestratorAgent(BaseAgent):
             final_status = "partial_success"
             result_status = "partial_success"
 
-        # Transform security data into frontend-expected format
         security_analysis = SecurityScoreTransformer.transform(
             repository_security=security_result,
             env_security_runtime=state.get("env_security_runtime"),
@@ -771,6 +859,7 @@ class OrchestratorAgent(BaseAgent):
             "key_entrypoints": state.get("key_entrypoints"),
             "plan": state.get("plan"),
             "infrastructure": state.get("infra"),
+            "terraform_outputs": state.get("terraform_outputs"),  # expose contract
             "cicd": cicd,
             "cost_estimation": state.get("cost_estimation"),
             "validation": final_validation,
@@ -780,31 +869,19 @@ class OrchestratorAgent(BaseAgent):
         return {**state, "status": final_status, "result": result, "logs": logs}
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # Dynamic routing functions
+    # Dynamic routing functions (unchanged)
     # ═══════════════════════════════════════════════════════════════════════════
 
     def _route_repository(self, state: OrchestratorState) -> str:
-        """Route to repo analysis or directly to planning_phase."""
         return "analyze_repository" if state.get("repo_url") else "planning_phase"
 
     def _route_after_repository_analysis(self, state: OrchestratorState) -> str:
-        """
-        After repo analysis:
-        - security blocked → finalize immediately
-        - otherwise → planning_phase
-        """
         security_result = state.get("repository_security") or {}
         if security_result.get("status") == "blocked":
             return "finalize"
         return "planning_phase"
 
     def _route_after_multi_plan(self, state: OrchestratorState) -> str:
-        """
-        Routing after multi_plan_phase.
-
-        - auto_mode=True  → pick first plan automatically, go to generation_phase.
-        - Otherwise       → set awaiting_user_input=True, park at plan_selection.
-        """
         logs = list(state.get("logs", []))
 
         if state.get("auto_mode"):
@@ -830,27 +907,16 @@ class OrchestratorAgent(BaseAgent):
         return "plan_selection"
 
     def _route_after_plan_selection(self, state: OrchestratorState) -> str:
-        """
-        Continue to generation_phase only if the user has supplied a selected_plan.
-        Otherwise surface a partial result and end.
-        """
         if state.get("selected_plan"):
             logger.info(
                 "[OrchestratorAgent] Plan '%s' selected — resuming to generation_phase",
                 state["selected_plan"],
             )
             return "generation_phase"
-
         logger.info("[OrchestratorAgent] No plan selected — stopping workflow")
         return "finalize"
 
     def _route_after_human_validation(self, state: OrchestratorState) -> str:
-        """
-        Route after the human_validation node.
-
-        - auto_mode or decision=approved → cost_estimation
-        - decision=rejected / still waiting / modified → finalize (partial/stopped)
-        """
         if state.get("auto_mode"):
             return "cost_estimation"
 
@@ -873,13 +939,6 @@ class OrchestratorAgent(BaseAgent):
         return "finalize"
 
     def _route_after_planning_phase(self, state: OrchestratorState) -> str:
-        """
-        Dynamic routing after planning_phase — context-aware decision.
-
-        Rules (evaluated in priority order):
-        1. Plan has no required_artifacts AND no reasoning → skip generation.
-        2. Otherwise → multi_plan_phase.
-        """
         plan = state.get("plan") or {}
         required_artifacts = plan.get("required_artifacts") or []
         reasoning = (plan.get("reasoning_summary") or "").strip()
@@ -906,13 +965,6 @@ class OrchestratorAgent(BaseAgent):
         return "cost_estimation"
 
     def _route_after_validation(self, state: OrchestratorState) -> str:
-        """
-        Dynamic routing after artifact validation.
-
-        Rules:
-        - INVALID (all required artifacts missing) → skip CI/CD, go to finalize.
-        - PARTIAL or VALID → proceed to CI/CD.
-        """
         validation = state.get("validation") or {}
         status = validation.get("status", "valid")
 
@@ -947,87 +999,75 @@ class OrchestratorAgent(BaseAgent):
         workflow = StateGraph(OrchestratorState)
 
         # ── Nodes ────────────────────────────────────────────────────────────
-        workflow.add_node("initialize", self._initialize_node)
-        workflow.add_node("analyze_repository", self._analyze_repository_node)
-
-        # Phase nodes (new architecture)
-        workflow.add_node("planning_phase", self._planning_phase_node)
-        workflow.add_node("human_validation", self._human_validation_node)  # Bloc 7
-        workflow.add_node("cost_estimation", self._cost_estimation_node)
-        workflow.add_node("multi_plan_phase", self._multi_plan_phase_node)
-        workflow.add_node("plan_selection", self._plan_selection_node)
-        workflow.add_node("generation_phase", self._generation_phase_node)
-        workflow.add_node("validation_phase", self._validation_phase_node)
-
-        workflow.add_node("cicd", self._cicd_node)
-        workflow.add_node("finalize", self._finalize_node)
+        workflow.add_node("initialize",          self._initialize_node)
+        workflow.add_node("analyze_repository",  self._analyze_repository_node)
+        workflow.add_node("planning_phase",      self._planning_phase_node)
+        workflow.add_node("human_validation",    self._human_validation_node)
+        workflow.add_node("cost_estimation",     self._cost_estimation_node)
+        workflow.add_node("multi_plan_phase",    self._multi_plan_phase_node)
+        workflow.add_node("plan_selection",      self._plan_selection_node)
+        # Generation sub-pipeline
+        workflow.add_node("generation_phase",    self._generation_phase_node)    # Step 3: Docker
+        workflow.add_node("terraform_phase",     self._terraform_phase_node)     # Step 4: Terraform
+        workflow.add_node("kubernetes_phase",    self._kubernetes_phase_node)    # Step 5: Kubernetes
+        workflow.add_node("security_scan_phase", self._security_scan_phase_node) # Step 6: Trivy placeholder
+        workflow.add_node("validation_phase",    self._validation_phase_node)
+        workflow.add_node("cicd",                self._cicd_node)
+        workflow.add_node("finalize",            self._finalize_node)
 
         # ── Entry ─────────────────────────────────────────────────────────────
         workflow.add_edge(START, "initialize")
 
-        # initialize → analyze_repository | planning_phase
         workflow.add_conditional_edges(
             "initialize",
             self._route_repository,
             {"analyze_repository": "analyze_repository", "planning_phase": "planning_phase"},
         )
-
-        # analyze_repository → planning_phase | finalize (security blocked)
         workflow.add_conditional_edges(
             "analyze_repository",
             self._route_after_repository_analysis,
             {"planning_phase": "planning_phase", "finalize": "finalize"},
         )
-
-        # planning_phase → human_validation | finalize (empty plan)
         workflow.add_conditional_edges(
             "planning_phase",
             self._route_after_planning_phase,
             {"cost_estimation": "human_validation", "finalize": "finalize"},
         )
-
-        # human_validation → cost_estimation (approved/auto) | finalize (rejected/paused)
         workflow.add_conditional_edges(
             "human_validation",
             self._route_after_human_validation,
             {"cost_estimation": "cost_estimation", "finalize": "finalize"},
         )
-
-        # cost_estimation → multi_plan_phase (always)
         workflow.add_edge("cost_estimation", "multi_plan_phase")
-
-        # multi_plan_phase → plan_selection | generation_phase (auto_mode)
         workflow.add_conditional_edges(
             "multi_plan_phase",
             self._route_after_multi_plan,
             {"plan_selection": "plan_selection", "generation_phase": "generation_phase"},
         )
-
-        # plan_selection → generation_phase (plan chosen) | finalize (no plan)
         workflow.add_conditional_edges(
             "plan_selection",
             self._route_after_plan_selection,
             {"generation_phase": "generation_phase", "finalize": "finalize"},
         )
 
-        # generation_phase → validation_phase (always)
-        workflow.add_edge("generation_phase", "validation_phase")
+        # Generation sub-pipeline chain
+        workflow.add_edge("generation_phase",    "terraform_phase")
+        workflow.add_edge("terraform_phase",     "kubernetes_phase")
+        workflow.add_edge("kubernetes_phase",    "security_scan_phase")
+        workflow.add_edge("security_scan_phase", "validation_phase")
 
-        # validation_phase → cicd | finalize (fully invalid)
         workflow.add_conditional_edges(
             "validation_phase",
             self._route_after_validation,
             {"cicd": "cicd", "finalize": "finalize"},
         )
-
-        # cicd → finalize (always)
-        workflow.add_edge("cicd", "finalize")
+        workflow.add_edge("cicd",     "finalize")
         workflow.add_edge("finalize", END)
 
         return workflow.compile()
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # Public execution modes
+    # Public execution modes (all preserved for backward compat)
     # ═══════════════════════════════════════════════════════════════════════════
 
     def _base_state(
@@ -1039,7 +1079,6 @@ class OrchestratorAgent(BaseAgent):
         uploaded_env_input: dict | None = None,
         auto_mode: bool = True,
     ) -> OrchestratorState:
-        """Build a fresh initial OrchestratorState."""
         return {
             "prompt": prompt,
             "repo_url": repo_url,
@@ -1061,13 +1100,13 @@ class OrchestratorAgent(BaseAgent):
             "selected_plan": None,
             "awaiting_user_input": False,
             "infra": None,
+            "terraform_outputs": None,
             "cicd": None,
             "cost_estimation": None,
             "application_profile": None,
             "validation": None,
             "result": None,
             "error_message": None,
-            # Bloc 7 — human validation gate
             "human_decision": None,
             "human_feedback": None,
             "requires_user_input": False,
@@ -1160,10 +1199,12 @@ class OrchestratorAgent(BaseAgent):
         preview_state["plan"] = plan
 
         preview_state = self._infrastructure_node(preview_state)
+        preview_state = self._terraform_phase_node(preview_state)
+        preview_state = self._kubernetes_phase_node(preview_state)
+        preview_state = self._security_scan_phase_node(preview_state)
         preview_state = self._filter_generated_artifacts(preview_state)
         preview_state = self._artifact_validation_node(preview_state)
 
-        # Apply dynamic routing for the validation → cicd transition
         next_step = self._route_after_validation(preview_state)
         if next_step == "cicd":
             preview_state = self._cicd_node(preview_state)
@@ -1179,12 +1220,6 @@ class OrchestratorAgent(BaseAgent):
         github_token: str | None = None,
         uploaded_env_input: dict | None = None,
     ) -> dict:
-        """
-        Execute the workflow up to and including multi_plan_phase, then stop.
-
-        Returns the partial state that includes ``plans`` and
-        ``awaiting_user_input=True``.  Call ``resume_with_plan()`` to continue.
-        """
         logger.info("[OrchestratorAgent] run_until_plan_selection — starting")
         state: OrchestratorState = self._base_state(
             prompt=prompt,
@@ -1192,7 +1227,7 @@ class OrchestratorAgent(BaseAgent):
             repository_visibility=repository_visibility,
             github_token=github_token,
             uploaded_env_input=uploaded_env_input,
-            auto_mode=False,  # force interactive mode
+            auto_mode=False,
         )
 
         state = self._initialize_node(state)
@@ -1237,19 +1272,6 @@ class OrchestratorAgent(BaseAgent):
         selected_plan_id: str,
         approved_artifacts: list[str] | None = None,
     ) -> dict:
-        """
-        Resume the workflow from generation_phase using a user-selected plan.
-
-        Parameters
-        ----------
-        prior_state:
-            The state dict returned by ``run_until_plan_selection()``.
-        selected_plan_id:
-            The ``plan_id`` of the chosen plan from ``prior_state["plans"]``.
-        approved_artifacts:
-            Optional artifact allowlist; if omitted the plan's own
-            required_artifacts list is used.
-        """
         logger.info(
             "[OrchestratorAgent] resume_with_plan — selected plan '%s'", selected_plan_id
         )
@@ -1258,7 +1280,6 @@ class OrchestratorAgent(BaseAgent):
         state["selected_plan"] = selected_plan_id
         state["awaiting_user_input"] = False
 
-        # Resolve which plan dict corresponds to the selection
         plans = state.get("plans") or []
         matched = next(
             (p for p in plans if p.get("plan_id") == selected_plan_id),
@@ -1281,6 +1302,9 @@ class OrchestratorAgent(BaseAgent):
         state["logs"] = logs
 
         state = self._generation_phase_node(state)
+        state = self._terraform_phase_node(state)
+        state = self._kubernetes_phase_node(state)
+        state = self._security_scan_phase_node(state)
         state = self._filter_generated_artifacts(state)
         state = self._validation_phase_node(state)
 
@@ -1297,26 +1321,6 @@ class OrchestratorAgent(BaseAgent):
         decision: str,
         feedback: str | None = None,
     ) -> dict:
-        """
-        Bloc 7 — resume the pipeline after a human validates the plan.
-
-        Parameters
-        ----------
-        prior_state:
-            The OrchestratorState returned by ``run_plan_preview()``,
-            loaded from the persisted ``task.workflow_state``.
-        decision:
-            ``"approved"`` | ``"rejected"`` | ``"modified"``
-        feedback:
-            Free-text reason (required when ``decision == "modified"``).
-
-        Returns
-        -------
-        dict
-            Updated state.  Callers inspect ``requires_user_input`` to
-            determine whether another validation round is needed (``modified``
-            path) or the pipeline has finished.
-        """
         decision = decision.strip().lower()
         if decision not in {"approved", "rejected", "modified"}:
             raise ValueError(f"Invalid decision '{decision}'. Must be approved, rejected, or modified.")
@@ -1330,7 +1334,6 @@ class OrchestratorAgent(BaseAgent):
 
         logs = list(state.get("logs", []))
 
-        # ── Rejected ─────────────────────────────────────────────────────────
         if decision == "rejected":
             reason = feedback or "No reason provided"
             logs.append({
@@ -1348,21 +1351,17 @@ class OrchestratorAgent(BaseAgent):
             logger.info("[OrchestratorAgent] resume_with_human_decision: rejected")
             return state
 
-        # ── Modified — re-plan with user feedback then pause again ───────────
         if decision == "modified":
             logs.append({
                 "step": "human_validation",
                 "message": f"Modification requested — replanning with feedback: {feedback}",
             })
             state["logs"] = logs
-
-            # Carry feedback into state so _planning_phase_node picks it up
             state["human_feedback"] = feedback
-            # Reset decision so the next call can set a fresh one
             state["human_decision"] = None
 
-            state = self._planning_phase_node(state)   # regenerates plan
-            state = self._cost_estimation_node(state)  # refresh cost estimate
+            state = self._planning_phase_node(state)
+            state = self._cost_estimation_node(state)
 
             state["requires_user_input"] = True
             state["status"] = "awaiting_plan_validation"
@@ -1373,7 +1372,7 @@ class OrchestratorAgent(BaseAgent):
             logger.info("[OrchestratorAgent] resume_with_human_decision: replanned, pausing again")
             return state
 
-        # ── Approved — run full generation pipeline ───────────────────────────
+        # Approved — run full generation pipeline
         logs.append({
             "step": "human_validation",
             "message": "Plan approved by user — proceeding to artifact generation",
@@ -1393,6 +1392,9 @@ class OrchestratorAgent(BaseAgent):
         logger.info("[OrchestratorAgent] resume_with_human_decision: approved, running generation")
 
         state = self._infrastructure_node(state)
+        state = self._terraform_phase_node(state)
+        state = self._kubernetes_phase_node(state)
+        state = self._security_scan_phase_node(state)
         state = self._filter_generated_artifacts(state)
         state = self._artifact_validation_node(state)
 
@@ -1404,8 +1406,47 @@ class OrchestratorAgent(BaseAgent):
         return state
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # Utilities (unchanged from original)
+    # Utilities
     # ═══════════════════════════════════════════════════════════════════════════
+
+    def _build_app_config(self, state: OrchestratorState) -> dict:
+        """Build KubernetesAgent app_config from orchestrator state."""
+        plan = state.get("plan") or {}
+        repo_summary = state.get("repo_summary") or {}
+        infrastructure_context = (state.get("agent_context") or {}).get("infrastructure_context") or {}
+        services = infrastructure_context.get("services") or []
+
+        # Detect primary port
+        ports: list[int] = []
+        for svc in services:
+            port = svc.get("port")
+            if port and isinstance(port, int):
+                ports.append(port)
+        if not ports:
+            ports = [8080]
+
+        # Non-sensitive env var names only
+        env_var_names: list[str] = []
+        for svc in services:
+            for ev in (svc.get("environment_variables") or []):
+                name = ev if isinstance(ev, str) else ev.get("name", "")
+                if name:
+                    env_var_names.append(name)
+
+        app_name = (
+            repo_summary.get("name")
+            or plan.get("agent")
+            or "app"
+        )
+
+        return {
+            "app_name": str(app_name).lower().replace(" ", "-")[:63],
+            "namespace": "default",
+            "ports": ports[:3],
+            "replicas": 2,
+            "env_vars": env_var_names[:15],
+            "resource_limits": {"cpu": "500m", "memory": "512Mi"},
+        }
 
     def _artifact_matches_requested(
         self, generated_artifact: str, requested_artifacts: set[str]

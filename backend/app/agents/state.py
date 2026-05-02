@@ -48,5 +48,9 @@ class OrchestratorState(TypedDict, total=False):
 
     application_profile: Optional[Dict[str, Any]]
 
+    # TerraformAgent → KubernetesAgent contract
+    # Keys: cluster_endpoint, cluster_name, load_balancer_dns, ecr_repository_url
+    terraform_outputs: Optional[Dict[str, Any]]
+
     result: Optional[Dict[str, Any]]
     error_message: Optional[str]

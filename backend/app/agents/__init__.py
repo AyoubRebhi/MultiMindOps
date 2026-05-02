@@ -6,10 +6,12 @@ from backend.app.agents.codebase_analysis_agent import CodebaseAnalysisAgent
 from backend.app.agents.cost_estimation_agent import CostEstimationAgent
 from backend.app.agents.infrastructure_agent import InfrastructureAgent
 from backend.app.agents.infrastructure_visualization_agent import InfrastructureVisualizationAgent
+from backend.app.agents.kubernetes_agent import KubernetesAgent
 from backend.app.agents.multi_plan_agent import MultiPlanAgent
 from backend.app.agents.orchestrator_agent import OrchestratorAgent
 from backend.app.agents.planner_agent import PlannerAgent
 from backend.app.agents.state import OrchestratorState
+from backend.app.agents.terraform_agent import TerraformAgent
 
 __all__ = [
     "BaseAgent",
@@ -18,8 +20,10 @@ __all__ = [
     "CostEstimationAgent",
     "InfrastructureAgent",
     "InfrastructureVisualizationAgent",
+    "KubernetesAgent",
     "MultiPlanAgent",
     "OrchestratorAgent",
     "PlannerAgent",
     "OrchestratorState",
+    "TerraformAgent",
 ]
