@@ -122,6 +122,9 @@ COPY . ."
                 {"name": "GROQ_API_KEY", "value": "key-a"},
                 {"name": "GROQ_API_KEY_2", "value": "key-b"},
                 {"name": "GROQ_API_KEY_3", "value": "key-c"},
+                {"name": "GROQ_API_KEY_4", "value": "key-d"},
+                {"name": "GROQ_API_KEY_5", "value": "key-e"},
+                {"name": "GROQ_API_KEY_6", "value": "key-f"},
             ]
         )
 

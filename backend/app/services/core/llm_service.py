@@ -25,10 +25,13 @@ _NETWORK_RETRY_ATTEMPTS = 3
 _NETWORK_RETRY_BASE_DELAY = 1.0
 _GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
-# Minimum wait before rotating to the next key after a rate-limit hit.
-# Groq free-tier resets TPM counters every 60 s; 12 s gives the current key
-# time to partially drain before we try the next one.
+# Minimum wait when only one Groq key exists: honor Retry-After / message
+# (capped at least this many seconds for TPM-style limits with no header).
 _RATE_LIMIT_MIN_WAIT_SECONDS = 12
+# When multiple keys are configured, Retry-After applies to the blocked key only
+# (see mark_key_rate_limited). Sleeping the full value before trying another key
+# would incorrectly serialize waits (e.g. 700s × N keys).
+_RATE_LIMIT_MULTI_KEY_PAUSE_SECONDS = 1.5
 
 # Throttle: minimum gap (seconds) between two consecutive requests on the
 # same key. Keeps per-key TPM well below the free-tier ceiling.
@@ -154,20 +157,27 @@ class LLMService:
 
                     if is_groq_rate_limit_error(error):
                         retry_after_seconds = extract_retry_after_seconds(error)
-                        # Wait at least _RATE_LIMIT_MIN_WAIT_SECONDS so the TPM
-                        # window has time to partially reset before the next key
-                        # is tried. Avoids exhausting all keys in one burst.
-                        effective_wait = max(
-                            _RATE_LIMIT_MIN_WAIT_SECONDS,
-                            retry_after_seconds or 0,
+                        n_keys = self.key_manager.configured_keys_count
+                        if n_keys > 1:
+                            pre_rotate_sleep = _RATE_LIMIT_MULTI_KEY_PAUSE_SECONDS
+                        else:
+                            pre_rotate_sleep = max(
+                                _RATE_LIMIT_MIN_WAIT_SECONDS,
+                                retry_after_seconds or 0,
+                            )
+                        cooldown_note = (
+                            f"{retry_after_seconds}s"
+                            if retry_after_seconds is not None
+                            else "default cooldown"
                         )
                         logger.warning(
                             "[LLMService] Rate-limited on key=%s — "
-                            "waiting %ds before rotating to next key",
+                            "key cooldown ~%s; pausing %.1fs before next key",
                             key_entry.name,
-                            effective_wait,
+                            cooldown_note,
+                            pre_rotate_sleep,
                         )
-                        time.sleep(effective_wait)
+                        time.sleep(pre_rotate_sleep)
                         self.key_manager.mark_key_rate_limited(
                             key_entry.name,
                             retry_after_seconds=retry_after_seconds,

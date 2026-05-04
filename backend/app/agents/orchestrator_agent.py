@@ -400,7 +400,11 @@ class OrchestratorAgent(BaseAgent):
         needs_terraform = any("terraform" in str(a).lower() for a in required_artifacts)
 
         if not needs_terraform:
-            logger.info("[OrchestratorAgent] terraform_phase skipped — not in required_artifacts")
+            logs = list(state.get("logs", []))
+            logs.append({
+                "step": "terraform_skip",
+                "message": "Terraform phase skipped: not requested in the execution plan."
+            })
             return state
 
         infrastructure_context = (state.get("agent_context") or {}).get("infrastructure_context")
@@ -413,7 +417,12 @@ class OrchestratorAgent(BaseAgent):
                 approved_artifacts=state.get("approved_artifacts"),
             )
         except Exception as exc:
-            logger.warning("[OrchestratorAgent] TerraformAgent failed (%s) — skipping.", exc)
+            logs = list(state.get("logs", []))
+            logs.append({
+                "step": "terraform_error",
+                "message": f"Terraform generation failed: {str(exc)}. Check if the LLM returned valid JSON."
+            })
+            logger.error("[OrchestratorAgent] TerraformAgent failed (%s)", exc)
             return state
 
         # Merge TerraformAgent artifacts into state["infra"]["artifacts"]
@@ -473,7 +482,11 @@ class OrchestratorAgent(BaseAgent):
         )
 
         if not needs_kubernetes:
-            logger.info("[OrchestratorAgent] kubernetes_phase skipped — not in required_artifacts")
+            logs = list(state.get("logs", []))
+            logs.append({
+                "step": "kubernetes_skip",
+                "message": "Kubernetes phase skipped: not requested in the execution plan."
+            })
             return state
 
         terraform_outputs = state.get("terraform_outputs") or {}
@@ -493,7 +506,12 @@ class OrchestratorAgent(BaseAgent):
                 plan=plan,
             )
         except Exception as exc:
-            logger.warning("[OrchestratorAgent] KubernetesAgent failed (%s) — skipping.", exc)
+            logs = list(state.get("logs", []))
+            logs.append({
+                "step": "kubernetes_error",
+                "message": f"Kubernetes generation failed: {str(exc)}. Check if the LLM returned valid JSON."
+            })
+            logger.error("[OrchestratorAgent] KubernetesAgent failed (%s)", exc)
             return state
 
         # Merge into state["infra"]["artifacts"]

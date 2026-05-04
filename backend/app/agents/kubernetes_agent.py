@@ -34,13 +34,19 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.app.agents.base_agent import EnhancedBaseAgent
-from backend.app.services.core.llm_service import LLMService
+from backend.app.services.llm.llm_router import LLMRouter
 from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SYSTEM_PROMPT = (
-    "You are a specialized Kubernetes YAML generation agent. "
+    "You are a senior DevSecOps engineer specialized in Kubernetes manifests for AWS EKS. "
+    "\n\n"
+    "STRICT RULES:\n"
+    "- Output ONLY valid YAML manifests — no explanations, no prose\n"
+    "- Use best practices (security, scalability, resource limits)\n"
+    "- Do NOT return empty responses\n"
+    "\n\n"
     "Your ONLY job is to generate valid Kubernetes YAML manifests. "
     "Never output Terraform HCL, Dockerfiles, or shell scripts. "
     "\n\n"
@@ -79,7 +85,7 @@ class KubernetesAgent(EnhancedBaseAgent):
 
     def __init__(self, prompt_template: str = _DEFAULT_SYSTEM_PROMPT):
         super().__init__(name="KubernetesAgent", max_react_iterations=2)
-        self.llm = LLMService()
+        self.llm = LLMRouter()
         self.prompt_template = prompt_template
         self._rag_pipeline = RAGPipelineService()
 
@@ -115,6 +121,9 @@ class KubernetesAgent(EnhancedBaseAgent):
         - ``rag``                 — RAG metadata
         - ``summary``             — brief description
         """
+        print("[DEBUG] Entering KubernetesAgent")
+        print("[DEBUG] Context length:", len(str(terraform_outputs)))
+
         # ── RAG: kubernetes-filtered retrieval ────────────────────────────────
         rag_result = self._retrieve_k8s_context(app_config)
 
@@ -125,6 +134,7 @@ class KubernetesAgent(EnhancedBaseAgent):
             plan=plan,
             rag_result=rag_result,
         )
+        print("[DEBUG] Prompt size (messages):", len(user_prompt))
 
         # ── ReAct loop ────────────────────────────────────────────────────────
         evaluate_fn = self._make_k8s_evaluator(terraform_outputs)

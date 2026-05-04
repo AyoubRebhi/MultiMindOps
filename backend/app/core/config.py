@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     GROQ_API_KEY_2: str = ""
     GROQ_API_KEY_3: str = ""
     GROQ_API_KEY_4: str = ""
+    GROQ_API_KEY_5: str = ""
+    GROQ_API_KEY_6: str = ""
     
     GROQ_MODEL: str = "llama3-8b-8192"
     GROQ_FALLBACK_MODEL: str = "llama-3.3-70b-versatile"
@@ -63,13 +65,17 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash-lite"
 
-    # Lightning AI — primary provider for RAG (chunking + evaluation)
-    # OpenAI-compatible endpoint.  Set LIGHTNING_API_KEY to enable.
+    # GitHub Models — PRIMARY provider for agents (Azure-backed, OpenAI-compatible)
+    # Get a token at https://github.com/settings/tokens (no scopes required for public models)
+    GITHUB_TOKEN: str = ""
+    GITHUB_BASE_URL: str = "https://models.inference.ai.azure.com"
+    GITHUB_MODEL: str = "meta/llama-3-70b-instruct"
+
+    # Lightning AI — retained for RAG chunking + LLM-as-judge evaluation only.
+    # Not used by agents. Set LIGHTNING_API_KEY to enable the Lightning RAG path.
     LIGHTNING_API_KEY: str = ""
     LIGHTNING_BASE_URL: str = "https://api.lightning.ai/v1"
-    # TerraformAgent primary model (OpenAI-compatible Lightning endpoint).
     LIGHTNING_MODEL: str = "lightning-ai/llama-3.3-70b"
-    # 70B: better reasoning for LLM-as-judge evaluation ($0.90/1M tokens)
     LIGHTNING_EVAL_MODEL: str = "meta-llama/Meta-Llama-3.1-70B-Instruct"
 
     # Provider selection for RAG tasks.
@@ -77,7 +83,8 @@ class Settings(BaseSettings):
     # "groq"      → always use Groq
     # "auto"      → Lightning if LIGHTNING_API_KEY is set, else Groq
     LLM_PROVIDER: str = "auto"
-    TERRAFORM_LLM_PROVIDER: str = "lightning"
+    # Agent LLM provider: "github" (primary) | "groq" (direct) | "lightning" (legacy)
+    TERRAFORM_LLM_PROVIDER: str = "github"
 
     # Generic LLM provider (kept for backward-compat; NVIDIA NIM was here)
     LLM_API_KEY: str = ""
@@ -94,6 +101,11 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_provider_keys(self) -> "Settings":
         terraform_provider = (self.TERRAFORM_LLM_PROVIDER or "").strip().lower()
+        if terraform_provider == "github" and not str(self.GITHUB_TOKEN or "").strip():
+            raise ValueError(
+                "GITHUB_TOKEN is required when TERRAFORM_LLM_PROVIDER=github. "
+                "Get a token at https://github.com/settings/tokens"
+            )
         if terraform_provider == "lightning" and not str(self.LIGHTNING_API_KEY or "").strip():
             raise ValueError(
                 "LIGHTNING_API_KEY is required when TERRAFORM_LLM_PROVIDER=lightning."

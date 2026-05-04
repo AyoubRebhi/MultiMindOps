@@ -121,6 +121,9 @@ class RAGConfig:
             settings.GROQ_API_KEY_2,
             settings.GROQ_API_KEY_3,
             settings.GROQ_API_KEY_4,
+            settings.GROQ_API_KEY_5,
+            settings.GROQ_API_KEY_6,
+
         ]
         return [k for k in candidates if k.strip()]
 

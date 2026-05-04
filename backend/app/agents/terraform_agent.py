@@ -49,7 +49,13 @@ logger = logging.getLogger(__name__)
 # ── Default system prompt (overridable via constructor) ───────────────────────
 
 _DEFAULT_SYSTEM_PROMPT = (
-    "You are a specialized Terraform HCL generation agent for AWS infrastructure. "
+    "You are a senior DevSecOps engineer specialized in Terraform HCL for AWS. "
+    "\n\n"
+    "STRICT RULES:\n"
+    "- Output ONLY valid HCL code — no explanations, no prose\n"
+    "- Use best practices (security, scalability, cost optimization)\n"
+    "- Do NOT return empty responses\n"
+    "\n\n"
     "Your ONLY job is to generate valid HCL (.tf file content) — never output "
     "Kubernetes YAML, Dockerfiles, docker-compose, or shell scripts inside artifact values. "
     "\n\n"
@@ -131,6 +137,9 @@ class TerraformAgent(EnhancedBaseAgent):
         - ``rag``                — RAG metadata
         - ``summary``            — brief description
         """
+        print("[DEBUG] Entering TerraformAgent")
+        print("[DEBUG] Prompt size:", len(prompt))
+
         architecture_type = self._extract_architecture_type(plan)
         compute_config = self._extract_compute_config(plan, infrastructure_context)
         region = self._extract_region(plan)
@@ -140,6 +149,8 @@ class TerraformAgent(EnhancedBaseAgent):
             prompt=prompt,
             architecture_type=architecture_type,
         )
+
+        print("[DEBUG] Context length:", len(hybrid_result.get("context") or ""))
 
         # ── Build user prompt ─────────────────────────────────────────────────
         user_prompt = self._build_user_prompt(
@@ -151,6 +162,7 @@ class TerraformAgent(EnhancedBaseAgent):
             hybrid_result=hybrid_result,
             approved_artifacts=approved_artifacts,
         )
+        print("[DEBUG] Prompt size (messages):", len(user_prompt))
 
         # ── ReAct loop ────────────────────────────────────────────────────────
         evaluate_fn = self._make_terraform_evaluator(architecture_type)
