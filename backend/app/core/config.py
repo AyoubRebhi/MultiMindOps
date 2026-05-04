@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from dotenv import dotenv_values
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env relative to this file's location so the key loads correctly
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY_4: str = ""
     
     GROQ_MODEL: str = "llama3-8b-8192"
+    GROQ_FALLBACK_MODEL: str = "llama-3.3-70b-versatile"
 
     RAG_ENABLED: bool = True
     RAG_QDRANT_URL: str = "http://localhost:6333"
@@ -65,8 +67,8 @@ class Settings(BaseSettings):
     # OpenAI-compatible endpoint.  Set LIGHTNING_API_KEY to enable.
     LIGHTNING_API_KEY: str = ""
     LIGHTNING_BASE_URL: str = "https://api.lightning.ai/v1"
-    # 8B: fast + cheap for chunking ($0.05/1M tokens)
-    LIGHTNING_MODEL: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    # TerraformAgent primary model (OpenAI-compatible Lightning endpoint).
+    LIGHTNING_MODEL: str = "lightning-ai/llama-3.3-70b"
     # 70B: better reasoning for LLM-as-judge evaluation ($0.90/1M tokens)
     LIGHTNING_EVAL_MODEL: str = "meta-llama/Meta-Llama-3.1-70B-Instruct"
 
@@ -75,6 +77,7 @@ class Settings(BaseSettings):
     # "groq"      → always use Groq
     # "auto"      → Lightning if LIGHTNING_API_KEY is set, else Groq
     LLM_PROVIDER: str = "auto"
+    TERRAFORM_LLM_PROVIDER: str = "lightning"
 
     # Generic LLM provider (kept for backward-compat; NVIDIA NIM was here)
     LLM_API_KEY: str = ""
@@ -87,6 +90,15 @@ class Settings(BaseSettings):
     MCP_CACHE_TTL_HOURS: int = 24
 
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
+
+    @model_validator(mode="after")
+    def validate_provider_keys(self) -> "Settings":
+        terraform_provider = (self.TERRAFORM_LLM_PROVIDER or "").strip().lower()
+        if terraform_provider == "lightning" and not str(self.LIGHTNING_API_KEY or "").strip():
+            raise ValueError(
+                "LIGHTNING_API_KEY is required when TERRAFORM_LLM_PROVIDER=lightning."
+            )
+        return self
 
     def get_groq_api_keys(self) -> list[str]:
         return [item["value"] for item in self.get_groq_key_entries()]

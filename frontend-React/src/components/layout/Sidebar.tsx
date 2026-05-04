@@ -8,14 +8,16 @@ import {
   Cpu,
   GitBranch,
   Activity,
+  Workflow,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTaskStore } from '@/store/taskStore'
 
 const NAV = [
-  { to: '/',          icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/tasks/new', icon: Plus,            label: 'New Task' },
-  { to: '/tasks',     icon: Activity,        label: 'All Tasks' },
+  { to: '/',               icon: LayoutDashboard, label: 'Dashboard'    },
+  { to: '/tasks/workflow', icon: Workflow,        label: 'New Workflow' },
+  { to: '/tasks/new',      icon: Plus,            label: 'Quick Task'   },
+  { to: '/tasks',          icon: Activity,        label: 'All Tasks'    },
 ]
 
 const TOOLS = [

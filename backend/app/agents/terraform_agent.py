@@ -39,7 +39,8 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.app.agents.base_agent import EnhancedBaseAgent
-from backend.app.services.core.llm_service import LLMService
+from backend.app.core.config import settings
+from backend.app.services.llm.llm_router import LLMRouter
 from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 from backend.app.services.rag.hybrid_rag_service import HybridRAGService
 
@@ -102,7 +103,7 @@ class TerraformAgent(EnhancedBaseAgent):
 
     def __init__(self, prompt_template: str = _DEFAULT_SYSTEM_PROMPT):
         super().__init__(name="TerraformAgent", max_react_iterations=3)
-        self.llm = LLMService()
+        self.llm = LLMRouter(provider=settings.TERRAFORM_LLM_PROVIDER)
         self.prompt_template = prompt_template
         self._rag_pipeline = RAGPipelineService()
         self._hybrid_rag = HybridRAGService()

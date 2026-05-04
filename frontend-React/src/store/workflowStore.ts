@@ -1,0 +1,140 @@
+import { create } from 'zustand'
+import type { TaskResponse, PlanPreviewResponse, LogEntry } from '@/types'
+
+// ── Step definitions ──────────────────────────────────────────────────────────
+
+export type WorkflowStep =
+  | 'INPUT'
+  | 'PLAN'
+  | 'INFRA'
+  | 'TERRAFORM'
+  | 'KUBERNETES'
+  | 'SUMMARY'
+  | 'CICD'
+  | 'RESULT'
+
+export const WORKFLOW_STEPS: WorkflowStep[] = [
+  'INPUT', 'PLAN', 'INFRA', 'TERRAFORM', 'KUBERNETES', 'SUMMARY', 'CICD', 'RESULT',
+]
+
+export const STEP_META: Record<WorkflowStep, { label: string; description: string }> = {
+  INPUT:      { label: 'Project Input',   description: 'Define project requirements'          },
+  PLAN:       { label: 'Plan Review',     description: 'Approve the AI-generated plan'        },
+  INFRA:      { label: 'Infrastructure',  description: 'Docker & container configuration'     },
+  TERRAFORM:  { label: 'Terraform',       description: 'Infrastructure as code (.tf files)'   },
+  KUBERNETES: { label: 'Kubernetes',      description: 'Container orchestration manifests'    },
+  SUMMARY:    { label: 'Summary',         description: 'Architecture overview'                },
+  CICD:       { label: 'CI/CD Pipeline',  description: 'GitHub Actions workflows'             },
+  RESULT:     { label: 'Final Output',    description: 'Logs, artifacts & download'           },
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+export interface WorkflowUserInput {
+  prompt: string
+  repo_url: string
+  repository_visibility: 'public' | 'private'
+  github_token: string
+}
+
+interface WorkflowStore {
+  currentStep: WorkflowStep
+
+  userInput: WorkflowUserInput
+  envFile?: File
+
+  planPreview?: PlanPreviewResponse
+  requiresHumanValidation: boolean
+
+  taskId?: string
+  task?: TaskResponse
+
+  // Locally-edited artifact content — key matches artifact record key
+  editedArtifacts: Record<string, string>
+
+  isLoading: boolean
+  isGenerating: boolean
+  error?: string
+  logs: LogEntry[]
+
+  // Actions
+  goToStep: (step: WorkflowStep) => void
+  setUserInput: (input: Partial<WorkflowUserInput>) => void
+  setEnvFile: (file: File | undefined) => void
+  setPlanPreview: (preview: PlanPreviewResponse) => void
+  setTaskId: (id: string) => void
+  setTask: (task: TaskResponse) => void
+  editArtifact: (key: string, content: string) => void
+  setLoading: (v: boolean) => void
+  setGenerating: (v: boolean) => void
+  setError: (err: string | undefined) => void
+  clearError: () => void
+  addLog: (log: LogEntry) => void
+  reset: () => void
+}
+
+// ── Store factory ─────────────────────────────────────────────────────────────
+
+const defaultUserInput: WorkflowUserInput = {
+  prompt: '',
+  repo_url: '',
+  repository_visibility: 'public',
+  github_token: '',
+}
+
+export const useWorkflowStore = create<WorkflowStore>((set) => ({
+  currentStep: 'INPUT',
+  userInput: defaultUserInput,
+  requiresHumanValidation: false,
+  editedArtifacts: {},
+  isLoading: false,
+  isGenerating: false,
+  logs: [],
+
+  goToStep: (currentStep) => set({ currentStep }),
+
+  setUserInput: (input) =>
+    set((s) => ({ userInput: { ...s.userInput, ...input } })),
+
+  setEnvFile: (envFile) => set({ envFile }),
+
+  setPlanPreview: (planPreview) =>
+    set({
+      planPreview,
+      taskId: planPreview.task_id,
+      requiresHumanValidation: planPreview.requires_user_input ?? false,
+    }),
+
+  setTaskId: (taskId) => set({ taskId }),
+
+  setTask: (task) => set({ task }),
+
+  editArtifact: (key, content) =>
+    set((s) => ({ editedArtifacts: { ...s.editedArtifacts, [key]: content } })),
+
+  setLoading: (isLoading) => set({ isLoading }),
+
+  setGenerating: (isGenerating) => set({ isGenerating }),
+
+  setError: (error) => set({ error }),
+
+  clearError: () => set({ error: undefined }),
+
+  addLog: (log) => set((s) => ({ logs: [...s.logs, log] })),
+
+  reset: () =>
+    set({
+      currentStep: 'INPUT',
+      userInput: defaultUserInput,
+      envFile: undefined,
+      planPreview: undefined,
+      requiresHumanValidation: false,
+      taskId: undefined,
+      task: undefined,
+      editedArtifacts: {},
+      isLoading: false,
+      isGenerating: false,
+      error: undefined,
+      logs: [],
+    }),
+}))
