@@ -1,0 +1,16 @@
+{
+  "name": "aws_ecs_service",
+  "provider": "aws",
+  "category": "compute",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_ecs_service\" \"mongo\" {\n  name            = \"mongodb\"\n  cluster         = aws_ecs_cluster.foo.id\n  task_definition = aws_ecs_task_definition.mongo.arn\n  desired_count   = 3\n  iam_role        = aws_iam_role.foo.arn\n  depends_on      = [aws_iam_role_policy.foo]\n\n  ordered_placement_strategy {\n    type  = \"binpack\"\n    field = \"cpu\"\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.foo.arn\n    container_name   = \"mongo\"\n    container_port   = 8080\n  }\n\n  placement_constraints {\n    type       = \"memberOf\"\n    expression = \"attribute:ecs.availability-zone in [us-west-2a, us-west-2b]\"\n  }\n}",
+  "minimal_example": "resource \"aws_ecs_service\" \"example\" {\n  # ... other configurations ...\n\n  # Example: Create service with 2 instances to start\n  desired_count = 2\n\n  # Optional: Allow external changes without Terraform plan difference\n  lifecycle {\n    ignore_changes = [desired_count]\n  }\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

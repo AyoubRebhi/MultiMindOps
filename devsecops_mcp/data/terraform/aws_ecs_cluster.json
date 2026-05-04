@@ -1,0 +1,86 @@
+{
+  "name": "aws_ecs_cluster",
+  "provider": "aws",
+  "category": "compute",
+  "description": "Manages an ECS (Elastic Container Service) cluster. ECS is a fully managed container orchestration service. Combined with Fargate, it allows you to run containers without managing servers. ECS is the preferred choice for simpler monolithic applications or when you want managed container infrastructure without Kubernetes complexity.",
+  "use_cases": [
+    "Run containerized applications without managing EC2 instances (Fargate)",
+    "Monolithic or simple service deployments",
+    "Batch processing workloads",
+    "Applications requiring simpler operational model than Kubernetes"
+  ],
+  "arguments": {
+    "required": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Name of the ECS cluster."
+      }
+    ],
+    "optional": [
+      {
+        "name": "capacity_providers",
+        "type": "list(string)",
+        "description": "List of capacity providers associated with the cluster. Deprecated in favor of the capacity_providers argument on the cluster resource itself."
+      },
+      {
+        "name": "configuration",
+        "type": "block",
+        "description": "Configuration block for the ECS cluster. Contains execute_command_configuration."
+      },
+      {
+        "name": "service_connect_defaults",
+        "type": "block",
+        "description": "Default namespace for ECS Service Connect."
+      },
+      {
+        "name": "setting",
+        "type": "block",
+        "description": "Configuration block for cluster settings. Used to enable Container Insights."
+      },
+      {
+        "name": "tags",
+        "type": "map(string)",
+        "description": "Map of tags to assign to the resource."
+      }
+    ]
+  },
+  "example_hcl": "resource \"aws_ecs_cluster\" \"main\" {\n  name = \"${var.project_name}-${var.environment}\"\n\n  configuration {\n    execute_command_configuration {\n      kms_key_id = aws_kms_key.ecs.arn\n      logging    = \"OVERRIDE\"\n\n      log_configuration {\n        cloud_watch_encryption_enabled = true\n        cloud_watch_log_group_name     = aws_cloudwatch_log_group.ecs_exec.name\n      }\n    }\n  }\n\n  setting {\n    name  = \"containerInsights\"\n    value = \"enabled\"\n  }\n\n  tags = {\n    Name        = \"${var.project_name}-${var.environment}\"\n    Environment = var.environment\n    ManagedBy   = \"terraform\"\n  }\n}\n\nresource \"aws_ecs_cluster_capacity_providers\" \"main\" {\n  cluster_name = aws_ecs_cluster.main.name\n\n  capacity_providers = [\"FARGATE\", \"FARGATE_SPOT\"]\n\n  default_capacity_provider_strategy {\n    base              = 1\n    weight            = 100\n    capacity_provider = \"FARGATE\"\n  }\n}\n\nresource \"aws_ecs_task_definition\" \"app\" {\n  family                   = \"${var.project_name}-app\"\n  network_mode             = \"awsvpc\"\n  requires_compatibilities = [\"FARGATE\"]\n  cpu                      = var.task_cpu\n  memory                   = var.task_memory\n  execution_role_arn       = aws_iam_role.ecs_execution.arn\n  task_role_arn            = aws_iam_role.ecs_task.arn\n\n  container_definitions = jsonencode([{\n    name      = var.project_name\n    image     = \"${aws_ecr_repository.app.repository_url}:latest\"\n    cpu       = var.task_cpu\n    memory    = var.task_memory\n    essential = true\n    portMappings = [{\n      containerPort = var.container_port\n      hostPort      = var.container_port\n      protocol      = \"tcp\"\n    }]\n    logConfiguration = {\n      logDriver = \"awslogs\"\n      options = {\n        awslogs-group         = aws_cloudwatch_log_group.app.name\n        awslogs-region        = var.aws_region\n        awslogs-stream-prefix = \"ecs\"\n      }\n    }\n  }])\n\n  tags = {\n    Name        = \"${var.project_name}-app\"\n    Environment = var.environment\n  }\n}\n\nresource \"aws_ecs_service\" \"app\" {\n  name            = \"${var.project_name}-service\"\n  cluster         = aws_ecs_cluster.main.id\n  task_definition = aws_ecs_task_definition.app.arn\n  desired_count   = var.task_desired_count\n  launch_type     = \"FARGATE\"\n\n  network_configuration {\n    subnets          = aws_subnet.private[*].id\n    security_groups  = [aws_security_group.ecs_tasks.id]\n    assign_public_ip = false\n  }\n\n  load_balancer {\n    target_group_arn = aws_lb_target_group.app.arn\n    container_name   = var.project_name\n    container_port   = var.container_port\n  }\n\n  depends_on = [aws_lb_listener.app]\n}",
+  "best_practices": [
+    "Use Fargate launch type to avoid managing EC2 instances",
+    "Enable Container Insights for monitoring and troubleshooting",
+    "Use FARGATE_SPOT for non-critical workloads to reduce costs (up to 70% savings)",
+    "Always configure awslogs log driver for container logs to CloudWatch",
+    "Use separate IAM roles for task execution and task permissions",
+    "Place ECS tasks in private subnets with ALB in public subnets",
+    "Use ECS Service Auto Scaling based on CPU/memory metrics",
+    "Pin container image tags — never use 'latest' in production"
+  ],
+  "security_notes": [
+    "Never use host network mode for Fargate tasks — use awsvpc mode",
+    "ECS Exec requires explicit enablement — restrict IAM permissions for it",
+    "Use KMS encryption for ECS Exec audit logging",
+    "Scan ECR images for vulnerabilities before deployment",
+    "Use separate task execution role and task role with least-privilege policies"
+  ],
+  "outputs_example": "output \"cluster_id\" {\n  description = \"ECS cluster ID\"\n  value       = aws_ecs_cluster.main.id\n}\n\noutput \"cluster_name\" {\n  description = \"ECS cluster name\"\n  value       = aws_ecs_cluster.main.name\n}\n\noutput \"load_balancer_dns\" {\n  description = \"ALB DNS name for the ECS service\"\n  value       = aws_lb.main.dns_name\n}",
+  "common_errors": [
+    {
+      "error": "Task stopped with exit code 1",
+      "fix": "Check CloudWatch logs for container output. Verify container image, environment variables, and secrets"
+    },
+    {
+      "error": "ECS tasks cannot pull image from ECR",
+      "fix": "Check task execution role has AmazonEC2ContainerRegistryReadOnly. Verify VPC endpoints for ECR or NAT gateway"
+    }
+  ],
+  "related_resources": [
+    "aws_ecs_task_definition",
+    "aws_ecs_service",
+    "aws_ecs_cluster_capacity_providers",
+    "aws_lb",
+    "aws_ecr_repository",
+    "aws_iam_role",
+    "aws_cloudwatch_log_group"
+  ]
+}

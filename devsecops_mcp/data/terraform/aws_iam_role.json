@@ -1,0 +1,99 @@
+{
+  "name": "aws_iam_role",
+  "provider": "aws",
+  "category": "iam",
+  "description": "Provides an IAM role resource. IAM roles are identities you can create in AWS that have specific permissions. A role does not have standard long-term credentials such as a password or access keys associated with it. Instead, when you assume a role, it provides temporary security credentials for your role session. IAM roles are essential for EKS node groups, ECS task execution, Lambda functions, and service-to-service communication.",
+  "use_cases": [
+    "Grant EC2/EKS nodes permissions to call AWS services",
+    "ECS task execution role for pulling container images and writing logs",
+    "Lambda function execution with specific service permissions",
+    "Cross-account access and federated identity",
+    "Service accounts for Kubernetes pods (via IRSA for EKS)"
+  ],
+  "arguments": {
+    "required": [
+      {
+        "name": "assume_role_policy",
+        "type": "string",
+        "description": "The policy that grants an entity permission to assume the role. This is a JSON string defining who can assume the role (the trust relationship)."
+      }
+    ],
+    "optional": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "The name of the role. If omitted, Terraform will assign a random unique name."
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "description": "Description of the role. Max 1000 characters."
+      },
+      {
+        "name": "max_session_duration",
+        "type": "number",
+        "description": "Maximum session duration in seconds (between 3600 and 43200). Defaults to 3600.",
+        "default": "3600"
+      },
+      {
+        "name": "path",
+        "type": "string",
+        "description": "Path in IAM namespace. Defaults to '/'.",
+        "default": "/"
+      },
+      {
+        "name": "permissions_boundary",
+        "type": "string",
+        "description": "ARN of the policy used as permissions boundary. Limits maximum permissions for the role."
+      },
+      {
+        "name": "tags",
+        "type": "map(string)",
+        "description": "Map of tags to assign to the role."
+      }
+    ]
+  },
+  "example_hcl": "# EKS Node Group IAM Role\nresource \"aws_iam_role\" \"eks_node\" {\n  name        = \"${var.project_name}-eks-node-role\"\n  description = \"IAM role for EKS worker nodes\"\n\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Action = \"sts:AssumeRole\"\n        Effect = \"Allow\"\n        Principal = {\n          Service = \"ec2.amazonaws.com\"\n        }\n      }\n    ]\n  })\n\n  tags = {\n    Name        = \"${var.project_name}-eks-node-role\"\n    Environment = var.environment\n  }\n}\n\n# Attach required policies for EKS nodes\nresource \"aws_iam_role_policy_attachment\" \"eks_worker_node\" {\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy\"\n  role       = aws_iam_role.eks_node.name\n}\n\nresource \"aws_iam_role_policy_attachment\" \"eks_cni\" {\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy\"\n  role       = aws_iam_role.eks_node.name\n}\n\nresource \"aws_iam_role_policy_attachment\" \"ecr_read\" {\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly\"\n  role       = aws_iam_role.eks_node.name\n}",
+  "minimal_example": "resource \"aws_iam_role\" \"example\" {\n  name = \"example-role\"\n\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Action    = \"sts:AssumeRole\"\n      Effect    = \"Allow\"\n      Principal = { Service = \"ec2.amazonaws.com\" }\n    }]\n  })\n}",
+  "best_practices": [
+    "Use jsonencode() for assume_role_policy instead of raw JSON strings",
+    "Apply the principle of least privilege — grant only the minimum permissions required",
+    "Use aws_iam_role_policy_attachment with managed policies when possible",
+    "Use aws_iam_role_policy for inline policies that are specific to the role",
+    "Tag roles for cost allocation and auditing",
+    "Use IAM Roles for Service Accounts (IRSA) for Kubernetes pods instead of node-level permissions",
+    "Set descriptive names that include the service and environment",
+    "Use permissions boundaries for delegated role creation"
+  ],
+  "security_notes": [
+    "Never use wildcard (*) actions or resources in production — always scope to specific services/ARNs",
+    "Use IAM Access Analyzer to identify unused permissions and external access",
+    "Enable CloudTrail to log all IAM API calls",
+    "Use IRSA (IAM Roles for Service Accounts) for pod-level permissions in EKS",
+    "Rotate credentials regularly and use temporary credentials (STS) over long-term access keys",
+    "Never embed AWS credentials in Terraform files or application code"
+  ],
+  "common_errors": [
+    {
+      "error": "InvalidClientTokenId: The security token included in the request is invalid",
+      "fix": "Check that the trust relationship (assume_role_policy) correctly references the service or principal"
+    },
+    {
+      "error": "AccessDenied when EKS nodes cannot join cluster",
+      "fix": "Ensure AmazonEKSWorkerNodePolicy, AmazonEKS_CNI_Policy, and AmazonEC2ContainerRegistryReadOnly are attached"
+    },
+    {
+      "error": "Entity already exists",
+      "fix": "IAM role names must be unique within an AWS account — use a unique naming convention with project and environment"
+    }
+  ],
+  "related_resources": [
+    "aws_iam_policy",
+    "aws_iam_role_policy",
+    "aws_iam_role_policy_attachment",
+    "aws_iam_instance_profile",
+    "aws_eks_cluster",
+    "aws_ecs_task_definition"
+  ],
+  "eks_cluster_role_example": "resource \"aws_iam_role\" \"eks_cluster\" {\n  name = \"${var.project_name}-eks-cluster-role\"\n\n  assume_role_policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [{\n      Action    = \"sts:AssumeRole\"\n      Effect    = \"Allow\"\n      Principal = { Service = \"eks.amazonaws.com\" }\n    }]\n  })\n}\n\nresource \"aws_iam_role_policy_attachment\" \"eks_cluster_policy\" {\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonEKSClusterPolicy\"\n  role       = aws_iam_role.eks_cluster.name\n}"
+}

@@ -1,0 +1,107 @@
+{
+  "category": "aws_infrastructure",
+  "description": "AWS Well-Architected Framework best practices for production infrastructure",
+  "pillars": {
+    "operational_excellence": {
+      "title": "Operational Excellence",
+      "practices": [
+        "Use Infrastructure as Code (Terraform) for all resources — no manual console changes",
+        "Tag all resources with: Name, Environment, Project, ManagedBy, CostCenter",
+        "Enable CloudTrail across all regions for API audit logging",
+        "Use CloudWatch with structured logging and metric alarms",
+        "Implement runbooks and automated responses for common operational events",
+        "Use AWS Config for resource compliance monitoring"
+      ]
+    },
+    "security": {
+      "title": "Security",
+      "practices": [
+        "Enable MFA for all IAM users and root account",
+        "Use IAM roles with least-privilege policies — never share access keys",
+        "Enable AWS Security Hub for centralized security findings",
+        "Enable Amazon GuardDuty for threat detection",
+        "Encrypt all data at rest (S3, RDS, EBS with KMS)",
+        "Encrypt all data in transit (TLS 1.3 minimum)",
+        "Use AWS Secrets Manager or SSM Parameter Store for secrets",
+        "Enable VPC Flow Logs for network monitoring",
+        "Use AWS WAF for public-facing applications",
+        "Implement SCPs (Service Control Policies) in AWS Organizations"
+      ]
+    },
+    "reliability": {
+      "title": "Reliability",
+      "practices": [
+        "Deploy across multiple Availability Zones (minimum 2, prefer 3)",
+        "Use Auto Scaling groups for EC2 and managed node groups for EKS",
+        "Implement Circuit Breaker patterns for service dependencies",
+        "Use Multi-AZ for RDS and ElastiCache",
+        "Define and test Recovery Time Objectives (RTO) and Recovery Point Objectives (RPO)",
+        "Implement health checks at every layer (ALB, ECS, EKS)",
+        "Use Route 53 with health checks for DNS failover",
+        "Implement chaos engineering practices to test resilience"
+      ]
+    },
+    "performance_efficiency": {
+      "title": "Performance Efficiency",
+      "practices": [
+        "Use gp3 EBS volumes instead of gp2 for better price/performance",
+        "Use ALB over NLB unless TCP/UDP is specifically required",
+        "Implement CloudFront CDN for static assets and API responses",
+        "Use ElastiCache (Redis) for caching database queries",
+        "Right-size instances using AWS Compute Optimizer recommendations",
+        "Use Fargate Spot for non-critical workloads (up to 70% savings)",
+        "Enable S3 Transfer Acceleration for large file uploads"
+      ]
+    },
+    "cost_optimization": {
+      "title": "Cost Optimization",
+      "practices": [
+        "Use Reserved Instances or Savings Plans for predictable workloads (30-60% savings)",
+        "Use a single NAT Gateway per VPC (not per AZ) for cost optimization in dev/staging",
+        "Implement S3 lifecycle policies to transition data to cheaper storage classes",
+        "Use Spot Instances for fault-tolerant batch workloads",
+        "Enable AWS Cost Explorer and set billing alarms",
+        "Tag resources for cost allocation and showback",
+        "Use AWS Budgets to enforce spending limits"
+      ]
+    },
+    "sustainability": {
+      "title": "Sustainability",
+      "practices": [
+        "Rightsize resources to avoid over-provisioning",
+        "Use graviton (ARM) instances where supported (20-40% cheaper and more efficient)",
+        "Shut down non-production environments after hours",
+        "Use Fargate Spot for interruptible workloads"
+      ]
+    }
+  },
+  "eks_production_checklist": [
+    "Kubernetes version within 2 minor versions of latest",
+    "Nodes in private subnets only",
+    "Control plane endpoint with restricted access CIDRs",
+    "Secrets encrypted with KMS",
+    "IRSA configured for all pods requiring AWS API access",
+    "Network policies implemented (Calico or AWS VPC CNI)",
+    "Pod security standards enforced (restricted or baseline)",
+    "Container images scanned for vulnerabilities (ECR scanning)",
+    "Cluster autoscaler or Karpenter configured",
+    "Horizontal Pod Autoscaler on all production deployments",
+    "PodDisruptionBudgets configured",
+    "Resource requests and limits on all containers",
+    "Multi-AZ node distribution via topology constraints"
+  ],
+  "terraform_project_structure": {
+    "recommended_files": {
+      "providers.tf": "AWS provider configuration with version constraints",
+      "backend.tf": "S3 remote state configuration with DynamoDB locking",
+      "vpc.tf": "VPC, subnets, internet gateway, NAT gateway, route tables",
+      "security_groups.tf": "Security groups for each tier (ALB, App, DB)",
+      "eks.tf": "EKS cluster, node groups, IAM roles",
+      "ecr.tf": "ECR repository with lifecycle policy",
+      "alb.tf": "Application Load Balancer, target groups, listeners",
+      "variables.tf": "All input variable declarations",
+      "terraform.tfvars": "Non-sensitive default variable values",
+      "outputs.tf": "Exported values for downstream consumption"
+    }
+  }
+}

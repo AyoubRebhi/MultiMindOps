@@ -1,0 +1,86 @@
+{
+  "name": "aws_ecr_repository",
+  "provider": "aws",
+  "category": "container-registry",
+  "description": "Provides an ECR (Elastic Container Registry) repository resource. ECR is a managed Docker container image registry that is integrated with ECS, EKS, and IAM. It supports image lifecycle policies, image scanning, and encryption.",
+  "use_cases": [
+    "Store Docker images for ECS or EKS deployments",
+    "Automated vulnerability scanning of container images",
+    "Private container registry with IAM-based access control",
+    "Multi-account image sharing via resource-based policies"
+  ],
+  "arguments": {
+    "required": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Name of the repository. Repository names can contain letters, numbers, hyphens, underscores, and forward slashes."
+      }
+    ],
+    "optional": [
+      {
+        "name": "image_tag_mutability",
+        "type": "string",
+        "description": "'MUTABLE' or 'IMMUTABLE'. Use IMMUTABLE in production to prevent tag overwriting. Defaults to MUTABLE.",
+        "default": "MUTABLE"
+      },
+      {
+        "name": "force_delete",
+        "type": "bool",
+        "description": "If true, allows deleting the repository even if it contains images. Default: false. Dangerous for production.",
+        "default": "false"
+      },
+      {
+        "name": "image_scanning_configuration",
+        "type": "block",
+        "description": "Configuration block for image scanning. Enable scan_on_push to automatically scan images."
+      },
+      {
+        "name": "encryption_configuration",
+        "type": "block",
+        "description": "Encryption configuration. Use KMS for customer-managed encryption. Default: AES256."
+      },
+      {
+        "name": "tags",
+        "type": "map(string)",
+        "description": "Map of tags to assign to the repository."
+      }
+    ]
+  },
+  "example_hcl": "resource \"aws_ecr_repository\" \"app\" {\n  name                 = \"${var.project_name}-${var.environment}\"\n  image_tag_mutability = \"IMMUTABLE\"\n  force_delete         = false\n\n  image_scanning_configuration {\n    scan_on_push = true\n  }\n\n  encryption_configuration {\n    encryption_type = \"KMS\"\n    kms_key         = aws_kms_key.ecr.arn\n  }\n\n  tags = {\n    Name        = \"${var.project_name}-${var.environment}\"\n    Environment = var.environment\n    ManagedBy   = \"terraform\"\n  }\n}\n\nresource \"aws_ecr_lifecycle_policy\" \"app\" {\n  repository = aws_ecr_repository.app.name\n\n  policy = jsonencode({\n    rules = [\n      {\n        rulePriority = 1\n        description  = \"Keep last 10 production images\"\n        selection = {\n          tagStatus     = \"tagged\"\n          tagPrefixList = [\"v\", \"release\"]\n          countType     = \"imageCountMoreThan\"\n          countNumber   = 10\n        }\n        action = { type = \"expire\" }\n      },\n      {\n        rulePriority = 2\n        description  = \"Expire untagged images after 7 days\"\n        selection = {\n          tagStatus   = \"untagged\"\n          countType   = \"sinceImagePushed\"\n          countUnit   = \"days\"\n          countNumber = 7\n        }\n        action = { type = \"expire\" }\n      }\n    ]\n  })\n}",
+  "minimal_example": "resource \"aws_ecr_repository\" \"app\" {\n  name = \"my-app\"\n\n  image_scanning_configuration {\n    scan_on_push = true\n  }\n\n  tags = {\n    Name = \"my-app\"\n  }\n}",
+  "best_practices": [
+    "Use IMMUTABLE image tags in production to ensure deployment reproducibility",
+    "Enable image scanning on push to detect vulnerabilities automatically",
+    "Implement lifecycle policies to control storage costs",
+    "Use KMS encryption for compliance requirements",
+    "Pin image versions with digests (sha256:...) in ECS/EKS task definitions",
+    "Use separate ECR repositories per environment (dev/staging/prod)",
+    "Set up ECR replication for multi-region disaster recovery"
+  ],
+  "security_notes": [
+    "Enable scan_on_push and review scan results before deploying to production",
+    "Use resource-based policies to restrict cross-account access",
+    "Never use 'latest' tag in production — use immutable semantic versions",
+    "Implement ECR repository policies to prevent public access",
+    "Regularly review and rotate ECR access credentials for CI/CD systems"
+  ],
+  "outputs_example": "output \"ecr_repository_url\" {\n  description = \"ECR repository URL for pushing images\"\n  value       = aws_ecr_repository.app.repository_url\n}\n\noutput \"ecr_repository_name\" {\n  description = \"ECR repository name\"\n  value       = aws_ecr_repository.app.name\n}\n\noutput \"ecr_repository_arn\" {\n  description = \"ECR repository ARN\"\n  value       = aws_ecr_repository.app.arn\n}",
+  "common_errors": [
+    {
+      "error": "Access denied when pushing to ECR",
+      "fix": "Run 'aws ecr get-login-password | docker login' first. Verify IAM user/role has ecr:GetAuthorizationToken and ecr:BatchCheckLayerAvailability permissions"
+    },
+    {
+      "error": "Cannot delete repository with images",
+      "fix": "Either set force_delete = true (dangerous) or delete all images first using aws ecr list-images and batch-delete-image"
+    }
+  ],
+  "related_resources": [
+    "aws_ecr_lifecycle_policy",
+    "aws_ecr_repository_policy",
+    "aws_kms_key",
+    "aws_ecs_task_definition",
+    "aws_eks_cluster"
+  ]
+}

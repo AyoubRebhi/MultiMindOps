@@ -1,0 +1,100 @@
+{
+  "name": "backend_s3",
+  "provider": "aws",
+  "category": "state-management",
+  "description": "Terraform S3 backend configuration for remote state storage. Stores the Terraform state file in an S3 bucket with optional state locking via DynamoDB. This is the recommended backend for production AWS deployments as it provides versioning, encryption, locking, and team collaboration.",
+  "use_cases": [
+    "Team collaboration on Terraform state",
+    "State versioning and recovery from corruption",
+    "State locking to prevent concurrent modifications",
+    "Encrypted state storage for compliance"
+  ],
+  "arguments": {
+    "required": [
+      {
+        "name": "bucket",
+        "type": "string",
+        "description": "The name of the S3 bucket to store state. Must be globally unique. Must exist before terraform init."
+      },
+      {
+        "name": "key",
+        "type": "string",
+        "description": "The path to the state file inside the S3 bucket. Convention: '{project}/{environment}/terraform.tfstate'"
+      },
+      {
+        "name": "region",
+        "type": "string",
+        "description": "The AWS region where the S3 bucket is located."
+      }
+    ],
+    "optional": [
+      {
+        "name": "dynamodb_table",
+        "type": "string",
+        "description": "DynamoDB table name for state locking. Table must have a primary key named 'LockID' of type String."
+      },
+      {
+        "name": "encrypt",
+        "type": "bool",
+        "description": "Enable server-side encryption of the state file. Defaults to false. Strongly recommended: true.",
+        "default": "false"
+      },
+      {
+        "name": "kms_key_id",
+        "type": "string",
+        "description": "KMS key ARN or alias for SSE-KMS encryption. If omitted with encrypt=true, uses SSE-S3."
+      },
+      {
+        "name": "profile",
+        "type": "string",
+        "description": "AWS profile name for authentication."
+      },
+      {
+        "name": "role_arn",
+        "type": "string",
+        "description": "IAM role ARN to assume before accessing the S3 bucket."
+      }
+    ]
+  },
+  "example_hcl": "terraform {\n  backend \"s3\" {\n    bucket         = \"${var.project_name}-terraform-state-${var.environment}\"\n    key            = \"${var.project_name}/${var.environment}/terraform.tfstate\"\n    region         = var.aws_region\n    encrypt        = true\n    dynamodb_table = \"${var.project_name}-terraform-locks\"\n\n    # Optional: use KMS for encryption\n    # kms_key_id = aws_kms_key.terraform_state.arn\n  }\n}",
+  "minimal_example": "terraform {\n  backend \"s3\" {\n    bucket  = \"my-project-terraform-state\"\n    key     = \"my-project/production/terraform.tfstate\"\n    region  = \"us-east-1\"\n    encrypt = true\n  }\n}",
+  "bootstrap_resources": "# Bootstrap: Create the S3 bucket and DynamoDB table BEFORE configuring the backend\n# Run this with a local backend first, then migrate\n\nresource \"aws_s3_bucket\" \"terraform_state\" {\n  bucket        = \"${var.project_name}-terraform-state\"\n  force_destroy = false\n\n  tags = {\n    Name        = \"Terraform State\"\n    Environment = var.environment\n    ManagedBy   = \"terraform\"\n  }\n}\n\nresource \"aws_s3_bucket_versioning\" \"terraform_state\" {\n  bucket = aws_s3_bucket.terraform_state.id\n\n  versioning_configuration {\n    status = \"Enabled\"\n  }\n}\n\nresource \"aws_s3_bucket_server_side_encryption_configuration\" \"terraform_state\" {\n  bucket = aws_s3_bucket.terraform_state.id\n\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm = \"AES256\"\n    }\n  }\n}\n\nresource \"aws_s3_bucket_public_access_block\" \"terraform_state\" {\n  bucket                  = aws_s3_bucket.terraform_state.id\n  block_public_acls       = true\n  block_public_policy     = true\n  ignore_public_acls      = true\n  restrict_public_buckets = true\n}\n\nresource \"aws_dynamodb_table\" \"terraform_locks\" {\n  name         = \"${var.project_name}-terraform-locks\"\n  billing_mode = \"PAY_PER_REQUEST\"\n  hash_key     = \"LockID\"\n\n  attribute {\n    name = \"LockID\"\n    type = \"S\"\n  }\n\n  tags = {\n    Name      = \"Terraform State Lock\"\n    ManagedBy = \"terraform\"\n  }\n}",
+  "best_practices": [
+    "Always enable encryption (encrypt = true) and versioning on the S3 bucket",
+    "Use DynamoDB table for state locking to prevent concurrent apply operations",
+    "Block all public access on the S3 bucket — state files can contain sensitive data",
+    "Use a separate AWS account or at minimum a separate S3 bucket per environment",
+    "Key naming convention: '{project}/{environment}/terraform.tfstate'",
+    "Use KMS with customer-managed keys for compliance requirements",
+    "Enable S3 bucket versioning for state recovery from corruption",
+    "Use IAM policies to restrict who can read/write the state bucket"
+  ],
+  "security_notes": [
+    "Terraform state files can contain sensitive data (passwords, private keys) — always encrypt",
+    "Apply bucket policies to deny unencrypted uploads",
+    "Enable S3 access logging on the state bucket for compliance",
+    "Use IAM role assumption (role_arn) instead of long-term credentials for CI/CD",
+    "Never commit terraform.tfstate files to version control"
+  ],
+  "common_errors": [
+    {
+      "error": "Backend initialization failed: S3 bucket not found",
+      "fix": "Create the S3 bucket BEFORE running terraform init with the S3 backend. Run with local backend first, then migrate"
+    },
+    {
+      "error": "Error locking state: table not found",
+      "fix": "Create the DynamoDB table with hash_key='LockID' (String type) before using dynamodb_table parameter"
+    },
+    {
+      "error": "Variables not allowed in backend configuration",
+      "fix": "Backend configuration cannot use Terraform variables. Use partial configuration with -backend-config flag or hardcode values"
+    }
+  ],
+  "related_resources": [
+    "aws_s3_bucket",
+    "aws_s3_bucket_versioning",
+    "aws_s3_bucket_server_side_encryption_configuration",
+    "aws_dynamodb_table",
+    "aws_kms_key"
+  ]
+}

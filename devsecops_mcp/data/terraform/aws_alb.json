@@ -1,0 +1,99 @@
+{
+  "name": "aws_lb",
+  "terraform_alias": ["aws_alb"],
+  "provider": "aws",
+  "category": "networking",
+  "description": "Provides an Application Load Balancer (ALB) resource. ALB operates at Layer 7 of the OSI model and routes HTTP/HTTPS traffic based on content-based routing rules. It integrates with ECS, EKS, and EC2 and supports SSL termination, WebSocket, and HTTP/2.",
+  "use_cases": [
+    "Distribute incoming HTTP/HTTPS traffic to ECS tasks or EKS pods",
+    "SSL/TLS termination at the load balancer level",
+    "Path-based and host-based routing rules",
+    "Blue/green and canary deployments via weighted target groups"
+  ],
+  "arguments": {
+    "required": [],
+    "optional": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Name of the load balancer. Must be unique within a region and account (max 32 characters)."
+      },
+      {
+        "name": "internal",
+        "type": "bool",
+        "description": "If true, creates an internal (private) load balancer. Default: false (internet-facing).",
+        "default": "false"
+      },
+      {
+        "name": "load_balancer_type",
+        "type": "string",
+        "description": "Type of load balancer: 'application' (default), 'network', or 'gateway'.",
+        "default": "application"
+      },
+      {
+        "name": "security_groups",
+        "type": "list(string)",
+        "description": "List of security group IDs for the ALB. Only valid for application type."
+      },
+      {
+        "name": "subnets",
+        "type": "list(string)",
+        "description": "List of subnet IDs. ALB requires subnets in at least 2 AZs."
+      },
+      {
+        "name": "enable_deletion_protection",
+        "type": "bool",
+        "description": "Enable deletion protection. Recommended: true in production.",
+        "default": "false"
+      },
+      {
+        "name": "drop_invalid_header_fields",
+        "type": "bool",
+        "description": "Drop invalid HTTP header fields. Recommended: true for security.",
+        "default": "false"
+      },
+      {
+        "name": "tags",
+        "type": "map(string)",
+        "description": "Map of tags to assign to the load balancer."
+      }
+    ]
+  },
+  "example_hcl": "resource \"aws_lb\" \"main\" {\n  name                       = \"${var.project_name}-alb\"\n  internal                   = false\n  load_balancer_type         = \"application\"\n  security_groups            = [aws_security_group.alb.id]\n  subnets                    = aws_subnet.public[*].id\n  enable_deletion_protection = true\n  drop_invalid_header_fields = true\n\n  access_logs {\n    bucket  = aws_s3_bucket.alb_logs.id\n    prefix  = \"${var.project_name}-alb\"\n    enabled = true\n  }\n\n  tags = {\n    Name        = \"${var.project_name}-alb\"\n    Environment = var.environment\n    ManagedBy   = \"terraform\"\n  }\n}\n\nresource \"aws_lb_target_group\" \"app\" {\n  name        = \"${var.project_name}-tg\"\n  port        = var.container_port\n  protocol    = \"HTTP\"\n  vpc_id      = aws_vpc.main.id\n  target_type = \"ip\"\n\n  health_check {\n    enabled             = true\n    interval            = 30\n    path                = \"/health\"\n    port                = \"traffic-port\"\n    healthy_threshold   = 2\n    unhealthy_threshold = 3\n    timeout             = 5\n    matcher             = \"200,201,204\"\n  }\n\n  deregistration_delay = 30\n\n  tags = {\n    Name        = \"${var.project_name}-tg\"\n    Environment = var.environment\n  }\n}\n\nresource \"aws_lb_listener\" \"https\" {\n  load_balancer_arn = aws_lb.main.arn\n  port              = \"443\"\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-TLS13-1-2-2021-06\"\n  certificate_arn   = aws_acm_certificate.main.arn\n\n  default_action {\n    type             = \"forward\"\n    target_group_arn = aws_lb_target_group.app.arn\n  }\n}\n\nresource \"aws_lb_listener\" \"http_redirect\" {\n  load_balancer_arn = aws_lb.main.arn\n  port              = \"80\"\n  protocol          = \"HTTP\"\n\n  default_action {\n    type = \"redirect\"\n    redirect {\n      port        = \"443\"\n      protocol    = \"HTTPS\"\n      status_code = \"HTTP_301\"\n    }\n  }\n}",
+  "best_practices": [
+    "Always redirect HTTP to HTTPS — never serve unencrypted traffic in production",
+    "Use TLS 1.3 SSL policy (ELBSecurityPolicy-TLS13-1-2-2021-06) for security",
+    "Enable access logs to S3 for security auditing and debugging",
+    "Enable deletion protection in production",
+    "Use drop_invalid_header_fields = true to prevent header injection attacks",
+    "Set health check path to a lightweight endpoint (/health or /ping)",
+    "Use target_type = 'ip' for Fargate and EKS pod direct routing",
+    "Configure deregistration delay appropriately (30s for fast-draining services)"
+  ],
+  "security_notes": [
+    "Use HTTPS-only listeners with strong TLS policies",
+    "Configure WAF (aws_wafv2_web_acl_association) for additional protection",
+    "Restrict ALB security group to only ports 80 and 443 from 0.0.0.0/0",
+    "Use ACM (AWS Certificate Manager) for free SSL/TLS certificates",
+    "Enable access logging for compliance and incident investigation"
+  ],
+  "outputs_example": "output \"load_balancer_dns\" {\n  description = \"DNS name of the Application Load Balancer\"\n  value       = aws_lb.main.dns_name\n}\n\noutput \"load_balancer_arn\" {\n  description = \"ARN of the Application Load Balancer\"\n  value       = aws_lb.main.arn\n}",
+  "common_errors": [
+    {
+      "error": "ALB requires subnets in at least 2 different Availability Zones",
+      "fix": "Provide subnets from at least 2 different AZs in the subnets argument"
+    },
+    {
+      "error": "Health check failures causing 0 healthy targets",
+      "fix": "Verify the health check path returns 200 and is accessible from ALB security group. Check container startup time vs health check interval"
+    }
+  ],
+  "related_resources": [
+    "aws_lb_target_group",
+    "aws_lb_listener",
+    "aws_lb_listener_rule",
+    "aws_acm_certificate",
+    "aws_wafv2_web_acl_association",
+    "aws_security_group"
+  ]
+}

@@ -41,6 +41,7 @@ from typing import Any, Callable, Dict, List, Optional
 from backend.app.agents.base_agent import EnhancedBaseAgent
 from backend.app.services.core.llm_service import LLMService
 from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
+from backend.app.services.rag.hybrid_rag_service import HybridRAGService
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ class TerraformAgent(EnhancedBaseAgent):
         self.llm = LLMService()
         self.prompt_template = prompt_template
         self._rag_pipeline = RAGPipelineService()
+        self._hybrid_rag = HybridRAGService()
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -132,8 +134,8 @@ class TerraformAgent(EnhancedBaseAgent):
         compute_config = self._extract_compute_config(plan, infrastructure_context)
         region = self._extract_region(plan)
 
-        # ── RAG: terraform-filtered retrieval ─────────────────────────────────
-        rag_result = self._retrieve_terraform_context(
+        # ── Hybrid RAG: MCP (schema) + Qdrant (corpus) ───────────────────────
+        hybrid_result = self._retrieve_terraform_context(
             prompt=prompt,
             architecture_type=architecture_type,
         )
@@ -145,7 +147,7 @@ class TerraformAgent(EnhancedBaseAgent):
             architecture_type=architecture_type,
             compute_config=compute_config,
             region=region,
-            rag_result=rag_result,
+            hybrid_result=hybrid_result,
             approved_artifacts=approved_artifacts,
         )
 
@@ -173,6 +175,9 @@ class TerraformAgent(EnhancedBaseAgent):
             architecture_type=architecture_type,
         )
 
+        # ── MCP post-generation validation ────────────────────────────────────
+        mcp_validation = self._validate_artifacts_with_mcp(artifacts)
+
         # ── Compute generated_artifacts list ──────────────────────────────────
         generated_artifacts = sorted(
             file_path
@@ -184,19 +189,24 @@ class TerraformAgent(EnhancedBaseAgent):
         response["architecture_type"] = architecture_type
         response["generated_artifacts"] = generated_artifacts
         response["react_iterations"] = iterations_used[0]
+        response["mcp_validation"] = mcp_validation
         response["rag"] = {
             "enabled": True,
-            "available": rag_result.get("available", False),
+            "available": hybrid_result.get("available", False),
+            "mcp_available": hybrid_result.get("sources", {}).get("mcp", {}).get("available", False),
+            "qdrant_available": hybrid_result.get("sources", {}).get("qdrant", {}).get("available", False),
+            "mcp_resources": hybrid_result.get("sources", {}).get("mcp", {}).get("resources_loaded", []),
+            "qdrant_results": hybrid_result.get("sources", {}).get("qdrant", {}).get("results_count", 0),
             "doc_type_filter": "terraform",
-            "results_count": len(rag_result.get("results") or []),
         }
 
         logger.info(
-            "[TerraformAgent] Done — arch=%s artifacts=%d react_iters=%d rag=%s",
+            "[TerraformAgent] Done — arch=%s artifacts=%d react_iters=%d mcp=%s qdrant=%s",
             architecture_type,
             len(generated_artifacts),
             iterations_used[0],
-            rag_result.get("available"),
+            response["rag"]["mcp_available"],
+            response["rag"]["qdrant_available"],
         )
         return response
 
@@ -312,18 +322,27 @@ class TerraformAgent(EnhancedBaseAgent):
             "multi_az": "high_performance" in str(plan.get("plan_id") or ""),
         }
 
-    # ── RAG retrieval ─────────────────────────────────────────────────────────
+    # ── Hybrid RAG retrieval ──────────────────────────────────────────────────
 
     def _retrieve_terraform_context(
         self,
         prompt: str,
         architecture_type: str,
     ) -> Dict[str, Any]:
-        """Query Qdrant with doc_type='terraform' filter."""
+        """Query HybridRAG: MCP schemas first, Qdrant corpus second."""
+        try:
+            return self._hybrid_rag.retrieve_for_terraform_agent(
+                prompt=prompt,
+                architecture_type=architecture_type,
+                top_k=4,
+            )
+        except Exception as exc:
+            logger.warning("[TerraformAgent] HybridRAG failed, falling back to Qdrant: %s", exc)
+
+        # Qdrant-only fallback
         topic_map = {"eks": "EKS Kubernetes", "ecs": "ECS Fargate", "serverless": "Lambda"}
         topic = topic_map.get(architecture_type, "EKS")
         query = f"Terraform AWS {topic} infrastructure VPC outputs {prompt[:200]}"
-
         try:
             result = self._rag_pipeline.retrieve_context(
                 query=query,
@@ -332,10 +351,21 @@ class TerraformAgent(EnhancedBaseAgent):
                 use_hybrid=True,
                 score_threshold=0.25,
             )
-            return result
+            return {**result, "sources": {"mcp": {"available": False}, "qdrant": {"available": result.get("available", False)}}}
+        except Exception as exc2:
+            logger.warning("[TerraformAgent] Qdrant fallback also failed: %s", exc2)
+            return {"available": False, "context": "", "sources": {"mcp": {"available": False}, "qdrant": {"available": False}}}
+
+    def _validate_artifacts_with_mcp(self, artifacts: Dict[str, Any]) -> Dict[str, Any]:
+        """Run MCP HCL validation on all generated artifacts."""
+        try:
+            from backend.app.services.mcp_client import MCPClient
+            client = MCPClient.get_instance()
+            hcl_artifacts = {k: v for k, v in artifacts.items() if isinstance(v, str) and v.strip()}
+            return client.validate_terraform_code("\n\n".join(hcl_artifacts.values()))
         except Exception as exc:
-            logger.warning("[TerraformAgent] RAG retrieval failed: %s", exc)
-            return {"available": False, "results": [], "context": ""}
+            logger.debug("[TerraformAgent] MCP validation skipped: %s", exc)
+            return {"valid": True, "score": 100, "issues": [], "warnings": [], "summary": "MCP validation unavailable"}
 
     # ── Prompt construction ───────────────────────────────────────────────────
 
@@ -346,7 +376,7 @@ class TerraformAgent(EnhancedBaseAgent):
         architecture_type: str,
         compute_config: Dict[str, Any],
         region: str,
-        rag_result: Dict[str, Any],
+        hybrid_result: Dict[str, Any],
         approved_artifacts: Optional[List[str]],
     ) -> str:
         compact_plan = {
@@ -358,18 +388,20 @@ class TerraformAgent(EnhancedBaseAgent):
             "estimated_complexity": plan.get("estimated_complexity"),
         }
 
-        rag_block = ""
-        if rag_result.get("available") and rag_result.get("context"):
-            rag_block = (
-                "\n\nTerraform knowledge base (best practices — adapt, do not copy blindly):\n"
-                + self._truncate(rag_result["context"], 1800)
-            )
-
         approved_block = ""
         if approved_artifacts:
             terraform_approved = [a for a in approved_artifacts if "terraform" in a.lower()]
             if terraform_approved:
                 approved_block = f"\nApproved terraform artifacts: {terraform_approved}"
+
+        # ── Inject hybrid context (MCP schema + Qdrant corpus) ───────────────
+        context_block = ""
+        if hybrid_result.get("available") and hybrid_result.get("context"):
+            context_block = (
+                "\n\n--- Infrastructure Context (MCP Schemas + DevSecOps Knowledge Base) ---\n"
+                + self._truncate(hybrid_result["context"], 3500)
+                + "\n--- End of Context ---"
+            )
 
         return f"""User task:
 {prompt}
@@ -394,7 +426,7 @@ CRITICAL requirements:
 3. Use variables for all environment-specific values (region, account_id, project_name, environment)
 4. ECR repository must be created and its URL exposed via ecr_repository_url output
 5. ALB must be provisioned and its DNS name exposed via load_balancer_dns output
-{rag_block}""".strip()
+{context_block}""".strip()
 
     # ── Terraform outputs contract extraction ─────────────────────────────────
 

@@ -1,0 +1,16 @@
+{
+  "name": "aws_lb",
+  "provider": "aws",
+  "category": "networking",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_lb\" \"test\" {\n  name               = \"test-lb-tf\"\n  internal           = false\n  load_balancer_type = \"application\"\n  security_groups    = [aws_security_group.lb_sg.id]\n  subnets            = [for subnet in aws_subnet.public : subnet.id]\n\n  enable_deletion_protection = true\n\n  access_logs {\n    bucket  = aws_s3_bucket.lb_logs.id\n    prefix  = \"test-lb\"\n    enabled = true\n  }\n\n  tags = {\n    Environment = \"production\"\n  }\n}",
+  "minimal_example": "resource \"aws_lb\" \"test\" {\n  name               = \"test-lb-tf\"\n  internal           = false\n  load_balancer_type = \"network\"\n  subnets            = [for subnet in aws_subnet.public : subnet.id]\n\n  enable_deletion_protection = true\n\n  tags = {\n    Environment = \"production\"\n  }\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

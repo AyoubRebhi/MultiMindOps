@@ -1,0 +1,16 @@
+{
+  "name": "aws_nat_gateway",
+  "provider": "aws",
+  "category": "networking",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_nat_gateway\" \"example\" {\n  allocation_id = aws_eip.example.id\n  subnet_id     = aws_subnet.example.id\n\n  tags = {\n    Name = \"gw NAT\"\n  }\n\n  # To ensure proper ordering, it is recommended to add an explicit dependency\n  # on the Internet Gateway for the VPC.\n  depends_on = [aws_internet_gateway.example]\n}",
+  "minimal_example": "resource \"aws_nat_gateway\" \"example\" {\n  allocation_id                  = aws_eip.example.id\n  subnet_id                      = aws_subnet.example.id\n  secondary_allocation_ids       = [aws_eip.secondary.id]\n  secondary_private_ip_addresses = [\"10.0.1.5\"]\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

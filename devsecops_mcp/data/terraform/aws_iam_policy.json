@@ -1,0 +1,16 @@
+{
+  "name": "aws_iam_policy",
+  "provider": "aws",
+  "category": "iam",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_iam_policy\" \"policy\" {\n  name        = \"test_policy\"\n  path        = \"/\"\n  description = \"My test policy\"\n\n  # Terraform's \"jsonencode\" function converts a\n  # Terraform expression result to valid JSON syntax.\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Statement = [\n      {\n        Action = [\n          \"ec2:Describe*\",\n        ]\n        Effect   = \"Allow\"\n        Resource = \"*\"\n      },\n    ]\n  })\n}",
+  "minimal_example": "import {\n  to = aws_iam_policy.example\n  identity = {\n    \"arn\" = \"arn:aws:iam::123456789012:policy/UsersManageOwnCredentials\"\n  }\n}\n\nresource \"aws_iam_policy\" \"example\" {\n  ### Configuration omitted for brevity ###\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
     LLM_MODEL: str = "meta/llama3-70b-instruct"
 
+    # MCP Server — dynamic context layer (Terraform schemas, K8s templates, AWS best practices)
+    MCP_ENABLED: bool = True
+    MCP_SERVER_PATH: str = "mcp/server.py"
+    MCP_CACHE_TTL_HOURS: int = 24
+
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
 
     def get_groq_api_keys(self) -> list[str]:

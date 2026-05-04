@@ -1,0 +1,16 @@
+{
+  "name": "aws_kms_key",
+  "provider": "aws",
+  "category": "security",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "data \"aws_caller_identity\" \"current\" {}\n\nresource \"aws_kms_key\" \"example\" {\n  description             = \"An example symmetric encryption KMS key\"\n  enable_key_rotation     = true\n  deletion_window_in_days = 20\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Id      = \"key-default-1\"\n    Statement = [\n      {\n        Sid    = \"Enable IAM User Permissions\"\n        Effect = \"Allow\"\n        Principal = {\n          AWS = \"arn:aws:iam::${data.aws_caller_identity.current.account_id}:root\"\n        },\n        Action   = \"kms:*\"\n        Resource = \"*\"\n      },\n      {\n        Sid    = \"Allow administration of the key\"\n        Effect = \"Allow\"\n        Principal = {\n          AWS = \"arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/Alice\"\n        },\n        Action = [\n          \"kms:ReplicateKey\",\n          \"kms:Create*\",\n          \"kms:Describe*\",\n          \"kms:Enable*\",\n          \"kms:List*\",\n          \"kms:Put*\",\n          \"kms:Update*\",\n          \"kms:Revoke*\",\n          \"kms:Disable*\",\n          \"kms:Get*\",\n          \"kms:Delete*\",\n          \"kms:ScheduleKeyDeletion\",\n          \"kms:CancelKeyDeletion\"\n        ],\n        Resource = \"*\"\n      },\n      {\n        Sid    = \"Allow use of the key\"\n        Effect = \"Allow\"\n        Principal = {\n          AWS = \"arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/Bob\"\n        },\n        Action = [\n          \"kms:DescribeKey\",\n          \"kms:Encrypt\",\n          \"kms:Decrypt\",\n          \"kms:ReEncrypt*\",\n          \"kms:GenerateDataKey\",\n          \"kms:GenerateDataKeyWithoutPlaintext\"\n        ],\n        Resource = \"*\"\n      }\n    ]\n  })\n}",
+  "minimal_example": "data \"aws_caller_identity\" \"current\" {}\n\nresource \"aws_kms_key\" \"example\" {\n  description             = \"An example symmetric encryption KMS key\"\n  enable_key_rotation     = true\n  deletion_window_in_days = 20\n}\n\nresource \"aws_kms_key_policy\" \"example\" {\n  key_id = aws_kms_key.example.id\n  policy = jsonencode({\n    Version = \"2012-10-17\"\n    Id      = \"key-default-1\"\n    Statement = [\n      {\n        Sid    = \"Enable IAM User Permissions\"\n        Effect = \"Allow\"\n        Principal = {\n          AWS = \"arn:aws:iam::${data.aws_caller_identity.current.account_id}:root\"\n        },\n        Action   = \"kms:*\"\n        Resource = \"*\"\n      }\n    ]\n  })\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

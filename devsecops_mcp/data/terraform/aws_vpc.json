@@ -1,0 +1,89 @@
+{
+  "name": "aws_vpc",
+  "provider": "aws",
+  "category": "networking",
+  "description": "Provides a VPC resource. A VPC is a virtual network dedicated to your AWS account, logically isolated from other virtual networks in the AWS Cloud. You can launch AWS resources in a VPC that you define.",
+  "use_cases": [
+    "Create isolated network environments for your AWS resources",
+    "Control inbound and outbound traffic with security groups and network ACLs",
+    "Enable private connectivity between AWS services",
+    "Set up hybrid networking with on-premises data centers via VPN or Direct Connect"
+  ],
+  "arguments": {
+    "required": [
+      {
+        "name": "cidr_block",
+        "type": "string",
+        "description": "The IPv4 CIDR block for the VPC. CIDR can be explicitly set or it can be derived from IPAM using ipv4_ipam_pool_id. Example: '10.0.0.0/16'"
+      }
+    ],
+    "optional": [
+      {
+        "name": "enable_dns_support",
+        "type": "bool",
+        "description": "A boolean flag to enable/disable DNS support in the VPC. Defaults to true.",
+        "default": "true"
+      },
+      {
+        "name": "enable_dns_hostnames",
+        "type": "bool",
+        "description": "A boolean flag to enable/disable DNS hostnames in the VPC. Required for EKS. Defaults to false.",
+        "default": "false"
+      },
+      {
+        "name": "instance_tenancy",
+        "type": "string",
+        "description": "Tenancy option for instances launched into the VPC: 'default' or 'dedicated'. Defaults to 'default'.",
+        "default": "default"
+      },
+      {
+        "name": "tags",
+        "type": "map(string)",
+        "description": "A map of tags to assign to the resource. Required for cost allocation and resource tracking."
+      }
+    ]
+  },
+  "example_hcl": "resource \"aws_vpc\" \"main\" {\n  cidr_block           = var.vpc_cidr\n  enable_dns_support   = true\n  enable_dns_hostnames = true\n\n  tags = {\n    Name        = \"${var.project_name}-vpc\"\n    Environment = var.environment\n    ManagedBy   = \"terraform\"\n  }\n}",
+  "minimal_example": "resource \"aws_vpc\" \"main\" {\n  cidr_block = \"10.0.0.0/16\"\n\n  tags = {\n    Name = \"main-vpc\"\n  }\n}",
+  "best_practices": [
+    "Use a /16 CIDR block (e.g., 10.0.0.0/16) to allow sufficient IP addresses for future growth",
+    "Always enable DNS support and DNS hostnames — required for EKS and many AWS services",
+    "Use multiple Availability Zones for high availability (at least 2, preferably 3)",
+    "Separate public and private subnets: NAT gateway for private subnet egress",
+    "Apply consistent tagging strategy for cost allocation and resource management",
+    "Use the 10.0.0.0/8 or 172.16.0.0/12 private address ranges to avoid conflicts",
+    "Plan CIDR blocks carefully — VPC CIDR cannot be changed after creation",
+    "Use VPC Flow Logs for network monitoring and security analysis"
+  ],
+  "security_notes": [
+    "Never allow 0.0.0.0/0 inbound on Security Groups attached to private resources",
+    "Use VPC Flow Logs to detect anomalous traffic patterns",
+    "Enable VPC Endpoints for S3 and DynamoDB to avoid public internet traffic",
+    "Use Network ACLs as a secondary defense layer (stateless firewall)",
+    "Consider AWS PrivateLink for private connectivity to AWS services"
+  ],
+  "common_errors": [
+    {
+      "error": "CIDR block conflicts with existing VPC",
+      "fix": "Choose a non-overlapping CIDR range. Use 10.x.0.0/16, 172.16-31.x.0/16, or 192.168.x.0/24"
+    },
+    {
+      "error": "EKS nodes cannot register with cluster",
+      "fix": "Set enable_dns_hostnames = true and enable_dns_support = true"
+    },
+    {
+      "error": "Cannot delete VPC",
+      "fix": "Delete all dependent resources first: EC2 instances, subnets, internet gateways, security groups"
+    }
+  ],
+  "related_resources": [
+    "aws_subnet",
+    "aws_internet_gateway",
+    "aws_nat_gateway",
+    "aws_route_table",
+    "aws_security_group",
+    "aws_vpc_endpoint",
+    "aws_flow_log"
+  ],
+  "outputs_example": "output \"vpc_id\" {\n  description = \"The ID of the VPC\"\n  value       = aws_vpc.main.id\n}\n\noutput \"vpc_cidr\" {\n  description = \"The CIDR block of the VPC\"\n  value       = aws_vpc.main.cidr_block\n}"
+}

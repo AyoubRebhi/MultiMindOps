@@ -1,0 +1,16 @@
+{
+  "name": "aws_lb_listener",
+  "provider": "aws",
+  "category": "networking",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_lb\" \"front_end\" {\n  # ...\n}\n\nresource \"aws_lb_target_group\" \"front_end\" {\n  # ...\n}\n\nresource \"aws_lb_listener\" \"front_end\" {\n  load_balancer_arn = aws_lb.front_end.arn\n  port              = \"443\"\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-2016-08\"\n  certificate_arn   = \"arn:aws:iam::187416307283:server-certificate/test_cert_rab3wuqwgja25ct3n4jdj2tzu4\"\n\n  default_action {\n    type             = \"forward\"\n    target_group_arn = aws_lb_target_group.front_end.arn\n  }\n}",
+  "minimal_example": "resource \"aws_lb\" \"front_end\" {\n  # ...\n}\n\nresource \"aws_lb_target_group\" \"front_end_blue\" {\n  # ...\n}\n\nresource \"aws_lb_target_group\" \"front_end_green\" {\n  # ...\n}\n\nresource \"aws_lb_listener\" \"front_end\" {\n  load_balancer_arn = aws_lb.front_end.arn\n  port              = \"443\"\n  protocol          = \"HTTPS\"\n  ssl_policy        = \"ELBSecurityPolicy-2016-08\"\n  certificate_arn   = \"arn:aws:iam::187416307283:server-certificate/test_cert_rab3wuqwgja25ct3n4jdj2tzu4\"\n\n  default_action {\n    type = \"forward\"\n\n    forward {\n      target_group {\n        arn    = aws_lb_target_group.front_end_blue.arn\n        weight = 100\n      }\n      target_group {\n        arn    = aws_lb_target_group.front_end_green.arn\n        weight = 0\n      }\n    }\n  }\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

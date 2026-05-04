@@ -12,3 +12,7 @@ chromadb
 openai
 httpx
 PyYAML
+# MCP Server — Model Context Protocol for structured Terraform/K8s context
+mcp>=1.0.0
+# Optional: HCL syntax validation (improves validate_terraform_code accuracy)
+python-hcl2>=4.0.0

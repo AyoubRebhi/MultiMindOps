@@ -1,0 +1,16 @@
+{
+  "name": "aws_cloudwatch_log_group",
+  "provider": "aws",
+  "category": "observability",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_cloudwatch_log_group\" \"yada\" {\n  name = \"Yada\"\n\n  tags = {\n    Environment = \"production\"\n    Application = \"serviceA\"\n  }\n}",
+  "minimal_example": "import {\n  to = aws_cloudwatch_log_group.example\n  identity = {\n    name = \"yada\"\n  }\n}\n\nresource \"aws_cloudwatch_log_group\" \"example\" {\n  ### Configuration omitted for brevity ###\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

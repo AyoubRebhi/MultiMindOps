@@ -1,0 +1,16 @@
+{
+  "name": "aws_route_table_association",
+  "provider": "aws",
+  "category": "networking",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_route_table_association\" \"example\" {\n  subnet_id      = aws_subnet.example.id\n  route_table_id = aws_route_table.example.id\n}",
+  "minimal_example": "resource \"aws_route_table_association\" \"example\" {\n  gateway_id     = aws_internet_gateway.example.id\n  route_table_id = aws_route_table.example.id\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

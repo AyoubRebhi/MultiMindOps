@@ -1,0 +1,16 @@
+{
+  "name": "aws_s3_bucket_versioning",
+  "provider": "aws",
+  "category": "storage",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_s3_bucket\" \"example\" {\n  bucket = \"example-bucket\"\n}\n\nresource \"aws_s3_bucket_acl\" \"example\" {\n  bucket = aws_s3_bucket.example.id\n  acl    = \"private\"\n}\n\nresource \"aws_s3_bucket_versioning\" \"versioning_example\" {\n  bucket = aws_s3_bucket.example.id\n  versioning_configuration {\n    status = \"Enabled\"\n  }\n}",
+  "minimal_example": "resource \"aws_s3_bucket\" \"example\" {\n  bucket = \"example-bucket\"\n}\n\nresource \"aws_s3_bucket_acl\" \"example\" {\n  bucket = aws_s3_bucket.example.id\n  acl    = \"private\"\n}\n\nresource \"aws_s3_bucket_versioning\" \"versioning_example\" {\n  bucket = aws_s3_bucket.example.id\n  versioning_configuration {\n    status = \"Disabled\"\n  }\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

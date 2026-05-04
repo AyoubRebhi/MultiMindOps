@@ -1,0 +1,16 @@
+{
+  "name": "aws_route_table",
+  "provider": "aws",
+  "category": "networking",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_route_table\" \"example\" {\n  vpc_id = aws_vpc.example.id\n\n  route {\n    cidr_block = \"10.0.1.0/24\"\n    gateway_id = aws_internet_gateway.example.id\n  }\n\n  route {\n    ipv6_cidr_block        = \"::/0\"\n    egress_only_gateway_id = aws_egress_only_internet_gateway.example.id\n  }\n\n  tags = {\n    Name = \"example\"\n  }\n}",
+  "minimal_example": "resource \"aws_route_table\" \"example\" {\n  vpc_id = aws_vpc.example.id\n\n  route = []\n\n  tags = {\n    Name = \"example\"\n  }\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

@@ -1,0 +1,38 @@
+{
+  "name": "deployment",
+  "api_version": "apps/v1",
+  "kind": "Deployment",
+  "description": "A Kubernetes Deployment manages a replicated application, ensuring the desired number of pod replicas are running. It provides declarative updates, rollout strategies, and rollback capabilities.",
+  "use_cases": [
+    "Deploy stateless microservices with multiple replicas",
+    "Perform rolling updates with zero downtime",
+    "Automatic rollback on failed deployments",
+    "Horizontal scaling based on demand"
+  ],
+  "template_yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${app_name}\n  namespace: ${namespace}\n  labels:\n    app: ${app_name}\n    version: ${image_tag}\n    environment: ${environment}\nspec:\n  replicas: ${replica_count}\n  selector:\n    matchLabels:\n      app: ${app_name}\n  strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxSurge: 1\n      maxUnavailable: 0\n  template:\n    metadata:\n      labels:\n        app: ${app_name}\n        version: ${image_tag}\n    spec:\n      serviceAccountName: ${service_account_name}\n      securityContext:\n        runAsNonRoot: true\n        runAsUser: 1000\n        fsGroup: 2000\n      containers:\n        - name: ${app_name}\n          image: ${ecr_repository_url}:${image_tag}\n          imagePullPolicy: Always\n          ports:\n            - name: http\n              containerPort: ${container_port}\n              protocol: TCP\n          resources:\n            requests:\n              memory: \"${memory_request}\"\n              cpu: \"${cpu_request}\"\n            limits:\n              memory: \"${memory_limit}\"\n              cpu: \"${cpu_limit}\"\n          livenessProbe:\n            httpGet:\n              path: /health\n              port: ${container_port}\n            initialDelaySeconds: 30\n            periodSeconds: 10\n            failureThreshold: 3\n          readinessProbe:\n            httpGet:\n              path: /ready\n              port: ${container_port}\n            initialDelaySeconds: 10\n            periodSeconds: 5\n            failureThreshold: 3\n          envFrom:\n            - secretRef:\n                name: ${app_name}-secrets\n          env:\n            - name: APP_ENV\n              value: \"${environment}\"\n            - name: PORT\n              value: \"${container_port}\"\n          securityContext:\n            allowPrivilegeEscalation: false\n            readOnlyRootFilesystem: true\n            capabilities:\n              drop:\n                - ALL\n      topologySpreadConstraints:\n        - maxSkew: 1\n          topologyKey: kubernetes.io/hostname\n          whenUnsatisfiable: DoNotSchedule\n          labelSelector:\n            matchLabels:\n              app: ${app_name}",
+  "best_practices": [
+    "Always set resource requests and limits to enable proper scheduling and prevent resource starvation",
+    "Use RollingUpdate strategy with maxUnavailable=0 for zero-downtime deployments",
+    "Configure liveness and readiness probes — they are critical for Kubernetes health management",
+    "Run containers as non-root user (runAsNonRoot: true)",
+    "Use topologySpreadConstraints to distribute pods across nodes and AZs",
+    "Set imagePullPolicy: Always and use immutable image tags (not 'latest')",
+    "Use readOnlyRootFilesystem: true and drop all capabilities",
+    "Use ServiceAccount with minimal RBAC permissions"
+  ],
+  "security_notes": [
+    "Never run containers as root — set runAsNonRoot: true and runAsUser: 1000",
+    "Drop all Linux capabilities: capabilities.drop: [ALL]",
+    "Use readOnlyRootFilesystem: true and mount writable volumes only where needed",
+    "Never use allowPrivilegeEscalation: true",
+    "Store secrets in Kubernetes Secrets or AWS Secrets Manager, never as plain env vars"
+  ],
+  "related_resources": [
+    "service",
+    "horizontalpodautoscaler",
+    "configmap",
+    "secret",
+    "serviceaccount",
+    "ingress"
+  ]
+}

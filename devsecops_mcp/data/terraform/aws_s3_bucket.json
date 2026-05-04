@@ -1,0 +1,16 @@
+{
+  "name": "aws_s3_bucket",
+  "provider": "aws",
+  "category": "storage",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_s3_bucket\" \"example\" {\n  bucket = \"my-tf-test-bucket\"\n\n  tags = {\n    Name        = \"My bucket\"\n    Environment = \"Dev\"\n  }\n}",
+  "minimal_example": "data \"aws_caller_identity\" \"current\" {}\ndata \"aws_region\" \"current\" {}\n\nresource \"aws_s3_bucket\" \"example\" {\n  bucket           = format(\"my-tf-test-bucket-%s-%s-an\", data.aws_caller_identity.current.account_id, data.aws_region.current.region)\n  bucket_namespace = \"account-regional\"\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

@@ -1,0 +1,16 @@
+{
+  "name": "aws_ecs_task_definition",
+  "provider": "aws",
+  "category": "compute",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_ecs_task_definition\" \"service\" {\n  family = \"service\"\n  container_definitions = jsonencode([\n    {\n      name      = \"first\"\n      image     = \"service-first\"\n      cpu       = 10\n      memory    = 512\n      essential = true\n      portMappings = [\n        {\n          containerPort = 80\n          hostPort      = 80\n        }\n      ]\n    },\n    {\n      name      = \"second\"\n      image     = \"service-second\"\n      cpu       = 10\n      memory    = 256\n      essential = true\n      portMappings = [\n        {\n          containerPort = 443\n          hostPort      = 443\n        }\n      ]\n    }\n  ])\n\n  volume {\n    name      = \"service-storage\"\n    host_path = \"/ecs/service-storage\"\n  }\n\n  placement_constraints {\n    type       = \"memberOf\"\n    expression = \"attribute:ecs.availability-zone in [us-west-2a, us-west-2b]\"\n  }\n}",
+  "minimal_example": "resource \"aws_ecs_task_definition\" \"service\" {\n  family                = \"service\"\n  container_definitions = file(\"task-definitions/service.json\")\n\n  proxy_configuration {\n    type           = \"APPMESH\"\n    container_name = \"applicationContainerName\"\n    properties = {\n      AppPorts         = \"8080\"\n      EgressIgnoredIPs = \"169.254.170.2,169.254.169.254\"\n      IgnoredUID       = \"1337\"\n      ProxyEgressPort  = 15001\n      ProxyIngressPort = 15000\n    }\n  }\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

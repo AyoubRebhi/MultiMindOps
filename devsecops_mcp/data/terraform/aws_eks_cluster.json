@@ -1,0 +1,103 @@
+{
+  "name": "aws_eks_cluster",
+  "provider": "aws",
+  "category": "compute",
+  "description": "Manages an EKS (Elastic Kubernetes Service) cluster. EKS is a managed Kubernetes service that runs the Kubernetes control plane across multiple AWS Availability Zones. It handles control plane node management, patching, and availability automatically.",
+  "use_cases": [
+    "Deploy containerized microservices at scale",
+    "Run stateful applications with persistent storage",
+    "Multi-team Kubernetes cluster with RBAC isolation",
+    "CI/CD pipeline runners on Kubernetes"
+  ],
+  "arguments": {
+    "required": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Name of the EKS cluster. Must be unique within an AWS region."
+      },
+      {
+        "name": "role_arn",
+        "type": "string",
+        "description": "ARN of the IAM role that provides permissions for EKS to manage AWS resources. Must include AmazonEKSClusterPolicy."
+      },
+      {
+        "name": "vpc_config",
+        "type": "block",
+        "description": "Network configuration for the cluster. Requires subnet_ids (at least 2 in different AZs)."
+      }
+    ],
+    "optional": [
+      {
+        "name": "version",
+        "type": "string",
+        "description": "Kubernetes version. Recommended: always specify explicitly. Example: '1.29'"
+      },
+      {
+        "name": "enabled_cluster_log_types",
+        "type": "list(string)",
+        "description": "List of control plane logging types: api, audit, authenticator, controllerManager, scheduler."
+      },
+      {
+        "name": "encryption_config",
+        "type": "block",
+        "description": "KMS encryption configuration for Kubernetes secrets."
+      },
+      {
+        "name": "tags",
+        "type": "map(string)",
+        "description": "Map of tags to assign to the cluster."
+      }
+    ]
+  },
+  "example_hcl": "resource \"aws_eks_cluster\" \"main\" {\n  name     = \"${var.project_name}-${var.environment}\"\n  role_arn = aws_iam_role.eks_cluster.arn\n  version  = var.kubernetes_version\n\n  vpc_config {\n    subnet_ids              = concat(aws_subnet.private[*].id, aws_subnet.public[*].id)\n    endpoint_private_access = true\n    endpoint_public_access  = true\n    public_access_cidrs     = [\"0.0.0.0/0\"]\n    security_group_ids      = [aws_security_group.eks_cluster.id]\n  }\n\n  enabled_cluster_log_types = [\"api\", \"audit\", \"authenticator\"]\n\n  encryption_config {\n    provider {\n      key_arn = aws_kms_key.eks.arn\n    }\n    resources = [\"secrets\"]\n  }\n\n  depends_on = [\n    aws_iam_role_policy_attachment.eks_cluster_policy,\n    aws_cloudwatch_log_group.eks,\n  ]\n\n  tags = {\n    Name        = \"${var.project_name}-${var.environment}\"\n    Environment = var.environment\n    ManagedBy   = \"terraform\"\n  }\n}\n\nresource \"aws_eks_node_group\" \"main\" {\n  cluster_name    = aws_eks_cluster.main.name\n  node_group_name = \"${var.project_name}-ng\"\n  node_role_arn   = aws_iam_role.eks_node.arn\n  subnet_ids      = aws_subnet.private[*].id\n\n  scaling_config {\n    desired_size = var.node_desired_size\n    max_size     = var.node_max_size\n    min_size     = var.node_min_size\n  }\n\n  instance_types = [var.node_instance_type]\n  capacity_type  = \"ON_DEMAND\"\n\n  update_config {\n    max_unavailable = 1\n  }\n\n  depends_on = [\n    aws_iam_role_policy_attachment.eks_worker_node,\n    aws_iam_role_policy_attachment.eks_cni,\n    aws_iam_role_policy_attachment.ecr_read,\n  ]\n\n  tags = {\n    Name        = \"${var.project_name}-ng\"\n    Environment = var.environment\n  }\n}",
+  "minimal_example": "resource \"aws_eks_cluster\" \"main\" {\n  name     = \"my-cluster\"\n  role_arn = aws_iam_role.eks_cluster.arn\n\n  vpc_config {\n    subnet_ids = aws_subnet.private[*].id\n  }\n}",
+  "best_practices": [
+    "Always specify the Kubernetes version explicitly — avoid automatic upgrades",
+    "Place nodes in private subnets only — ALB handles public traffic",
+    "Enable control plane logging (at minimum api, audit, authenticator)",
+    "Use managed node groups (aws_eks_node_group) instead of self-managed EC2",
+    "Enable secrets encryption with KMS for compliance",
+    "Use Cluster Autoscaler or Karpenter for dynamic node scaling",
+    "Set up IRSA (IAM Roles for Service Accounts) for pod-level permissions",
+    "Use private endpoint access with restricted public access CIDRs in production",
+    "Keep cluster and node group versions in sync (max 1 minor version skew)"
+  ],
+  "security_notes": [
+    "Restrict endpoint_public_access_cidrs to known IP ranges in production",
+    "Enable envelope encryption for Kubernetes secrets using KMS",
+    "Use IAM Roles for Service Accounts (IRSA) instead of node-level IAM roles",
+    "Implement Kubernetes RBAC policies from day one",
+    "Use Amazon VPC CNI with security groups for pods for network-level isolation",
+    "Enable EKS audit logging and ship to CloudWatch or S3 for compliance"
+  ],
+  "required_iam_policies_for_nodes": [
+    "AmazonEKSWorkerNodePolicy",
+    "AmazonEKS_CNI_Policy",
+    "AmazonEC2ContainerRegistryReadOnly"
+  ],
+  "outputs_example": "output \"cluster_endpoint\" {\n  description = \"EKS cluster API endpoint\"\n  value       = aws_eks_cluster.main.endpoint\n}\n\noutput \"cluster_name\" {\n  description = \"EKS cluster name\"\n  value       = aws_eks_cluster.main.name\n}\n\noutput \"cluster_certificate_authority_data\" {\n  description = \"Base64-encoded certificate data for cluster authentication\"\n  value       = aws_eks_cluster.main.certificate_authority[0].data\n}",
+  "common_errors": [
+    {
+      "error": "No subnets in different AZs",
+      "fix": "Provide subnets in at least 2 different Availability Zones for the EKS control plane"
+    },
+    {
+      "error": "Cluster creation timeout",
+      "fix": "EKS cluster creation can take 10-15 minutes. Set a longer timeout or increase Terraform timeout"
+    },
+    {
+      "error": "Nodes unable to join cluster",
+      "fix": "Check node IAM role policies (AmazonEKSWorkerNodePolicy, AmazonEKS_CNI_Policy) and security group rules"
+    }
+  ],
+  "related_resources": [
+    "aws_eks_node_group",
+    "aws_iam_role",
+    "aws_vpc",
+    "aws_subnet",
+    "aws_security_group",
+    "aws_kms_key",
+    "aws_ecr_repository"
+  ]
+}

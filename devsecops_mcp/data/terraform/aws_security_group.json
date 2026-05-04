@@ -1,0 +1,81 @@
+{
+  "name": "aws_security_group",
+  "provider": "aws",
+  "category": "networking",
+  "description": "Provides a security group resource. Security groups act as a virtual firewall for your EC2 instances, EKS nodes, RDS instances, and other AWS resources to control inbound and outbound traffic. Security groups are stateful: if you send a request from your instance, the response traffic is allowed regardless of inbound rules.",
+  "use_cases": [
+    "Control inbound/outbound traffic to EC2 instances and EKS nodes",
+    "Restrict database access to application layer only",
+    "Allow ALB to communicate with backend services",
+    "Implement least-privilege network access controls"
+  ],
+  "arguments": {
+    "required": [],
+    "optional": [
+      {
+        "name": "name",
+        "type": "string",
+        "description": "Name of the security group. If omitted, Terraform will assign a random unique name."
+      },
+      {
+        "name": "description",
+        "type": "string",
+        "description": "Security group description. Defaults to 'Managed by Terraform'. Cannot be empty string."
+      },
+      {
+        "name": "vpc_id",
+        "type": "string",
+        "description": "VPC ID where the security group is created. Defaults to the region's default VPC."
+      },
+      {
+        "name": "ingress",
+        "type": "list(object)",
+        "description": "Ingress rules. Deprecated in favor of aws_vpc_security_group_ingress_rule resource for better state management."
+      },
+      {
+        "name": "egress",
+        "type": "list(object)",
+        "description": "Egress rules. Defaults to all traffic allowed. Deprecated in favor of aws_vpc_security_group_egress_rule."
+      },
+      {
+        "name": "tags",
+        "type": "map(string)",
+        "description": "Map of tags to assign to the resource."
+      }
+    ]
+  },
+  "example_hcl": "resource \"aws_security_group\" \"app\" {\n  name        = \"${var.project_name}-app-sg\"\n  description = \"Security group for application servers\"\n  vpc_id      = aws_vpc.main.id\n\n  tags = {\n    Name        = \"${var.project_name}-app-sg\"\n    Environment = var.environment\n  }\n}\n\nresource \"aws_vpc_security_group_ingress_rule\" \"app_http\" {\n  security_group_id = aws_security_group.app.id\n  cidr_ipv4         = \"0.0.0.0/0\"\n  from_port         = 80\n  to_port           = 80\n  ip_protocol       = \"tcp\"\n  description       = \"Allow HTTP traffic\"\n}\n\nresource \"aws_vpc_security_group_ingress_rule\" \"app_https\" {\n  security_group_id = aws_security_group.app.id\n  cidr_ipv4         = \"0.0.0.0/0\"\n  from_port         = 443\n  to_port           = 443\n  ip_protocol       = \"tcp\"\n  description       = \"Allow HTTPS traffic\"\n}\n\nresource \"aws_vpc_security_group_egress_rule\" \"app_all\" {\n  security_group_id = aws_security_group.app.id\n  cidr_ipv4         = \"0.0.0.0/0\"\n  ip_protocol       = \"-1\"\n  description       = \"Allow all outbound traffic\"\n}",
+  "minimal_example": "resource \"aws_security_group\" \"app\" {\n  name        = \"app-sg\"\n  description = \"Application security group\"\n  vpc_id      = aws_vpc.main.id\n\n  ingress {\n    from_port   = 8080\n    to_port     = 8080\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n\n  egress {\n    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n\n  tags = {\n    Name = \"app-sg\"\n  }\n}",
+  "best_practices": [
+    "Use aws_vpc_security_group_ingress_rule and aws_vpc_security_group_egress_rule resources instead of inline rules for better state management",
+    "Never use 0.0.0.0/0 for inbound rules on sensitive ports (DB, admin ports)",
+    "Prefer source security group references over CIDR blocks for internal communication",
+    "Add descriptive comments to each rule so purpose is clear",
+    "Use separate security groups for each tier (ALB, App, Database)",
+    "Restrict SSH/RDP access to specific IP ranges or use AWS Systems Manager Session Manager",
+    "Apply the principle of least privilege: only open ports that are actually needed"
+  ],
+  "security_notes": [
+    "NEVER open port 22 (SSH) or 3389 (RDP) to 0.0.0.0/0 — use AWS Systems Manager Session Manager instead",
+    "NEVER open database ports (3306, 5432, 27017) to 0.0.0.0/0",
+    "Security groups are stateful — outbound rules automatically allow return traffic",
+    "Use VPC Flow Logs to audit what traffic is actually flowing through security groups",
+    "Regularly audit security group rules and remove unused rules"
+  ],
+  "common_errors": [
+    {
+      "error": "dependency cycle between security groups",
+      "fix": "Use aws_security_group_rule resource or reference security group IDs via variables"
+    },
+    {
+      "error": "Cannot delete security group: it is associated with another resource",
+      "fix": "Remove all EC2 instances and other resources from the SG before deletion"
+    }
+  ],
+  "related_resources": [
+    "aws_vpc",
+    "aws_vpc_security_group_ingress_rule",
+    "aws_vpc_security_group_egress_rule",
+    "aws_security_group_rule"
+  ]
+}

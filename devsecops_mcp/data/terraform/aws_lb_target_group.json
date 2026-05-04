@@ -1,0 +1,16 @@
+{
+  "name": "aws_lb_target_group",
+  "provider": "aws",
+  "category": "networking",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_lb_target_group\" \"test\" {\n  name     = \"tf-example-lb-tg\"\n  port     = 80\n  protocol = \"HTTP\"\n  vpc_id   = aws_vpc.main.id\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block = \"10.0.0.0/16\"\n}",
+  "minimal_example": "resource \"aws_lb_target_group\" \"ip-example\" {\n  name        = \"tf-example-lb-tg\"\n  port        = 80\n  protocol    = \"HTTP\"\n  target_type = \"ip\"\n  vpc_id      = aws_vpc.main.id\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block = \"10.0.0.0/16\"\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

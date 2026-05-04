@@ -1,0 +1,16 @@
+{
+  "name": "aws_dynamodb_table",
+  "provider": "aws",
+  "category": "database",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_dynamodb_table\" \"basic-dynamodb-table\" {\n  name           = \"GameScores\"\n  billing_mode   = \"PROVISIONED\"\n  read_capacity  = 20\n  write_capacity = 20\n  hash_key       = \"UserId\"\n  range_key      = \"GameTitle\"\n\n  attribute {\n    name = \"UserId\"\n    type = \"S\"\n  }\n\n  attribute {\n    name = \"GameTitle\"\n    type = \"S\"\n  }\n\n  attribute {\n    name = \"TopScore\"\n    type = \"N\"\n  }\n\n  ttl {\n    attribute_name = \"TimeToExist\"\n    enabled        = true\n  }\n\n  global_secondary_index {\n    name               = \"GameTitleIndex\"\n    hash_key           = \"GameTitle\"\n    range_key          = \"TopScore\"\n    write_capacity     = 10\n    read_capacity      = 10\n    projection_type    = \"INCLUDE\"\n    non_key_attributes = [\"UserId\"]\n  }\n\n  tags = {\n    Name        = \"dynamodb-table-1\"\n    Environment = \"production\"\n  }\n}",
+  "minimal_example": "resource \"aws_dynamodb_table\" \"basic-dynamodb-table\" {\n  name           = \"TournamentMatches\"\n  billing_mode   = \"PROVISIONED\"\n  read_capacity  = 20\n  write_capacity = 20\n  hash_key       = \"matchId\"\n\n  attribute {\n    name = \"matchId\"\n    type = \"S\"\n  }\n\n  attribute {\n    name = \"tournamentId\"\n    type = \"S\"\n  }\n\n  attribute {\n    name = \"region\"\n    type = \"S\"\n  }\n\n  attribute {\n    name = \"round\"\n    type = \"S\"\n  }\n\n  attribute {\n    name = \"bracket\"\n    type = \"S\"\n  }\n\n  attribute {\n    name = \"playerId\"\n    type = \"N\"\n  }\n\n  attribute {\n    name = \"matchDate\"\n    type = \"S\"\n  }\n\n  ttl {\n    attribute_name = \"TimeToExist\"\n    enabled        = true\n  }\n\n  # GSI with multiple HASH keys and multiple RANGE keys using key_schema\n  global_secondary_index {\n    name = \"TournamentRegionIndex\"\n    key_schema {\n      attribute_name = \"tournamentId\"\n      key_type       = \"HASH\"\n    }\n    key_schema {\n      attribute_name = \"region\"\n      key_type       = \"HASH\"\n    }\n    key_schema {\n      attribute_name = \"round\"\n      key_type       = \"RANGE\"\n    }\n    key_schema {\n      attribute_name = \"bracket\"\n      key_type       = \"RANGE\"\n    }\n    key_schema {\n      attribute_name = \"matchId\"\n      key_type       = \"RANGE\"\n    }\n    write_capacity  = 10\n    read_capacity   = 10\n    projection_type = \"ALL\"\n  }\n\n  # GSI with single HASH key and multiple RANGE keys using key_schema\n  global_secondary_index {\n    name = \"PlayerMatchHistoryIndex\"\n    key_schema {\n      attribute_name = \"playerId\"\n      key_type       = \"HASH\"\n    }\n    key_schema {\n      attribute_name = \"matchDate\"\n      key_type       = \"RANGE\"\n    }\n    key_schema {\n      attribute_name = \"round\"\n      key_type       = \"RANGE\"\n    }\n    write_capacity  = 10\n    read_capacity   = 10\n    projection_type = \"ALL\"\n  }\n\n  tags = {\n    Name        = \"dynamodb-table-1\"\n    Environment = \"production\"\n  }\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

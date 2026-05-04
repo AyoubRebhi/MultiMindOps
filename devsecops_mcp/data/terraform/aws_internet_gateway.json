@@ -1,0 +1,16 @@
+{
+  "name": "aws_internet_gateway",
+  "provider": "aws",
+  "category": "networking",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_internet_gateway\" \"gw\" {\n  vpc_id = aws_vpc.main.id\n\n  tags = {\n    Name = \"main\"\n  }\n}",
+  "minimal_example": "resource \"aws_internet_gateway\" \"gw\" {\n  vpc_id = aws_vpc.main.id\n}\n\nresource \"aws_instance\" \"foo\" {\n  # ... other arguments ...\n\n  depends_on = [aws_internet_gateway.gw]\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

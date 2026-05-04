@@ -1,0 +1,16 @@
+{
+  "name": "aws_subnet",
+  "provider": "aws",
+  "category": "networking",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_subnet\" \"main\" {\n  vpc_id     = aws_vpc.main.id\n  cidr_block = \"10.0.1.0/24\"\n\n  tags = {\n    Name = \"Main\"\n  }\n}",
+  "minimal_example": "resource \"aws_vpc_ipv4_cidr_block_association\" \"secondary_cidr\" {\n  vpc_id     = aws_vpc.main.id\n  cidr_block = \"172.20.0.0/16\"\n}\n\nresource \"aws_subnet\" \"in_secondary_cidr\" {\n  vpc_id     = aws_vpc_ipv4_cidr_block_association.secondary_cidr.vpc_id\n  cidr_block = \"172.20.0.0/24\"\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}

@@ -1,0 +1,16 @@
+{
+  "name": "aws_elasticache_cluster",
+  "provider": "aws",
+  "category": "cache",
+  "description": "",
+  "arguments": {
+    "required": [],
+    "optional": []
+  },
+  "example_hcl": "resource \"aws_elasticache_cluster\" \"example\" {\n  cluster_id           = \"cluster-example\"\n  engine               = \"memcached\"\n  node_type            = \"cache.m4.large\"\n  num_cache_nodes      = 2\n  parameter_group_name = \"default.memcached1.4\"\n  port                 = 11211\n}",
+  "minimal_example": "resource \"aws_elasticache_cluster\" \"example\" {\n  cluster_id           = \"cluster-example\"\n  engine               = \"redis\"\n  node_type            = \"cache.m4.large\"\n  num_cache_nodes      = 1\n  parameter_group_name = \"default.redis3.2\"\n  engine_version       = \"3.2.10\"\n  port                 = 6379\n}",
+  "best_practices": [],
+  "security_notes": [],
+  "common_errors": [],
+  "related_resources": []
+}
