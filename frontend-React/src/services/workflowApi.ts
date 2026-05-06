@@ -8,6 +8,76 @@ import type {
   ReviewArtifactsRequest,
 } from '@/types'
 
+// ── Step-by-step workflow API ─────────────────────────────────────────────────
+
+export interface WorkflowPhaseResponse {
+  task_id: string
+  current_phase: string
+  status: string
+  artifacts: Record<string, string>
+  terraform_outputs: Record<string, string>
+  logs: unknown[]
+  message: string
+}
+
+const BASE = (import.meta as unknown as { env: { VITE_API_BASE_URL?: string } }).env.VITE_API_BASE_URL ?? ''
+
+async function _workflowPost(path: string, body?: unknown): Promise<WorkflowPhaseResponse> {
+  const res = await fetch(`${BASE}/api${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(detail.detail ?? `Request failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function workflowPlan(
+  params: PlanPreviewRequest & { approved_artifacts?: string[] },
+  envFile?: File | null,
+): Promise<WorkflowPhaseResponse> {
+  if (envFile) {
+    const form = new FormData()
+    form.append('prompt', params.prompt)
+    if (params.repo_url) form.append('repo_url', params.repo_url)
+    form.append('repository_visibility', params.repository_visibility ?? 'public')
+    if (params.github_token) form.append('github_token', params.github_token)
+    form.append('env_file', envFile)
+    const res = await fetch(`${BASE}/api/workflow/plan`, { method: 'POST', body: form })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(d.detail ?? `Plan failed: ${res.status}`)
+    }
+    return res.json()
+  }
+  return _workflowPost('/workflow/plan', params)
+}
+
+export function workflowRunDocker(taskId: string): Promise<WorkflowPhaseResponse> {
+  return _workflowPost(`/workflow/${taskId}/run-docker`)
+}
+
+export function workflowRunTerraform(taskId: string): Promise<WorkflowPhaseResponse> {
+  return _workflowPost(`/workflow/${taskId}/run-terraform`)
+}
+
+export function workflowRunKubernetes(taskId: string): Promise<WorkflowPhaseResponse> {
+  return _workflowPost(`/workflow/${taskId}/run-kubernetes`)
+}
+
+export function workflowRunCicd(taskId: string): Promise<WorkflowPhaseResponse> {
+  return _workflowPost(`/workflow/${taskId}/run-cicd`)
+}
+
+export async function workflowGetState(taskId: string): Promise<WorkflowPhaseResponse> {
+  const res = await fetch(`${BASE}/api/workflow/${taskId}`)
+  if (!res.ok) throw new Error(`Failed to fetch workflow state: ${res.status}`)
+  return res.json()
+}
+
 // ── Plan generation ───────────────────────────────────────────────────────────
 
 export function generatePlan(
@@ -114,9 +184,11 @@ export function getInfraArtifacts(task: TaskResponse): Record<string, string> {
 }
 
 export function getTerraformArtifacts(task: TaskResponse): Record<string, string> {
-  const fromInfra = (task.infra?.artifacts ?? {}) as Record<string, string>
-  const legacy = (task.result?.artifacts ?? {}) as Record<string, string>
-  const combined: Record<string, string> = { ...legacy, ...fromInfra }
+  // Priority order (highest first): task.infra.artifacts → result.infrastructure.artifacts → result.artifacts (legacy)
+  const fromInfra      = (task.infra?.artifacts ?? {}) as Record<string, string>
+  const fromResultInfra = ((task.result?.infrastructure as { artifacts?: Record<string, string> })?.artifacts ?? {})
+  const legacy          = (task.result?.artifacts ?? {}) as Record<string, string>
+  const combined: Record<string, string> = { ...legacy, ...fromResultInfra, ...fromInfra }
 
   return Object.fromEntries(
     Object.entries(combined).filter(([k]) => k.startsWith('terraform_')),
@@ -124,9 +196,11 @@ export function getTerraformArtifacts(task: TaskResponse): Record<string, string
 }
 
 export function getKubernetesArtifacts(task: TaskResponse): Record<string, string> {
-  const fromInfra = (task.infra?.artifacts ?? {}) as Record<string, string>
-  const legacy = (task.result?.artifacts ?? {}) as Record<string, string>
-  const combined: Record<string, string> = { ...legacy, ...fromInfra }
+  // Priority order (highest first): task.infra.artifacts → result.infrastructure.artifacts → result.artifacts (legacy)
+  const fromInfra      = (task.infra?.artifacts ?? {}) as Record<string, string>
+  const fromResultInfra = ((task.result?.infrastructure as { artifacts?: Record<string, string> })?.artifacts ?? {})
+  const legacy          = (task.result?.artifacts ?? {}) as Record<string, string>
+  const combined: Record<string, string> = { ...legacy, ...fromResultInfra, ...fromInfra }
 
   return Object.fromEntries(
     Object.entries(combined).filter(([k]) => k.startsWith('kubernetes_')),
@@ -134,14 +208,19 @@ export function getKubernetesArtifacts(task: TaskResponse): Record<string, strin
 }
 
 export function getCicdArtifacts(task: TaskResponse): Record<string, string> {
-  const direct = (task.cicd ?? {}) as Record<string, string>
-  const fromResult = ((task.result?.cicd as Record<string, string>) ?? {})
-  const fromArtifacts = Object.fromEntries(
+  // task.cicd may be a nested object with `.artifacts` key (from the backend's CICDAgent output)
+  const rawCicd = (task.cicd ?? {}) as Record<string, unknown>
+  const fromCicdArtifacts = (rawCicd['artifacts'] ?? rawCicd) as Record<string, string>
+
+  const rawResultCicd = ((task.result?.cicd ?? {}) as Record<string, unknown>)
+  const fromResultCicdArtifacts = (rawResultCicd['artifacts'] ?? rawResultCicd) as Record<string, string>
+
+  const fromResultFlat = Object.fromEntries(
     Object.entries((task.result?.artifacts ?? {}) as Record<string, string>).filter(([k]) =>
       k.includes('workflow') || k.includes('cicd') || k.includes('github_actions'),
     ),
   )
-  return { ...direct, ...fromResult, ...fromArtifacts }
+  return { ...fromResultFlat, ...fromResultCicdArtifacts, ...fromCicdArtifacts }
 }
 
 export function getSummary(task: TaskResponse): string {

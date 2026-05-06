@@ -65,6 +65,7 @@ interface Props {
   approveIcon?: React.ReactNode
 
   isLoading?: boolean
+  approveDisabled?: boolean
   hideActions?: boolean
 
   // Optional extra content in the action bar (e.g. edit controls)
@@ -81,6 +82,7 @@ export function StepContainer({
   approveLabel = 'Approve & Continue',
   approveIcon,
   isLoading,
+  approveDisabled,
   hideActions,
   actionExtras,
 }: Props) {
@@ -151,7 +153,8 @@ export function StepContainer({
             {onApprove && (
               <ActionButton
                 onClick={onApprove}
-                loading={isLoading}
+                loading={isLoading || approveDisabled}
+                disabled={approveDisabled}
                 variant="primary"
                 icon={approveIcon ?? <CheckCircle2 className="w-4 h-4" />}
               >

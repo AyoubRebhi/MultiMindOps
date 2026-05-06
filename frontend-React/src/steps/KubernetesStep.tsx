@@ -46,9 +46,10 @@ function FileTabs({
 interface Props {
   onApprove: () => void
   onBack: () => void
+  isPhaseLoading?: boolean
 }
 
-export function KubernetesStep({ onApprove, onBack }: Props) {
+export function KubernetesStep({ onApprove, onBack, isPhaseLoading }: Props) {
   const { task, editedArtifacts, editArtifact } = useWorkflowStore()
 
   const artifacts = task ? getKubernetesArtifacts(task) : {}
@@ -60,9 +61,11 @@ export function KubernetesStep({ onApprove, onBack }: Props) {
   const activeContent = editedArtifacts[activeKey] ?? artifacts[activeKey] ?? ''
   const hasTfRefs = TF_OUTPUT_RE.test(activeContent)
 
+  const approveLabel = isPhaseLoading ? 'Running CI/CD…' : 'Approve & Run CI/CD'
+
   if (!keys.length) {
     return (
-      <StepContainer onBack={onBack} onApprove={onApprove} approveLabel="Continue to Summary">
+      <StepContainer onBack={onBack} onApprove={onApprove} approveLabel={approveLabel} approveDisabled={isPhaseLoading}>
         <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
           <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-surface-800 flex items-center justify-center">
             <Ship className="w-6 h-6 text-slate-400 dark:text-slate-500" />
@@ -80,7 +83,8 @@ export function KubernetesStep({ onApprove, onBack }: Props) {
     <StepContainer
       onBack={onBack}
       onApprove={onApprove}
-      approveLabel="Approve & Continue"
+      approveLabel={approveLabel}
+      approveDisabled={isPhaseLoading}
     >
       <div className="space-y-4">
 

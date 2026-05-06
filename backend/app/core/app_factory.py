@@ -1,5 +1,7 @@
 import io
+import logging
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +11,8 @@ from backend.app.api.router import api_router
 from backend.app.core.config import settings
 from backend.app.database.base import Base
 from backend.app.database.session import engine
+
+logger = logging.getLogger(__name__)
 
 
 def setup_utf8_encoding() -> None:
@@ -51,7 +55,18 @@ setup_utf8_encoding()
 def create_app() -> FastAPI:
     Base.metadata.create_all(bind=engine)
 
-    app = FastAPI(title=settings.APP_NAME)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        rows = []
+        for route in app.routes:
+            methods = ",".join(sorted(getattr(route, "methods", None) or []))
+            rows.append(f"  {methods or 'ANY':10s}  {route.path}")
+        route_list = "\n".join(sorted(rows))
+        logger.info("Registered routes:\n%s", route_list)
+        print(f"[startup] Registered routes:\n{route_list}", flush=True)
+        yield
+
+    app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
     # Allow the React dev server (port 3000) and any production origin
     app.add_middleware(

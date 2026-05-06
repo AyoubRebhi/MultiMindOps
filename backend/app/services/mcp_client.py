@@ -299,11 +299,11 @@ class MCPClient:
         templates_loaded: list[str] = []
 
         try:
-            from mcp.resources.kubernetes_resources import (
+            from devsecops_mcp.resources.kubernetes_resources import (  # type: ignore
                 load_kubernetes_template,
                 list_kubernetes_templates,
             )
-            from mcp.server import _format_kubernetes_resource
+            from devsecops_mcp.server import _format_kubernetes_resource  # type: ignore
 
             for tmpl_name in list_kubernetes_templates():
                 data = load_kubernetes_template(tmpl_name)
@@ -368,11 +368,25 @@ class MCPClient:
         """Import the MCP server module for direct (in-process) data access."""
         try:
             import devsecops_mcp.server as srv  # type: ignore
+            # Verify that the critical direct-access functions exist
+            missing = [fn for fn in (
+                "get_terraform_resource_direct",
+                "list_terraform_resources_direct",
+                "validate_hcl_direct",
+                "suggest_fixes_direct",
+            ) if not hasattr(srv, fn)]
+            if missing:
+                raise ImportError(f"devsecops_mcp.server is missing functions: {missing}")
             self._available = True
-            logger.info("[MCPClient] MCP server module loaded (direct mode)")
+            logger.info("[MCPClient] MCP server module loaded (direct mode, mcp=true)")
             return srv
-        except ImportError as exc:
-            logger.warning("[MCPClient] MCP server module not available: %s", exc)
+        except Exception as exc:
+            import traceback as _tb
+            logger.warning(
+                "[MCPClient] MCP server module not available (mcp=false): %s\n%s",
+                exc,
+                _tb.format_exc(),
+            )
             return None
 
     def _detect_relevant_resources(

@@ -397,15 +397,23 @@ class OrchestratorAgent(BaseAgent):
 
         plan = state.get("plan") or {}
         required_artifacts = plan.get("required_artifacts") or []
-        needs_terraform = any("terraform" in str(a).lower() for a in required_artifacts)
+        approved_artifacts = state.get("approved_artifacts") or []
+
+        # Run terraform if: planner listed terraform files, OR user approved terraform files,
+        # OR neither list has any entries (run-all default).
+        needs_terraform = (
+            any("terraform" in str(a).lower() for a in required_artifacts)
+            or any("terraform" in str(a).lower() for a in approved_artifacts)
+            or (not required_artifacts and not approved_artifacts)
+        )
 
         if not needs_terraform:
             logs = list(state.get("logs", []))
             logs.append({
                 "step": "terraform_skip",
-                "message": "Terraform phase skipped: not requested in the execution plan."
+                "message": "Terraform phase skipped: not in required_artifacts or approved_artifacts."
             })
-            return state
+            return {**state, "logs": logs}
 
         infrastructure_context = (state.get("agent_context") or {}).get("infrastructure_context")
 
@@ -476,18 +484,24 @@ class OrchestratorAgent(BaseAgent):
 
         plan = state.get("plan") or {}
         required_artifacts = plan.get("required_artifacts") or []
-        needs_kubernetes = any(
-            "kubernetes" in str(a).lower() or "k8s" in str(a).lower()
-            for a in required_artifacts
+        approved_artifacts = state.get("approved_artifacts") or []
+
+        def _has_k8s(lst: list) -> bool:
+            return any("kubernetes" in str(a).lower() or "k8s" in str(a).lower() for a in lst)
+
+        needs_kubernetes = (
+            _has_k8s(required_artifacts)
+            or _has_k8s(approved_artifacts)
+            or (not required_artifacts and not approved_artifacts)
         )
 
         if not needs_kubernetes:
             logs = list(state.get("logs", []))
             logs.append({
                 "step": "kubernetes_skip",
-                "message": "Kubernetes phase skipped: not requested in the execution plan."
+                "message": "Kubernetes phase skipped: not in required_artifacts or approved_artifacts."
             })
-            return state
+            return {**state, "logs": logs}
 
         terraform_outputs = state.get("terraform_outputs") or {}
         if not terraform_outputs:
@@ -1525,6 +1539,57 @@ class OrchestratorAgent(BaseAgent):
             "fallback_used": bool(infra_validation.get("fallback_used")),
             "template_ids_used": infra_validation.get("template_ids_used", []),
         }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Step-by-step execution methods (used by /workflow router)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def run_docker_phase(self, prior_state: dict) -> dict:
+        """Run ONLY the Docker (InfrastructureAgent) phase and return updated state."""
+        state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
+        logger.info("[OrchestratorAgent] run_docker_phase — starting")
+        state = self._infrastructure_node(state)
+        state["current_phase"] = "docker_completed"
+        logs = list(state.get("logs", []))
+        logs.append({"step": "phase_checkpoint", "message": "Docker phase complete — awaiting user approval"})
+        state["logs"] = logs
+        return state
+
+    def run_terraform_phase_only(self, prior_state: dict) -> dict:
+        """Run ONLY the TerraformAgent phase and return updated state."""
+        state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
+        logger.info("[OrchestratorAgent] run_terraform_phase_only — starting")
+        state = self._terraform_phase_node(state)
+        state["current_phase"] = "terraform_completed"
+        logs = list(state.get("logs", []))
+        logs.append({"step": "phase_checkpoint", "message": "Terraform phase complete — awaiting user approval"})
+        state["logs"] = logs
+        return state
+
+    def run_kubernetes_phase_only(self, prior_state: dict) -> dict:
+        """Run ONLY the KubernetesAgent phase and return updated state."""
+        state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
+        logger.info("[OrchestratorAgent] run_kubernetes_phase_only — starting")
+        state = self._kubernetes_phase_node(state)
+        state["current_phase"] = "kubernetes_completed"
+        logs = list(state.get("logs", []))
+        logs.append({"step": "phase_checkpoint", "message": "Kubernetes phase complete — awaiting user approval"})
+        state["logs"] = logs
+        return state
+
+    def run_cicd_and_finalize_phase(self, prior_state: dict) -> dict:
+        """Run security scan, validation, CI/CD, and finalize. Returns the complete result."""
+        state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
+        logger.info("[OrchestratorAgent] run_cicd_and_finalize_phase — starting")
+        state = self._security_scan_phase_node(state)
+        state = self._filter_generated_artifacts(state)
+        state = self._artifact_validation_node(state)
+        next_step = self._route_after_validation(state)
+        if next_step == "cicd":
+            state = self._cicd_node(state)
+        state = self._finalize_node(state)
+        state["current_phase"] = "completed"
+        return state
 
     def _merge_artifact_targets(self, left: dict, right: dict) -> dict:
         merged = self.artifact_contract_service.normalize_artifact_targets(left or {})

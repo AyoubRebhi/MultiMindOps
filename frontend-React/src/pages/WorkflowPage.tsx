@@ -12,27 +12,79 @@ import { SummaryStep }    from '@/steps/SummaryStep'
 import { CicdStep }       from '@/steps/CicdStep'
 import { ResultStep }     from '@/steps/ResultStep'
 
-import { useWorkflowStore } from '@/store/workflowStore'
+import { useWorkflowStore, useWorkflowStore as _store } from '@/store/workflowStore'
+import type { WorkflowStep } from '@/store/workflowStore'
 import {
-  generatePlan,
   generateArtifacts,
   approvePlanHumanValidation,
   pollTask,
+  workflowPlan,
+  workflowRunDocker,
+  workflowRunTerraform,
+  workflowRunKubernetes,
+  workflowRunCicd,
+  workflowGetState,
 } from '@/services/workflowApi'
 import { TASKS_KEY } from '@/hooks/useTasks'
 import { isTerminalStatus } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { PlanValidationDecision } from '@/types'
 
+const SESSION_KEY = 'wf_task_id'
+
+// Backend phase → UI step (single source of truth for navigation)
+const PHASE_TO_STEP: Record<string, WorkflowStep> = {
+  planning_complete:    'PLAN',
+  docker_completed:     'INFRA',
+  terraform_completed:  'TERRAFORM',
+  kubernetes_completed: 'KUBERNETES',
+  completed:            'CICD',
+}
+
+// Step → API endpoint called when user approves that step
+const STEP_TO_API: Partial<Record<WorkflowStep, string>> = {
+  PLAN:       'run-docker',
+  INFRA:      'run-terraform',
+  TERRAFORM:  'run-kubernetes',
+  KUBERNETES: 'run-cicd',
+}
+
+// Step → backend phase that MUST be active before the API call is allowed
+const STEP_TO_EXPECTED_PHASE: Partial<Record<WorkflowStep, string>> = {
+  PLAN:       'planning_complete',
+  INFRA:      'docker_completed',
+  TERRAFORM:  'terraform_completed',
+  KUBERNETES: 'kubernetes_completed',
+}
+
+// ── Debug panel (temporary) ───────────────────────────────────────────────────
+
+function DebugPanel({ currentStep, currentPhase, lastApiCall }: { currentStep: string; currentPhase: string; lastApiCall: string }) {
+  return (
+    <div style={{
+      position: 'fixed', bottom: 16, right: 16, zIndex: 9999,
+      padding: '10px 14px', borderRadius: 8,
+      background: 'rgba(0,0,0,0.88)', color: '#4ade80',
+      fontFamily: 'monospace', fontSize: 11, lineHeight: 1.7,
+      border: '1px solid rgba(74,222,128,0.35)', minWidth: 220,
+    }}>
+      <div style={{ fontWeight: 700, marginBottom: 4, color: '#86efac', letterSpacing: '0.05em' }}>⬛ WORKFLOW DEBUG</div>
+      <div>Step:&nbsp;&nbsp;&nbsp;<span style={{ color: '#fff' }}>{currentStep || '—'}</span></div>
+      <div>Phase:&nbsp;&nbsp;<span style={{ color: '#fbbf24' }}>{currentPhase || '—'}</span></div>
+      <div>Last&nbsp;API:&nbsp;<span style={{ color: '#38bdf8' }}>{lastApiCall || '—'}</span></div>
+    </div>
+  )
+}
+
 // ── Generation overlay ────────────────────────────────────────────────────────
 
-function GeneratingOverlay({ taskId }: { taskId?: string }) {
+function GeneratingOverlay({ taskId, label }: { taskId?: string; label?: string }) {
   const STAGES = [
-    { label: 'Codebase analysis',          color: 'bg-purple-500' },
-    { label: 'Infrastructure generation',   color: 'bg-cyan-500'   },
-    { label: 'Terraform & Kubernetes',      color: 'bg-orange-500' },
-    { label: 'CI/CD pipeline',              color: 'bg-brand-500'  },
-    { label: 'Security scanning',           color: 'bg-rose-500'   },
+    { label: 'Codebase analysis',     color: 'bg-purple-500' },
+    { label: 'Infrastructure gen.',   color: 'bg-cyan-500'   },
+    { label: 'Terraform & Kubernetes', color: 'bg-orange-500' },
+    { label: 'CI/CD pipeline',        color: 'bg-brand-500'  },
+    { label: 'Security scanning',     color: 'bg-rose-500'   },
   ]
 
   return (
@@ -41,7 +93,6 @@ function GeneratingOverlay({ taskId }: { taskId?: string }) {
       'bg-white/90 dark:bg-surface-900/90 backdrop-blur-sm',
     )}>
       <div className="w-full max-w-md px-6 space-y-6">
-        {/* Header */}
         <div className={cn(
           'flex items-center gap-4 p-4 rounded-xl',
           'bg-brand-50 dark:bg-brand-600/10',
@@ -50,20 +101,18 @@ function GeneratingOverlay({ taskId }: { taskId?: string }) {
           <Loader2 className="w-5 h-5 text-brand-500 animate-spin shrink-0" />
           <div>
             <p className="text-sm font-semibold text-brand-700 dark:text-brand-300">
-              AI agents are working…
+              {label ?? 'AI agents are working…'}
             </p>
             <p className="text-xs text-brand-600/60 dark:text-brand-400/60 mt-0.5">
-              Generating all infrastructure artifacts. 30–90 seconds.
+              30–90 seconds per phase.
             </p>
           </div>
         </div>
-
-        {/* Stage bars */}
         <div className="space-y-3">
-          {STAGES.map(({ label, color }) => (
-            <div key={label}>
+          {STAGES.map(({ label: l, color }) => (
+            <div key={l}>
               <div className="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500 mb-1">
-                <span>{label}</span>
+                <span>{l}</span>
                 <Loader2 className="w-3 h-3 animate-spin" />
               </div>
               <div className="h-1 rounded-full bg-slate-200 dark:bg-surface-700">
@@ -72,7 +121,6 @@ function GeneratingOverlay({ taskId }: { taskId?: string }) {
             </div>
           ))}
         </div>
-
         {taskId && (
           <p className="text-[10px] text-slate-400 dark:text-slate-600 text-center font-mono">
             task: {taskId}
@@ -101,22 +149,13 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   )
 }
 
-// ── Generation polling hook ───────────────────────────────────────────────────
+// ── Legacy polling hook (used when falling back to /tasks/generate) ───────────
 
 function useGenerationPolling() {
-  const {
-    taskId,
-    isGenerating,
-    setTask,
-    setGenerating,
-    setError,
-    goToStep,
-    addLog,
-  } = useWorkflowStore()
+  const { taskId, isGenerating, setTask, setGenerating, setError, addLog } = useWorkflowStore()
   const qc = useQueryClient()
-
-  const stoppedRef  = useRef(false)
-  const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stoppedRef = useRef(false)
+  const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     if (!isGenerating || !taskId) return
@@ -128,34 +167,25 @@ function useGenerationPolling() {
         const task = await pollTask(taskId!)
         qc.setQueryData([...TASKS_KEY, taskId], task)
         qc.invalidateQueries({ queryKey: TASKS_KEY })
+        if (task.logs?.length) task.logs.forEach((l) => addLog(l))
 
-        // Forward new logs to the store
-        if (task.logs?.length) {
-          task.logs.forEach((l) => addLog(l))
-        }
-
-        const terminal = isTerminalStatus(task.status)
-        const awaitingReview = task.status === 'awaiting_human_review'
-
-        if (terminal || awaitingReview) {
+        if (isTerminalStatus(task.status) || task.status === 'awaiting_human_review') {
           stoppedRef.current = true
           if (task.status === 'failed') {
-            setError(task.error_message ?? 'Generation failed. Please try again.')
+            setError(task.error_message ?? 'Generation failed.')
           } else {
             setTask(task)
-            goToStep('INFRA')
+            // Navigation is driven by backend phase via mergePhaseResponse +
+            // PHASE_TO_STEP — never hard-jump to a step from here.
           }
           setGenerating(false)
           return
         }
-      } catch {
-        // Network hiccup — keep polling
-      }
+      } catch { /* network hiccup */ }
       timerRef.current = setTimeout(poll, 3_000)
     }
 
     poll()
-
     return () => {
       stoppedRef.current = true
       if (timerRef.current) clearTimeout(timerRef.current)
@@ -169,14 +199,17 @@ function useGenerationPolling() {
 export default function WorkflowPage() {
   const {
     currentStep,
+    currentPhase,
     userInput,
     envFile,
     isLoading,
     isGenerating,
+    isPhaseLoading,
     error,
     requiresHumanValidation,
     taskId,
     setLoading,
+    setPhaseLoading,
     setGenerating,
     setError,
     clearError,
@@ -184,21 +217,46 @@ export default function WorkflowPage() {
     setPlanPreview,
     setTaskId,
     setTask,
+    mergePhaseResponse,
     reset,
   } = useWorkflowStore()
 
-  // Start generation polling whenever isGenerating becomes true
   useGenerationPolling()
 
-  // ── Rejected plan message ───────────────────────────────────────────────────
-  const rejectedMsgRef = useRef<string | null>(null)
+  const rejectedMsgRef  = useRef<string | null>(null)
+  const overlayLabelRef = useRef<string>('')
+  const lastApiCallRef  = useRef<string>('')
 
-  // ── Step 1: Submit form → planPreview ───────────────────────────────────────
+  // ── Persist taskId across page refreshes ─────────────────────────────────────
+  useEffect(() => {
+    if (taskId) sessionStorage.setItem(SESSION_KEY, taskId)
+  }, [taskId])
+
+  // ── Restore workflow state on page load / refresh ─────────────────────────────
+  useEffect(() => {
+    const stored = sessionStorage.getItem(SESSION_KEY)
+    if (!stored || _store.getState().taskId) return
+
+    Promise.all([workflowGetState(stored), pollTask(stored)])
+      .then(([phaseResp, restoredTask]) => {
+        const s = _store.getState()
+        s.mergePhaseResponse(phaseResp)
+        s.setTaskId(phaseResp.task_id)
+        s.setTask(restoredTask)
+        const step = PHASE_TO_STEP[phaseResp.current_phase]
+        if (step) s.goToStep(step)
+      })
+      .catch(() => sessionStorage.removeItem(SESSION_KEY))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── Step 1: Submit → plan (step-by-step path via /workflow/plan) ─────────────
   const handlePlanPreview = useCallback(async (file: File) => {
     clearError()
     setLoading(true)
+    overlayLabelRef.current = 'Running AI planning…'
     try {
-      const preview = await generatePlan(
+      const resp = await workflowPlan(
         {
           prompt:                userInput.prompt,
           repo_url:              userInput.repo_url,
@@ -207,16 +265,36 @@ export default function WorkflowPage() {
         },
         file,
       )
-      setPlanPreview(preview)
+      mergePhaseResponse(resp)
+      // Also populate planPreview for PlanStep compatibility
+      setPlanPreview({
+        task_id:             resp.task_id,
+        status:              resp.status,
+        requires_user_input: true,
+        plan:                resp.logs as unknown as undefined,
+        logs:                resp.logs as never[],
+      })
+      // Re-fetch the task to get the plan field
+      const task = await pollTask(resp.task_id)
+      setTask(task)
+      if (task.plan) {
+        setPlanPreview({
+          task_id:             resp.task_id,
+          status:              resp.status,
+          requires_user_input: true,
+          plan:                task.plan,
+          logs:                (task.logs ?? []) as never[],
+        })
+      }
       goToStep('PLAN')
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setLoading(false)
     }
-  }, [userInput, clearError, setLoading, setPlanPreview, goToStep, setError])
+  }, [userInput, clearError, setLoading, setPlanPreview, goToStep, setError, mergePhaseResponse, setTask])
 
-  // ── Step 2a: Standard path — user approves, triggers generate ───────────────
+  // ── Step 2a: Standard path (old /tasks/generate — kept as fallback) ──────────
   const handleApproveStandard = useCallback(async (approvedArtifacts: string[]) => {
     clearError()
     setLoading(true)
@@ -231,9 +309,8 @@ export default function WorkflowPage() {
         },
         envFile,
       )
-      // Task was created — start polling
       setTaskId(task.id)
-      setTask(task)         // store initial task state
+      setTask(task)
       setGenerating(true)
     } catch (e) {
       setError((e as Error).message)
@@ -242,31 +319,155 @@ export default function WorkflowPage() {
     }
   }, [userInput, envFile, clearError, setLoading, setTaskId, setTask, setGenerating, setError])
 
-  // ── Step 2b: Human validation path ─────────────────────────────────────────
+  // ── Step 2b: Step-by-step — user approved plan → run docker ─────────────────
+  const handleApproveStepByStep = useCallback(async () => {
+    if (!taskId) { setError('No task ID. Re-run plan.'); return }
+    const state = _store.getState()
+    const expectedPhase = STEP_TO_EXPECTED_PHASE['PLAN']!
+    console.log("STEP:", state.currentStep)
+    console.log("PHASE:", state.currentPhase)
+    console.log("API CALL:", STEP_TO_API['PLAN'])
+    if (state.currentPhase !== expectedPhase) {
+      console.error("INVALID TRANSITION", { step: state.currentStep, phase: state.currentPhase, expected: expectedPhase })
+      setError('Invalid workflow order')
+      return
+    }
+    clearError()
+    setPhaseLoading(true)
+    overlayLabelRef.current = 'Generating Docker artifacts…'
+    lastApiCallRef.current = STEP_TO_API['PLAN']!
+    try {
+      const resp = await workflowRunDocker(taskId)
+      mergePhaseResponse(resp)
+      // Force-sync with backend to guarantee store matches server state
+      const fresh = await workflowGetState(taskId)
+      mergePhaseResponse(fresh)
+      const task = await pollTask(taskId)
+      setTask(task)
+      const nextStep = PHASE_TO_STEP[fresh.current_phase]
+      if (nextStep) goToStep(nextStep)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setPhaseLoading(false)
+    }
+  }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
+
+  // ── Step 3: User approved Docker → run Terraform ────────────────────────────
+  const handleApproveInfra = useCallback(async () => {
+    if (!taskId) return
+    const state = _store.getState()
+    const expectedPhase = STEP_TO_EXPECTED_PHASE['INFRA']!
+    console.log("STEP:", state.currentStep)
+    console.log("PHASE:", state.currentPhase)
+    console.log("API CALL:", STEP_TO_API['INFRA'])
+    if (state.currentPhase !== expectedPhase) {
+      console.error("INVALID TRANSITION", { step: state.currentStep, phase: state.currentPhase, expected: expectedPhase })
+      setError('Invalid workflow order')
+      return
+    }
+    clearError()
+    setPhaseLoading(true)
+    overlayLabelRef.current = 'Generating Terraform files…'
+    lastApiCallRef.current = STEP_TO_API['INFRA']!
+    try {
+      const resp = await workflowRunTerraform(taskId)
+      mergePhaseResponse(resp)
+      const fresh = await workflowGetState(taskId)
+      mergePhaseResponse(fresh)
+      const task = await pollTask(taskId)
+      setTask(task)
+      const nextStep = PHASE_TO_STEP[fresh.current_phase]
+      if (nextStep) goToStep(nextStep)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setPhaseLoading(false)
+    }
+  }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
+
+  // ── Step 4: User approved Terraform → run Kubernetes ────────────────────────
+  const handleApproveTerraform = useCallback(async () => {
+    if (!taskId) return
+    const state = _store.getState()
+    const expectedPhase = STEP_TO_EXPECTED_PHASE['TERRAFORM']!
+    console.log("STEP:", state.currentStep)
+    console.log("PHASE:", state.currentPhase)
+    console.log("API CALL:", STEP_TO_API['TERRAFORM'])
+    if (state.currentPhase !== expectedPhase) {
+      console.error("INVALID TRANSITION", { step: state.currentStep, phase: state.currentPhase, expected: expectedPhase })
+      setError('Invalid workflow order')
+      return
+    }
+    clearError()
+    setPhaseLoading(true)
+    overlayLabelRef.current = 'Generating Kubernetes manifests…'
+    lastApiCallRef.current = STEP_TO_API['TERRAFORM']!
+    try {
+      const resp = await workflowRunKubernetes(taskId)
+      mergePhaseResponse(resp)
+      const fresh = await workflowGetState(taskId)
+      mergePhaseResponse(fresh)
+      const task = await pollTask(taskId)
+      setTask(task)
+      const nextStep = PHASE_TO_STEP[fresh.current_phase]
+      if (nextStep) goToStep(nextStep)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setPhaseLoading(false)
+    }
+  }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
+
+  // ── Step 5: User approved Kubernetes → run CI/CD → show CICD artifacts ──────
+  const handleApproveKubernetes = useCallback(async () => {
+    if (!taskId) return
+    const state = _store.getState()
+    const expectedPhase = STEP_TO_EXPECTED_PHASE['KUBERNETES']!
+    console.log("STEP:", state.currentStep)
+    console.log("PHASE:", state.currentPhase)
+    console.log("API CALL:", STEP_TO_API['KUBERNETES'])
+    if (state.currentPhase !== expectedPhase) {
+      console.error("INVALID TRANSITION", { step: state.currentStep, phase: state.currentPhase, expected: expectedPhase })
+      setError('Invalid workflow order')
+      return
+    }
+    clearError()
+    setPhaseLoading(true)
+    overlayLabelRef.current = 'Running CI/CD & finalizing…'
+    lastApiCallRef.current = STEP_TO_API['KUBERNETES']!
+    try {
+      const resp = await workflowRunCicd(taskId)
+      mergePhaseResponse(resp)
+      const fresh = await workflowGetState(taskId)
+      mergePhaseResponse(fresh)
+      const task = await pollTask(taskId)
+      setTask(task)
+      const nextStep = PHASE_TO_STEP[fresh.current_phase]
+      if (nextStep) goToStep(nextStep)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setPhaseLoading(false)
+    }
+  }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
+
+  // ── Step 2b-alt: Human validation path → validate, then run Docker phase ────
   const handleApproveHuman = useCallback(
     async (decision: PlanValidationDecision, feedback?: string) => {
-      if (!taskId) {
-        setError('No task ID from plan preview. Cannot validate.')
-        return
-      }
+      if (!taskId) { setError('No task ID.'); return }
       clearError()
       setLoading(true)
       try {
+        // 1. Validate plan with the backend (records the human decision)
         const result = await approvePlanHumanValidation({ task_id: taskId, decision, feedback })
 
         if (decision === 'rejected') {
-          rejectedMsgRef.current = result.message ?? 'Plan rejected. You can start over.'
-          setLoading(false)
+          rejectedMsgRef.current = result.message ?? 'Plan rejected.'
           return
         }
 
-        if (decision === 'approved') {
-          // Backend continues running — just poll
-          setGenerating(true)
-        }
-
         if (decision === 'modified' && result.plan) {
-          // Re-show updated plan
           const { planPreview: current } = useWorkflowStore.getState()
           if (current) {
             setPlanPreview({
@@ -276,6 +477,34 @@ export default function WorkflowPage() {
               requires_user_input: result.requires_user_input ?? true,
             })
           }
+          return
+        }
+
+        if (decision === 'approved') {
+          // 2. Run the Docker phase — this is what advances the backend state machine
+          //    from `planning_complete` to `docker_completed`. Without this call the
+          //    backend phase stays at planning_complete and run-terraform returns 409.
+          console.log('PLAN → running Docker phase')
+          setLoading(false)
+          setPhaseLoading(true)
+          overlayLabelRef.current = 'Generating Docker artifacts…'
+          lastApiCallRef.current = STEP_TO_API['PLAN']!
+          try {
+            const dockerResp = await workflowRunDocker(taskId)
+            // 3. Sync local store with backend state
+            mergePhaseResponse(dockerResp)
+            const fresh = await workflowGetState(taskId)
+            mergePhaseResponse(fresh)
+            const refreshedTask = await pollTask(taskId)
+            setTask(refreshedTask)
+            // 4. Navigate based on backend phase, never a hard-coded step
+            const nextStep = PHASE_TO_STEP[fresh.current_phase]
+            if (nextStep) goToStep(nextStep)
+          } catch (err) {
+            setError(`Failed to run Docker phase: ${(err as Error).message}`)
+          } finally {
+            setPhaseLoading(false)
+          }
         }
       } catch (e) {
         setError((e as Error).message)
@@ -283,61 +512,67 @@ export default function WorkflowPage() {
         setLoading(false)
       }
     },
-    [taskId, clearError, setLoading, setGenerating, setPlanPreview, setError],
+    [taskId, clearError, setLoading, setPhaseLoading, setPlanPreview, setError, mergePhaseResponse, setTask, goToStep],
   )
 
-  // ── Reset ───────────────────────────────────────────────────────────────────
   const handleReset = useCallback(() => {
     rejectedMsgRef.current = null
+    sessionStorage.removeItem(SESSION_KEY)
     reset()
   }, [reset])
 
-  // ── Step routing ────────────────────────────────────────────────────────────
+  const showOverlay = isGenerating || isPhaseLoading
+
+  // ── Step routing ─────────────────────────────────────────────────────────────
   const stepContent = {
-    INPUT:      <InputStep
-                  onSubmit={handlePlanPreview}
-                  isLoading={isLoading}
-                />,
-    PLAN:       <PlanStep
-                  onApproveStandard={handleApproveStandard}
-                  onApproveHuman={handleApproveHuman}
-                  onBack={() => goToStep('INPUT')}
-                  isLoading={isLoading}
-                  rejectedMessage={rejectedMsgRef.current}
-                />,
-    INFRA:      <InfraStep
-                  onApprove={() => goToStep('TERRAFORM')}
-                  onBack={() => goToStep('PLAN')}
-                />,
-    TERRAFORM:  <TerraformStep
-                  onApprove={() => goToStep('KUBERNETES')}
-                  onBack={() => goToStep('INFRA')}
-                />,
-    KUBERNETES: <KubernetesStep
-                  onApprove={() => goToStep('SUMMARY')}
-                  onBack={() => goToStep('TERRAFORM')}
-                />,
-    SUMMARY:    <SummaryStep
-                  onApprove={() => goToStep('CICD')}
-                  onBack={() => goToStep('KUBERNETES')}
-                />,
-    CICD:       <CicdStep
-                  onApprove={() => goToStep('RESULT')}
-                  onBack={() => goToStep('SUMMARY')}
-                  isLoading={isLoading}
-                />,
-    RESULT:     <ResultStep onReset={handleReset} />,
+    INPUT: (
+      <InputStep onSubmit={handlePlanPreview} isLoading={isLoading} />
+    ),
+    PLAN: (
+      <PlanStep
+        onApproveStandard={requiresHumanValidation ? handleApproveStandard : handleApproveStepByStep}
+        onApproveHuman={handleApproveHuman}
+        onBack={() => goToStep('INPUT')}
+        isLoading={isLoading || isPhaseLoading}
+        rejectedMessage={rejectedMsgRef.current}
+      />
+    ),
+    INFRA: (
+      <InfraStep
+        onApprove={handleApproveInfra}
+        onBack={() => goToStep('PLAN')}
+        isPhaseLoading={isPhaseLoading}
+      />
+    ),
+    TERRAFORM: (
+      <TerraformStep
+        onApprove={handleApproveTerraform}
+        onBack={() => goToStep('INFRA')}
+        isPhaseLoading={isPhaseLoading}
+      />
+    ),
+    KUBERNETES: (
+      <KubernetesStep
+        onApprove={handleApproveKubernetes}
+        onBack={() => goToStep('TERRAFORM')}
+        isPhaseLoading={isPhaseLoading}
+      />
+    ),
+    CICD: (
+      <CicdStep onApprove={() => goToStep('SUMMARY')} onBack={() => goToStep('KUBERNETES')} isLoading={isPhaseLoading} />
+    ),
+    SUMMARY: (
+      <SummaryStep onApprove={() => goToStep('RESULT')} onBack={() => goToStep('CICD')} />
+    ),
+    RESULT: <ResultStep onReset={handleReset} />,
   }[currentStep]
 
   return (
     <div className="flex h-full bg-slate-50/50 dark:bg-transparent">
-      {/* ── Left: Stepper sidebar ── */}
       <StepperSidebar />
 
-      {/* ── Right: Step content ── */}
       <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
-
-        {/* ── Top bar ── */}
+        {/* Top bar */}
         <div className={cn(
           'shrink-0 flex items-center justify-between px-6 py-3',
           'border-b border-slate-200 dark:border-white/[0.06]',
@@ -351,7 +586,6 @@ export default function WorkflowPage() {
               Senior cloud architect assistant — sequential, validated pipeline
             </p>
           </div>
-
           {currentStep !== 'INPUT' && (
             <button
               onClick={handleReset}
@@ -369,15 +603,21 @@ export default function WorkflowPage() {
           )}
         </div>
 
-        {/* ── Error banner ── */}
         {error && <ErrorBanner message={error} onDismiss={clearError} />}
 
-        {/* ── Step content area ── */}
         <div className="flex-1 min-h-0 relative">
-          {isGenerating && <GeneratingOverlay taskId={taskId} />}
+          {showOverlay && (
+            <GeneratingOverlay taskId={taskId} label={overlayLabelRef.current} />
+          )}
           {stepContent}
         </div>
       </div>
+
+      <DebugPanel
+        currentStep={currentStep}
+        currentPhase={currentPhase}
+        lastApiCall={lastApiCallRef.current}
+      />
     </div>
   )
 }

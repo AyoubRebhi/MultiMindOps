@@ -110,9 +110,10 @@ function FileTabs({
 interface Props {
   onApprove: () => void
   onBack: () => void
+  isPhaseLoading?: boolean
 }
 
-export function TerraformStep({ onApprove, onBack }: Props) {
+export function TerraformStep({ onApprove, onBack, isPhaseLoading }: Props) {
   const { task, editedArtifacts, editArtifact } = useWorkflowStore()
 
   const artifacts = task ? getTerraformArtifacts(task) : {}
@@ -121,9 +122,13 @@ export function TerraformStep({ onApprove, onBack }: Props) {
 
   const editedKeys = new Set(Object.keys(editedArtifacts))
 
+  const approveLabel = isPhaseLoading
+    ? 'Generating Kubernetes…'
+    : 'Approve & Run Kubernetes'
+
   if (!keys.length) {
     return (
-      <StepContainer onBack={onBack} onApprove={onApprove} approveLabel="Continue to Kubernetes">
+      <StepContainer onBack={onBack} onApprove={onApprove} approveLabel={approveLabel} approveDisabled={isPhaseLoading}>
         <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
           <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-surface-800 flex items-center justify-center">
             <Layers className="w-6 h-6 text-slate-400 dark:text-slate-500" />
@@ -141,7 +146,8 @@ export function TerraformStep({ onApprove, onBack }: Props) {
     <StepContainer
       onBack={onBack}
       onApprove={onApprove}
-      approveLabel="Approve & Continue"
+      approveLabel={approveLabel}
+      approveDisabled={isPhaseLoading}
     >
       <div className="space-y-4">
 

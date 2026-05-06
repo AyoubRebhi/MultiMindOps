@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Container, FolderOpen } from 'lucide-react'
+import { Container, FolderOpen, Loader2 } from 'lucide-react'
 import { StepContainer } from '@/components/workflow/StepContainer'
 import { CodeEditor } from '@/components/workflow/CodeEditor'
 import { useWorkflowStore } from '@/store/workflowStore'
@@ -79,10 +79,11 @@ function EmptyArtifacts({ icon: Icon, label }: { icon: React.ElementType; label:
 interface Props {
   onApprove: () => void
   onBack: () => void
+  isPhaseLoading?: boolean
 }
 
-export function InfraStep({ onApprove, onBack }: Props) {
-  const { task, editedArtifacts, editArtifact } = useWorkflowStore()
+export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
+  const { task, editedArtifacts, editArtifact, currentPhase } = useWorkflowStore()
 
   const artifacts = task ? getInfraArtifacts(task) : {}
   const keys = Object.keys(artifacts)
@@ -90,10 +91,41 @@ export function InfraStep({ onApprove, onBack }: Props) {
 
   const editedKeys = new Set(Object.keys(editedArtifacts))
 
+  // Safety check: backend must be in `docker_completed` phase before this
+  // step is allowed to render. If we got here with the wrong phase, bail out
+  // rather than letting the user click "Approve & Run Terraform" and hit a 409.
+  if (currentPhase !== 'docker_completed') {
+    return (
+      <StepContainer onBack={onBack} hideActions>
+        <div className={cn(
+          'flex items-start gap-3 px-4 py-3 rounded-xl',
+          'bg-red-50 dark:bg-red-500/10',
+          'border border-red-200 dark:border-red-500/20',
+        )}>
+          <Container className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-red-700 dark:text-red-300">
+              Docker phase not completed
+            </p>
+            <p className="text-xs text-red-600/70 dark:text-red-400/60 mt-0.5">
+              Backend phase is "{currentPhase || 'unknown'}", expected "docker_completed".
+              Go back and approve the plan to run the Docker phase.
+            </p>
+          </div>
+        </div>
+      </StepContainer>
+    )
+  }
+
+  const approveLabel = isPhaseLoading
+    ? 'Generating Terraform…'
+    : 'Approve & Run Terraform'
+
   if (!keys.length) {
     return (
-      <StepContainer onBack={onBack} onApprove={onApprove} approveLabel="Continue to Terraform">
+      <StepContainer onBack={onBack} onApprove={onApprove} approveLabel={approveLabel} approveDisabled={isPhaseLoading}>
         <EmptyArtifacts icon={Container} label="No Docker artifacts found" />
+        {isPhaseLoading && <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-brand-500" /></div>}
       </StepContainer>
     )
   }
@@ -102,7 +134,8 @@ export function InfraStep({ onApprove, onBack }: Props) {
     <StepContainer
       onBack={onBack}
       onApprove={onApprove}
-      approveLabel="Approve & Continue"
+      approveLabel={approveLabel}
+      approveDisabled={isPhaseLoading}
     >
       <div className="space-y-4">
 
