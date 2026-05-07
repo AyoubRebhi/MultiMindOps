@@ -118,8 +118,8 @@ export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
   }
 
   const approveLabel = isPhaseLoading
-    ? 'Generating Terraform…'
-    : 'Approve & Run Terraform'
+    ? 'Starting Build…'
+    : 'Approve & Build Docker Image'
 
   if (!keys.length) {
     return (
@@ -151,7 +151,7 @@ export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
               Infrastructure Artifacts — {keys.length} file{keys.length > 1 ? 's' : ''} generated
             </p>
             <p className="text-xs text-cyan-700/70 dark:text-cyan-400/60 mt-0.5">
-              Review and optionally edit Docker configuration files. Changes are tracked locally.
+              Review and optionally edit Docker configuration files. After approval, the image will be built locally.
             </p>
           </div>
         </div>

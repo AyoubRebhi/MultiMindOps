@@ -22,6 +22,56 @@ export interface WorkflowPhaseResponse {
 
 const BASE = (import.meta as unknown as { env: { VITE_API_BASE_URL?: string } }).env.VITE_API_BASE_URL ?? ''
 
+// ── Docker Build Execution API ─────────────────────────────────────────────────
+
+export interface DockerBuildStartResponse {
+  status: string
+  logs: unknown[]
+  image_tag: string | null
+  execution_phase: string
+  ws_url: string
+  task_id: string
+}
+
+export interface DockerBuildStatusResponse {
+  status: string
+  logs: unknown[]
+  image_tag: string | null
+  exit_code: number | null
+  started_at: string | null
+  finished_at: string | null
+  execution_phase: string
+  current_phase: string
+  task_id: string
+}
+
+/** Start an async Docker build.  Returns immediately; connect WS for live logs. */
+export async function startDockerBuild(taskId: string): Promise<DockerBuildStartResponse> {
+  const res = await fetch(`${BASE}/api/execution/docker/build/${taskId}`, { method: 'POST' })
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(d.detail ?? `Docker build start failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+/** Poll persisted Docker build status (logs survive page refresh). */
+export async function getDockerBuildStatus(taskId: string): Promise<DockerBuildStatusResponse> {
+  const res = await fetch(`${BASE}/api/execution/docker/status/${taskId}`)
+  if (!res.ok) throw new Error(`Failed to fetch build status: ${res.status}`)
+  return res.json()
+}
+
+/** Compute the WebSocket URL for live execution log streaming. */
+export function getWsExecutionUrl(taskId: string): string {
+  const wsBase = BASE
+    ? BASE.replace(/^http/, 'ws')
+    : (typeof window !== 'undefined'
+      ? `ws://${window.location.host}`
+      : 'ws://localhost:8000')
+  return `${wsBase}/ws/execution/${taskId}`
+}
+
 async function _workflowPost(path: string, body?: unknown): Promise<WorkflowPhaseResponse> {
   const res = await fetch(`${BASE}/api${path}`, {
     method: 'POST',

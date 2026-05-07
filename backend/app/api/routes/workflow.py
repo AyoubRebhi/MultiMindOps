@@ -194,13 +194,15 @@ async def run_terraform(task_id: str, db: Session = Depends(get_db)):
     """
     User approved Docker artifacts — run TerraformAgent.
     Returns .tf files and terraform_outputs contract for Kubernetes.
+    Accepts both 'docker_completed' (skipped build) and 'docker_build_success' (build ran).
     """
     state, task = _load_state(db, task_id)
     logger.info("[Workflow] Phase before terraform execution: %s (task: %s)", state.get("current_phase"), task_id)
-    if state.get("current_phase") != "docker_completed":
+    _valid_terraform_phases = {"docker_completed", "docker_build_success"}
+    if state.get("current_phase") not in _valid_terraform_phases:
         raise HTTPException(
             status_code=409,
-            detail=f"Expected phase 'docker_completed', got '{state.get('current_phase')}'",
+            detail=f"Expected phase 'docker_completed' or 'docker_build_success', got '{state.get('current_phase')}'",
         )
 
     try:

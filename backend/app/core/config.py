@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     MCP_SERVER_PATH: str = "mcp/server.py"
     MCP_CACHE_TTL_HOURS: int = 24
 
+    # Docker Registry — used by DockerExecutor to push built images
+    # Type: "dockerhub" | "ghcr" | "generic"
+    DOCKER_REGISTRY_TYPE: str = "dockerhub"
+    # Registry URL — empty = Docker Hub, "ghcr.io" = GitHub Container Registry
+    DOCKER_REGISTRY_URL: str = ""
+    DOCKER_REGISTRY_USERNAME: str = ""
+    DOCKER_REGISTRY_PASSWORD: str = ""
+    # When true, push the image after a successful build
+    DOCKER_PUSH_ON_SUCCESS: bool = False
+
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
 
     @model_validator(mode="after")

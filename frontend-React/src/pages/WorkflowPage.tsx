@@ -3,14 +3,15 @@ import { Loader2, RotateCcw, AlertCircle, X } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { StepperSidebar } from '@/components/workflow/StepperSidebar'
-import { InputStep }      from '@/steps/InputStep'
-import { PlanStep }       from '@/steps/PlanStep'
-import { InfraStep }      from '@/steps/InfraStep'
-import { TerraformStep }  from '@/steps/TerraformStep'
-import { KubernetesStep } from '@/steps/KubernetesStep'
-import { SummaryStep }    from '@/steps/SummaryStep'
-import { CicdStep }       from '@/steps/CicdStep'
-import { ResultStep }     from '@/steps/ResultStep'
+import { InputStep }        from '@/steps/InputStep'
+import { PlanStep }         from '@/steps/PlanStep'
+import { InfraStep }        from '@/steps/InfraStep'
+import { DockerBuildStep }  from '@/steps/DockerBuildStep'
+import { TerraformStep }    from '@/steps/TerraformStep'
+import { KubernetesStep }   from '@/steps/KubernetesStep'
+import { SummaryStep }      from '@/steps/SummaryStep'
+import { CicdStep }         from '@/steps/CicdStep'
+import { ResultStep }       from '@/steps/ResultStep'
 
 import { useWorkflowStore, useWorkflowStore as _store } from '@/store/workflowStore'
 import type { WorkflowStep } from '@/store/workflowStore'
@@ -34,32 +35,39 @@ const SESSION_KEY = 'wf_task_id'
 
 // Backend phase → UI step (single source of truth for navigation)
 const PHASE_TO_STEP: Record<string, WorkflowStep> = {
-  planning_complete:    'PLAN',
-  docker_completed:     'INFRA',
-  terraform_completed:  'TERRAFORM',
-  kubernetes_completed: 'KUBERNETES',
-  completed:            'CICD',
+  planning_complete:      'PLAN',
+  docker_completed:       'INFRA',
+  docker_build_running:   'DOCKER_BUILD',
+  docker_build_success:   'DOCKER_BUILD',
+  docker_build_failed:    'DOCKER_BUILD',
+  terraform_completed:    'TERRAFORM',
+  kubernetes_completed:   'KUBERNETES',
+  completed:              'CICD',
 }
 
 // Step → API endpoint called when user approves that step
 const STEP_TO_API: Partial<Record<WorkflowStep, string>> = {
-  PLAN:       'run-docker',
-  INFRA:      'run-terraform',
-  TERRAFORM:  'run-kubernetes',
-  KUBERNETES: 'run-cicd',
+  PLAN:         'run-docker',
+  INFRA:        'run-docker-build',   // Now goes to build execution, not Terraform
+  DOCKER_BUILD: 'run-terraform',
+  TERRAFORM:    'run-kubernetes',
+  KUBERNETES:   'run-cicd',
 }
 
 // Step → backend phase that MUST be active before the API call is allowed
 const STEP_TO_EXPECTED_PHASE: Partial<Record<WorkflowStep, string>> = {
-  PLAN:       'planning_complete',
-  INFRA:      'docker_completed',
-  TERRAFORM:  'terraform_completed',
-  KUBERNETES: 'kubernetes_completed',
+  PLAN:         'planning_complete',
+  INFRA:        'docker_completed',
+  DOCKER_BUILD: 'docker_build_success',
+  TERRAFORM:    'terraform_completed',
+  KUBERNETES:   'kubernetes_completed',
 }
 
-// ── Debug panel (temporary) ───────────────────────────────────────────────────
+// ── Debug panel ───────────────────────────────────────────────────────────────
 
-function DebugPanel({ currentStep, currentPhase, lastApiCall }: { currentStep: string; currentPhase: string; lastApiCall: string }) {
+function DebugPanel({ currentStep, currentPhase, lastApiCall }: {
+  currentStep: string; currentPhase: string; lastApiCall: string
+}) {
   return (
     <div style={{
       position: 'fixed', bottom: 16, right: 16, zIndex: 9999,
@@ -76,15 +84,15 @@ function DebugPanel({ currentStep, currentPhase, lastApiCall }: { currentStep: s
   )
 }
 
-// ── Generation overlay ────────────────────────────────────────────────────────
+// ── Generating overlay ────────────────────────────────────────────────────────
 
 function GeneratingOverlay({ taskId, label }: { taskId?: string; label?: string }) {
   const STAGES = [
-    { label: 'Codebase analysis',     color: 'bg-purple-500' },
-    { label: 'Infrastructure gen.',   color: 'bg-cyan-500'   },
+    { label: 'Codebase analysis',      color: 'bg-purple-500' },
+    { label: 'Infrastructure gen.',    color: 'bg-cyan-500'   },
     { label: 'Terraform & Kubernetes', color: 'bg-orange-500' },
-    { label: 'CI/CD pipeline',        color: 'bg-brand-500'  },
-    { label: 'Security scanning',     color: 'bg-rose-500'   },
+    { label: 'CI/CD pipeline',         color: 'bg-brand-500'  },
+    { label: 'Security scanning',      color: 'bg-rose-500'   },
   ]
 
   return (
@@ -149,7 +157,7 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   )
 }
 
-// ── Legacy polling hook (used when falling back to /tasks/generate) ───────────
+// ── Legacy polling hook ───────────────────────────────────────────────────────
 
 function useGenerationPolling() {
   const { taskId, isGenerating, setTask, setGenerating, setError, addLog } = useWorkflowStore()
@@ -175,8 +183,6 @@ function useGenerationPolling() {
             setError(task.error_message ?? 'Generation failed.')
           } else {
             setTask(task)
-            // Navigation is driven by backend phase via mergePhaseResponse +
-            // PHASE_TO_STEP — never hard-jump to a step from here.
           }
           setGenerating(false)
           return
@@ -227,12 +233,12 @@ export default function WorkflowPage() {
   const overlayLabelRef = useRef<string>('')
   const lastApiCallRef  = useRef<string>('')
 
-  // ── Persist taskId across page refreshes ─────────────────────────────────────
+  // ── Persist taskId across page refreshes ─────────────────────────────────
   useEffect(() => {
     if (taskId) sessionStorage.setItem(SESSION_KEY, taskId)
   }, [taskId])
 
-  // ── Restore workflow state on page load / refresh ─────────────────────────────
+  // ── Restore workflow state on page load ───────────────────────────────────
   useEffect(() => {
     const stored = sessionStorage.getItem(SESSION_KEY)
     if (!stored || _store.getState().taskId) return
@@ -250,7 +256,7 @@ export default function WorkflowPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ── Step 1: Submit → plan (step-by-step path via /workflow/plan) ─────────────
+  // ── Step 1: Submit → plan ─────────────────────────────────────────────────
   const handlePlanPreview = useCallback(async (file: File) => {
     clearError()
     setLoading(true)
@@ -266,7 +272,6 @@ export default function WorkflowPage() {
         file,
       )
       mergePhaseResponse(resp)
-      // Also populate planPreview for PlanStep compatibility
       setPlanPreview({
         task_id:             resp.task_id,
         status:              resp.status,
@@ -274,7 +279,6 @@ export default function WorkflowPage() {
         plan:                resp.logs as unknown as undefined,
         logs:                resp.logs as never[],
       })
-      // Re-fetch the task to get the plan field
       const task = await pollTask(resp.task_id)
       setTask(task)
       if (task.plan) {
@@ -294,7 +298,7 @@ export default function WorkflowPage() {
     }
   }, [userInput, clearError, setLoading, setPlanPreview, goToStep, setError, mergePhaseResponse, setTask])
 
-  // ── Step 2a: Standard path (old /tasks/generate — kept as fallback) ──────────
+  // ── Step 2a: Standard path (fallback) ─────────────────────────────────────
   const handleApproveStandard = useCallback(async (approvedArtifacts: string[]) => {
     clearError()
     setLoading(true)
@@ -319,18 +323,12 @@ export default function WorkflowPage() {
     }
   }, [userInput, envFile, clearError, setLoading, setTaskId, setTask, setGenerating, setError])
 
-  // ── Step 2b: Step-by-step — user approved plan → run docker ─────────────────
+  // ── Step 2b: Step-by-step — plan approved → run docker artifacts ──────────
   const handleApproveStepByStep = useCallback(async () => {
     if (!taskId) { setError('No task ID. Re-run plan.'); return }
     const state = _store.getState()
-    const expectedPhase = STEP_TO_EXPECTED_PHASE['PLAN']!
-    console.log("STEP:", state.currentStep)
-    console.log("PHASE:", state.currentPhase)
-    console.log("API CALL:", STEP_TO_API['PLAN'])
-    if (state.currentPhase !== expectedPhase) {
-      console.error("INVALID TRANSITION", { step: state.currentStep, phase: state.currentPhase, expected: expectedPhase })
-      setError('Invalid workflow order')
-      return
+    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['PLAN']!) {
+      setError('Invalid workflow order'); return
     }
     clearError()
     setPhaseLoading(true)
@@ -339,7 +337,6 @@ export default function WorkflowPage() {
     try {
       const resp = await workflowRunDocker(taskId)
       mergePhaseResponse(resp)
-      // Force-sync with backend to guarantee store matches server state
       const fresh = await workflowGetState(taskId)
       mergePhaseResponse(fresh)
       const task = await pollTask(taskId)
@@ -353,23 +350,29 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 3: User approved Docker → run Terraform ────────────────────────────
+  // ── Step 3: INFRA approved → go to DOCKER_BUILD (no API call yet) ─────────
   const handleApproveInfra = useCallback(async () => {
     if (!taskId) return
     const state = _store.getState()
-    const expectedPhase = STEP_TO_EXPECTED_PHASE['INFRA']!
-    console.log("STEP:", state.currentStep)
-    console.log("PHASE:", state.currentPhase)
-    console.log("API CALL:", STEP_TO_API['INFRA'])
-    if (state.currentPhase !== expectedPhase) {
-      console.error("INVALID TRANSITION", { step: state.currentStep, phase: state.currentPhase, expected: expectedPhase })
-      setError('Invalid workflow order')
-      return
+    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['INFRA']!) {
+      setError('Invalid workflow order'); return
+    }
+    clearError()
+    // Navigate to the Docker Build step — DockerBuildStep auto-starts the build
+    goToStep('DOCKER_BUILD')
+  }, [taskId, clearError, goToStep, setError])
+
+  // ── Step 4: Docker build succeeded → run Terraform ────────────────────────
+  const handleDockerBuildContinue = useCallback(async () => {
+    if (!taskId) return
+    const state = _store.getState()
+    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['DOCKER_BUILD']!) {
+      setError('Docker build must succeed before running Terraform'); return
     }
     clearError()
     setPhaseLoading(true)
     overlayLabelRef.current = 'Generating Terraform files…'
-    lastApiCallRef.current = STEP_TO_API['INFRA']!
+    lastApiCallRef.current = STEP_TO_API['DOCKER_BUILD']!
     try {
       const resp = await workflowRunTerraform(taskId)
       mergePhaseResponse(resp)
@@ -386,18 +389,12 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 4: User approved Terraform → run Kubernetes ────────────────────────
+  // ── Step 5: Terraform approved → run Kubernetes ───────────────────────────
   const handleApproveTerraform = useCallback(async () => {
     if (!taskId) return
     const state = _store.getState()
-    const expectedPhase = STEP_TO_EXPECTED_PHASE['TERRAFORM']!
-    console.log("STEP:", state.currentStep)
-    console.log("PHASE:", state.currentPhase)
-    console.log("API CALL:", STEP_TO_API['TERRAFORM'])
-    if (state.currentPhase !== expectedPhase) {
-      console.error("INVALID TRANSITION", { step: state.currentStep, phase: state.currentPhase, expected: expectedPhase })
-      setError('Invalid workflow order')
-      return
+    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['TERRAFORM']!) {
+      setError('Invalid workflow order'); return
     }
     clearError()
     setPhaseLoading(true)
@@ -419,18 +416,12 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 5: User approved Kubernetes → run CI/CD → show CICD artifacts ──────
+  // ── Step 6: Kubernetes approved → run CI/CD ───────────────────────────────
   const handleApproveKubernetes = useCallback(async () => {
     if (!taskId) return
     const state = _store.getState()
-    const expectedPhase = STEP_TO_EXPECTED_PHASE['KUBERNETES']!
-    console.log("STEP:", state.currentStep)
-    console.log("PHASE:", state.currentPhase)
-    console.log("API CALL:", STEP_TO_API['KUBERNETES'])
-    if (state.currentPhase !== expectedPhase) {
-      console.error("INVALID TRANSITION", { step: state.currentStep, phase: state.currentPhase, expected: expectedPhase })
-      setError('Invalid workflow order')
-      return
+    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['KUBERNETES']!) {
+      setError('Invalid workflow order'); return
     }
     clearError()
     setPhaseLoading(true)
@@ -452,14 +443,13 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 2b-alt: Human validation path → validate, then run Docker phase ────
+  // ── Human validation path ─────────────────────────────────────────────────
   const handleApproveHuman = useCallback(
     async (decision: PlanValidationDecision, feedback?: string) => {
       if (!taskId) { setError('No task ID.'); return }
       clearError()
       setLoading(true)
       try {
-        // 1. Validate plan with the backend (records the human decision)
         const result = await approvePlanHumanValidation({ task_id: taskId, decision, feedback })
 
         if (decision === 'rejected') {
@@ -481,23 +471,17 @@ export default function WorkflowPage() {
         }
 
         if (decision === 'approved') {
-          // 2. Run the Docker phase — this is what advances the backend state machine
-          //    from `planning_complete` to `docker_completed`. Without this call the
-          //    backend phase stays at planning_complete and run-terraform returns 409.
-          console.log('PLAN → running Docker phase')
           setLoading(false)
           setPhaseLoading(true)
           overlayLabelRef.current = 'Generating Docker artifacts…'
           lastApiCallRef.current = STEP_TO_API['PLAN']!
           try {
             const dockerResp = await workflowRunDocker(taskId)
-            // 3. Sync local store with backend state
             mergePhaseResponse(dockerResp)
             const fresh = await workflowGetState(taskId)
             mergePhaseResponse(fresh)
             const refreshedTask = await pollTask(taskId)
             setTask(refreshedTask)
-            // 4. Navigate based on backend phase, never a hard-coded step
             const nextStep = PHASE_TO_STEP[fresh.current_phase]
             if (nextStep) goToStep(nextStep)
           } catch (err) {
@@ -523,7 +507,7 @@ export default function WorkflowPage() {
 
   const showOverlay = isGenerating || isPhaseLoading
 
-  // ── Step routing ─────────────────────────────────────────────────────────────
+  // ── Step routing ─────────────────────────────────────────────────────────
   const stepContent = {
     INPUT: (
       <InputStep onSubmit={handlePlanPreview} isLoading={isLoading} />
@@ -544,10 +528,17 @@ export default function WorkflowPage() {
         isPhaseLoading={isPhaseLoading}
       />
     ),
+    DOCKER_BUILD: (
+      <DockerBuildStep
+        onContinue={handleDockerBuildContinue}
+        onBack={() => goToStep('INFRA')}
+        isPhaseLoading={isPhaseLoading}
+      />
+    ),
     TERRAFORM: (
       <TerraformStep
         onApprove={handleApproveTerraform}
-        onBack={() => goToStep('INFRA')}
+        onBack={() => goToStep('DOCKER_BUILD')}
         isPhaseLoading={isPhaseLoading}
       />
     ),

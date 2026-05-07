@@ -8,6 +8,7 @@ export type WorkflowStep =
   | 'INPUT'
   | 'PLAN'
   | 'INFRA'
+  | 'DOCKER_BUILD'
   | 'TERRAFORM'
   | 'KUBERNETES'
   | 'SUMMARY'
@@ -15,18 +16,19 @@ export type WorkflowStep =
   | 'RESULT'
 
 export const WORKFLOW_STEPS: WorkflowStep[] = [
-  'INPUT', 'PLAN', 'INFRA', 'TERRAFORM', 'KUBERNETES', 'CICD', 'SUMMARY', 'RESULT',
+  'INPUT', 'PLAN', 'INFRA', 'DOCKER_BUILD', 'TERRAFORM', 'KUBERNETES', 'CICD', 'SUMMARY', 'RESULT',
 ]
 
 export const STEP_META: Record<WorkflowStep, { label: string; description: string }> = {
-  INPUT:      { label: 'Project Input',   description: 'Define project requirements'          },
-  PLAN:       { label: 'Plan Review',     description: 'Approve the AI-generated plan'        },
-  INFRA:      { label: 'Infrastructure',  description: 'Docker & container configuration'     },
-  TERRAFORM:  { label: 'Terraform',       description: 'Infrastructure as code (.tf files)'   },
-  KUBERNETES: { label: 'Kubernetes',      description: 'Container orchestration manifests'    },
-  SUMMARY:    { label: 'Summary',         description: 'Architecture overview'                },
-  CICD:       { label: 'CI/CD Pipeline',  description: 'GitHub Actions workflows'             },
-  RESULT:     { label: 'Final Output',    description: 'Logs, artifacts & download'           },
+  INPUT:        { label: 'Project Input',    description: 'Define project requirements'             },
+  PLAN:         { label: 'Plan Review',      description: 'Approve the AI-generated plan'           },
+  INFRA:        { label: 'Infrastructure',   description: 'Docker & container configuration'        },
+  DOCKER_BUILD: { label: 'Docker Build',     description: 'Build & verify the Docker image'         },
+  TERRAFORM:    { label: 'Terraform',        description: 'Infrastructure as code (.tf files)'      },
+  KUBERNETES:   { label: 'Kubernetes',       description: 'Container orchestration manifests'       },
+  SUMMARY:      { label: 'Summary',          description: 'Architecture overview'                   },
+  CICD:         { label: 'CI/CD Pipeline',   description: 'GitHub Actions workflows'                },
+  RESULT:       { label: 'Final Output',     description: 'Logs, artifacts & download'              },
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────

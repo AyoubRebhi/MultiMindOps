@@ -17,7 +17,8 @@
       "Bash(cat requirements.txt)",
       "Bash(cat backend/requirements.txt)",
       "Bash(venv/Scripts/pip show *)",
-      "Bash(python -c \"from backend.app.agents.terraform_agent import TerraformAgent; from backend.app.agents.kubernetes_agent import KubernetesAgent; from backend.app.agents.state import OrchestratorState; print\\('imports OK'\\)\")"
+      "Bash(python -c \"from backend.app.agents.terraform_agent import TerraformAgent; from backend.app.agents.kubernetes_agent import KubernetesAgent; from backend.app.agents.state import OrchestratorState; print\\('imports OK'\\)\")",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\ayoub\\\\OneDrive\\\\Bureau\\\\Stage pfe Esprit\\\\code\\\\devsecops-ai-platform\\\\frontend-React\\\\src\" -Recurse -File | Where-Object { $_.Extension -in @\\('.tsx', '.ts'\\) } | Sort-Object FullName | ForEach-Object { $_.FullName.Replace\\('c:\\\\Users\\\\ayoub\\\\OneDrive\\\\Bureau\\\\Stage pfe Esprit\\\\code\\\\devsecops-ai-platform\\\\frontend-React\\\\src\\\\', ''\\) })"
     ]
   }
 }
