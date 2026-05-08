@@ -11,6 +11,7 @@ import {
   Lock,
   Check,
   Loader2,
+  DollarSign,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -23,15 +24,16 @@ import {
 // ── Step icon map ─────────────────────────────────────────────────────────────
 
 const STEP_ICONS: Record<WorkflowStep, React.ElementType> = {
-  INPUT:        Terminal,
-  PLAN:         ClipboardList,
-  INFRA:        Container,
-  DOCKER_BUILD: Play,
-  TERRAFORM:    Layers,
-  KUBERNETES:   Ship,
-  SUMMARY:      LayoutGrid,
-  CICD:         GitBranch,
-  RESULT:       CheckCircle2,
+  INPUT:            Terminal,
+  PLAN:             ClipboardList,
+  INFRA:            Container,
+  COST_ESTIMATION:  DollarSign,
+  DOCKER_BUILD:     Play,
+  TERRAFORM:        Layers,
+  KUBERNETES:       Ship,
+  SUMMARY:          LayoutGrid,
+  CICD:             GitBranch,
+  RESULT:           CheckCircle2,
 }
 
 // Determines which steps are navigable (completed or current)

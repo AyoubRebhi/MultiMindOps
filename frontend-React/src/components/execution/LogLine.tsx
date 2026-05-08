@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils'
 
-export type LogLevel = 'INFO' | 'ERROR' | 'SUCCESS' | 'DEFAULT'
+export type LogLevel = 'INFO' | 'WARNING' | 'ERROR' | 'SUCCESS' | 'DEFAULT'
 
 export interface LogEntry {
   timestamp: string
@@ -8,18 +8,12 @@ export interface LogEntry {
   message: string
 }
 
-const LEVEL_CLASSES: Record<LogLevel, string> = {
-  SUCCESS: 'text-emerald-400',
-  ERROR:   'text-red-400',
-  INFO:    'text-blue-300',
-  DEFAULT: 'text-slate-300',
-}
-
-const LEVEL_PREFIX: Record<LogLevel, string> = {
-  SUCCESS: '✓ ',
-  ERROR:   '✗ ',
-  INFO:    '  ',
-  DEFAULT: '  ',
+const LEVEL_STYLES: Record<LogLevel, { text: string; badge: string; prefix: string }> = {
+  SUCCESS: { text: 'text-emerald-400',  badge: 'text-emerald-500/80', prefix: '✓' },
+  WARNING: { text: 'text-yellow-300',   badge: 'text-yellow-500/80',  prefix: '⚠' },
+  ERROR:   { text: 'text-red-400',      badge: 'text-red-500/80',     prefix: '✗' },
+  INFO:    { text: 'text-sky-300',      badge: 'text-sky-600/60',     prefix: ' ' },
+  DEFAULT: { text: 'text-slate-300',    badge: 'text-slate-600/60',   prefix: ' ' },
 }
 
 interface Props {
@@ -27,18 +21,28 @@ interface Props {
   showTimestamp?: boolean
 }
 
-export function LogLine({ entry, showTimestamp = false }: Props) {
+export function LogLine({ entry, showTimestamp = true }: Props) {
+  const level = entry.level ?? 'DEFAULT'
+  const styles = LEVEL_STYLES[level] ?? LEVEL_STYLES.DEFAULT
+
   const timeStr = showTimestamp
-    ? new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    ? new Date(entry.timestamp).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      })
     : null
 
   return (
-    <div className={cn('flex gap-2 font-mono text-xs leading-5', LEVEL_CLASSES[entry.level ?? 'DEFAULT'])}>
+    <div className={cn('flex gap-2 font-mono text-xs leading-5', styles.text)}>
       {timeStr && (
-        <span className="shrink-0 text-slate-600 select-none">{timeStr}</span>
+        <span className="shrink-0 text-slate-600 select-none w-[60px]">{timeStr}</span>
       )}
-      <span className="select-none shrink-0">{LEVEL_PREFIX[entry.level ?? 'DEFAULT']}</span>
-      <span className="break-all whitespace-pre-wrap">{entry.message}</span>
+      <span className={cn('select-none shrink-0 w-3 text-center', styles.badge)}>
+        {styles.prefix}
+      </span>
+      <span className="break-all whitespace-pre-wrap min-w-0">{entry.message}</span>
     </div>
   )
 }

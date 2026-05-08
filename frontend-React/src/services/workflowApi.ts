@@ -40,9 +40,17 @@ export interface DockerBuildStatusResponse {
   exit_code: number | null
   started_at: string | null
   finished_at: string | null
+  duration_seconds: number | null
+  retries: number
+  build_number: number
   execution_phase: string
   current_phase: string
   task_id: string
+  // Structured failure diagnostics
+  failure_reason: string | null
+  docker_command: string | null
+  last_error_line: string | null
+  failed_step: string | null
 }
 
 /** Start an async Docker build.  Returns immediately; connect WS for live logs. */

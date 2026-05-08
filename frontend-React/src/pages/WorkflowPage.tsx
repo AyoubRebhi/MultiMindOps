@@ -2,16 +2,17 @@ import { useCallback, useEffect, useRef } from 'react'
 import { Loader2, RotateCcw, AlertCircle, X } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { StepperSidebar } from '@/components/workflow/StepperSidebar'
-import { InputStep }        from '@/steps/InputStep'
-import { PlanStep }         from '@/steps/PlanStep'
-import { InfraStep }        from '@/steps/InfraStep'
-import { DockerBuildStep }  from '@/steps/DockerBuildStep'
-import { TerraformStep }    from '@/steps/TerraformStep'
-import { KubernetesStep }   from '@/steps/KubernetesStep'
-import { SummaryStep }      from '@/steps/SummaryStep'
-import { CicdStep }         from '@/steps/CicdStep'
-import { ResultStep }       from '@/steps/ResultStep'
+import { StepperSidebar }       from '@/components/workflow/StepperSidebar'
+import { InputStep }             from '@/steps/InputStep'
+import { PlanStep }              from '@/steps/PlanStep'
+import { InfraStep }             from '@/steps/InfraStep'
+import { CostEstimationStep }    from '@/steps/CostEstimationStep'
+import { DockerBuildStep }       from '@/steps/DockerBuildStep'
+import { TerraformStep }         from '@/steps/TerraformStep'
+import { KubernetesStep }        from '@/steps/KubernetesStep'
+import { SummaryStep }           from '@/steps/SummaryStep'
+import { CicdStep }              from '@/steps/CicdStep'
+import { ResultStep }            from '@/steps/ResultStep'
 
 import { useWorkflowStore, useWorkflowStore as _store } from '@/store/workflowStore'
 import type { WorkflowStep } from '@/store/workflowStore'
@@ -33,10 +34,12 @@ import type { PlanValidationDecision } from '@/types'
 
 const SESSION_KEY = 'wf_task_id'
 
-// Backend phase → UI step (single source of truth for navigation)
+// Backend phase → UI step used when restoring state after page refresh.
+// COST_ESTIMATION is a frontend-only step with no backend phase; page-refresh
+// restores the nearest real phase instead.
 const PHASE_TO_STEP: Record<string, WorkflowStep> = {
   planning_complete:      'PLAN',
-  docker_completed:       'INFRA',
+  docker_completed:       'INFRA',       // user already saw cost estimation
   docker_build_running:   'DOCKER_BUILD',
   docker_build_success:   'DOCKER_BUILD',
   docker_build_failed:    'DOCKER_BUILD',
@@ -45,16 +48,7 @@ const PHASE_TO_STEP: Record<string, WorkflowStep> = {
   completed:              'CICD',
 }
 
-// Step → API endpoint called when user approves that step
-const STEP_TO_API: Partial<Record<WorkflowStep, string>> = {
-  PLAN:         'run-docker',
-  INFRA:        'run-docker-build',   // Now goes to build execution, not Terraform
-  DOCKER_BUILD: 'run-terraform',
-  TERRAFORM:    'run-kubernetes',
-  KUBERNETES:   'run-cicd',
-}
-
-// Step → backend phase that MUST be active before the API call is allowed
+// Expected backend phase that must be active before the step's API call fires.
 const STEP_TO_EXPECTED_PHASE: Partial<Record<WorkflowStep, string>> = {
   PLAN:         'planning_complete',
   INFRA:        'docker_completed',
@@ -298,7 +292,7 @@ export default function WorkflowPage() {
     }
   }, [userInput, clearError, setLoading, setPlanPreview, goToStep, setError, mergePhaseResponse, setTask])
 
-  // ── Step 2a: Standard path (fallback) ─────────────────────────────────────
+  // ── Step 2a: Standard (legacy) path ──────────────────────────────────────
   const handleApproveStandard = useCallback(async (approvedArtifacts: string[]) => {
     clearError()
     setLoading(true)
@@ -323,17 +317,27 @@ export default function WorkflowPage() {
     }
   }, [userInput, envFile, clearError, setLoading, setTaskId, setTask, setGenerating, setError])
 
-  // ── Step 2b: Step-by-step — plan approved → run docker artifacts ──────────
+  // ── Step 2b: Step-by-step — plan approved → show Cost Estimation ──────────
+  // Docker artifact generation is deferred to handleApproveCostEstimation so
+  // the user can review the estimated AWS cost BEFORE infra generation begins.
   const handleApproveStepByStep = useCallback(async () => {
     if (!taskId) { setError('No task ID. Re-run plan.'); return }
     const state = _store.getState()
     if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['PLAN']!) {
-      setError('Invalid workflow order'); return
+      setError('Invalid workflow order — plan must be complete first'); return
     }
     clearError()
+    // Navigate to cost estimation; docker artifacts generated after user approves cost.
+    goToStep('COST_ESTIMATION')
+  }, [taskId, clearError, goToStep, setError])
+
+  // ── Step 3: Cost estimation approved → generate docker artifacts → INFRA ──
+  const handleApproveCostEstimation = useCallback(async () => {
+    if (!taskId) return
+    clearError()
     setPhaseLoading(true)
-    overlayLabelRef.current = 'Generating Docker artifacts…'
-    lastApiCallRef.current = STEP_TO_API['PLAN']!
+    overlayLabelRef.current = 'Generating Docker & infrastructure artifacts…'
+    lastApiCallRef.current = 'run-docker'
     try {
       const resp = await workflowRunDocker(taskId)
       mergePhaseResponse(resp)
@@ -341,8 +345,10 @@ export default function WorkflowPage() {
       mergePhaseResponse(fresh)
       const task = await pollTask(taskId)
       setTask(task)
+      // Backend phase is now docker_completed → INFRA step
       const nextStep = PHASE_TO_STEP[fresh.current_phase]
       if (nextStep) goToStep(nextStep)
+      else goToStep('INFRA')
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -350,19 +356,19 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 3: INFRA approved → go to DOCKER_BUILD (no API call yet) ─────────
+  // ── Step 4: INFRA approved → start Docker build ───────────────────────────
   const handleApproveInfra = useCallback(async () => {
     if (!taskId) return
     const state = _store.getState()
     if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['INFRA']!) {
-      setError('Invalid workflow order'); return
+      setError('Invalid workflow order — infrastructure must be generated first'); return
     }
     clearError()
-    // Navigate to the Docker Build step — DockerBuildStep auto-starts the build
+    // Docker build is auto-started inside DockerBuildStep when currentPhase === docker_completed.
     goToStep('DOCKER_BUILD')
   }, [taskId, clearError, goToStep, setError])
 
-  // ── Step 4: Docker build succeeded → run Terraform ────────────────────────
+  // ── Step 5: Docker build succeeded → run Terraform ────────────────────────
   const handleDockerBuildContinue = useCallback(async () => {
     if (!taskId) return
     const state = _store.getState()
@@ -372,7 +378,7 @@ export default function WorkflowPage() {
     clearError()
     setPhaseLoading(true)
     overlayLabelRef.current = 'Generating Terraform files…'
-    lastApiCallRef.current = STEP_TO_API['DOCKER_BUILD']!
+    lastApiCallRef.current = 'run-terraform'
     try {
       const resp = await workflowRunTerraform(taskId)
       mergePhaseResponse(resp)
@@ -389,7 +395,7 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 5: Terraform approved → run Kubernetes ───────────────────────────
+  // ── Step 6: Terraform approved → run Kubernetes ───────────────────────────
   const handleApproveTerraform = useCallback(async () => {
     if (!taskId) return
     const state = _store.getState()
@@ -399,7 +405,7 @@ export default function WorkflowPage() {
     clearError()
     setPhaseLoading(true)
     overlayLabelRef.current = 'Generating Kubernetes manifests…'
-    lastApiCallRef.current = STEP_TO_API['TERRAFORM']!
+    lastApiCallRef.current = 'run-kubernetes'
     try {
       const resp = await workflowRunKubernetes(taskId)
       mergePhaseResponse(resp)
@@ -416,7 +422,7 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 6: Kubernetes approved → run CI/CD ───────────────────────────────
+  // ── Step 7: Kubernetes approved → run CI/CD ───────────────────────────────
   const handleApproveKubernetes = useCallback(async () => {
     if (!taskId) return
     const state = _store.getState()
@@ -426,7 +432,7 @@ export default function WorkflowPage() {
     clearError()
     setPhaseLoading(true)
     overlayLabelRef.current = 'Running CI/CD & finalizing…'
-    lastApiCallRef.current = STEP_TO_API['KUBERNETES']!
+    lastApiCallRef.current = 'run-cicd'
     try {
       const resp = await workflowRunCicd(taskId)
       mergePhaseResponse(resp)
@@ -471,24 +477,8 @@ export default function WorkflowPage() {
         }
 
         if (decision === 'approved') {
-          setLoading(false)
-          setPhaseLoading(true)
-          overlayLabelRef.current = 'Generating Docker artifacts…'
-          lastApiCallRef.current = STEP_TO_API['PLAN']!
-          try {
-            const dockerResp = await workflowRunDocker(taskId)
-            mergePhaseResponse(dockerResp)
-            const fresh = await workflowGetState(taskId)
-            mergePhaseResponse(fresh)
-            const refreshedTask = await pollTask(taskId)
-            setTask(refreshedTask)
-            const nextStep = PHASE_TO_STEP[fresh.current_phase]
-            if (nextStep) goToStep(nextStep)
-          } catch (err) {
-            setError(`Failed to run Docker phase: ${(err as Error).message}`)
-          } finally {
-            setPhaseLoading(false)
-          }
+          // Show cost estimation before generating docker artifacts
+          goToStep('COST_ESTIMATION')
         }
       } catch (e) {
         setError((e as Error).message)
@@ -496,7 +486,7 @@ export default function WorkflowPage() {
         setLoading(false)
       }
     },
-    [taskId, clearError, setLoading, setPhaseLoading, setPlanPreview, setError, mergePhaseResponse, setTask, goToStep],
+    [taskId, clearError, setLoading, setPlanPreview, setError, goToStep],
   )
 
   const handleReset = useCallback(() => {
@@ -507,7 +497,7 @@ export default function WorkflowPage() {
 
   const showOverlay = isGenerating || isPhaseLoading
 
-  // ── Step routing ─────────────────────────────────────────────────────────
+  // ── Step routing ──────────────────────────────────────────────────────────
   const stepContent = {
     INPUT: (
       <InputStep onSubmit={handlePlanPreview} isLoading={isLoading} />
@@ -521,10 +511,20 @@ export default function WorkflowPage() {
         rejectedMessage={rejectedMsgRef.current}
       />
     ),
+    // Cost estimation is now BEFORE infrastructure generation.
+    // The user reviews the estimated AWS cost and clicks "Continue" to trigger
+    // docker artifact generation, then proceeds to INFRA for review.
+    COST_ESTIMATION: (
+      <CostEstimationStep
+        onContinue={handleApproveCostEstimation}
+        onBack={() => goToStep('PLAN')}
+        isPhaseLoading={isPhaseLoading}
+      />
+    ),
     INFRA: (
       <InfraStep
         onApprove={handleApproveInfra}
-        onBack={() => goToStep('PLAN')}
+        onBack={() => goToStep('COST_ESTIMATION')}
         isPhaseLoading={isPhaseLoading}
       />
     ),

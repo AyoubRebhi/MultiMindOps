@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -33,7 +34,9 @@ from backend.app.services.execution.docker_registry import generate_image_tag
 from backend.app.services.execution.docker_streamer import log_stream_manager
 from backend.app.services.execution.execution_models import (
     DockerBuildResult,
+    ExecutionLogEntry,
     ExecutionStatus,
+    LogLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,7 +46,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Execution"])
 
 # ── Acceptable upstream phases for triggering a build ─────────────────────────
-_ALLOWED_BUILD_PHASES = {"docker_completed"}
+_ALLOWED_BUILD_PHASES = {"docker_completed", "docker_build_failed", "docker_build_success"}
+_BLOCKED_BUILD_PHASES = {
+    "docker_build_running",
+    "terraform_completed",
+    "kubernetes_completed",
+    "completed",
+}
 
 
 # ── DB dependency ──────────────────────────────────────────────────────────────
@@ -63,17 +72,15 @@ def _extract_docker_artifacts(workflow_state: dict) -> dict[str, str]:
     infra = workflow_state.get("infra") or {}
     artifacts: dict[str, str] = dict(infra.get("artifacts") or {})
 
-    # Also check result.infrastructure.artifacts (alternate storage path)
     result = workflow_state.get("result") or {}
     infra_result = result.get("infrastructure") or {}
     artifacts.update(infra_result.get("artifacts") or {})
 
-    # Filter to Docker-related keys only
     docker_keys = {"dockerfile", "dockerignore", "docker_compose", "env_example"}
     return {k: v for k, v in artifacts.items() if k in docker_keys or k.startswith("docker_")}
 
 
-def _save_execution_state(db: Session, task, result: DockerBuildResult) -> None:
+def _save_execution_state(db: Session, task, result: DockerBuildResult, is_retry: bool = False) -> None:
     """Persist execution state into workflow_state.execution.docker."""
     task_obj = TaskService.get_task(db, str(task.id))
     if not task_obj:
@@ -81,14 +88,34 @@ def _save_execution_state(db: Session, task, result: DockerBuildResult) -> None:
     state: dict = dict(TaskService.load_workflow_state(db, task_obj) or {})
 
     execution = state.setdefault("execution", {})
-    execution["docker"] = result.to_db_dict()
+    docker_exec = execution.setdefault("docker", {})
 
-    # Advance phase so run-terraform knows it can proceed
+    previous_logs = docker_exec.get("logs", []) if is_retry else []
+
+    new_logs = [e.to_dict() for e in result.logs]
+    existing_timestamps = {log.get("timestamp") for log in previous_logs}
+    merged_logs = list(previous_logs)
+    for log in new_logs:
+        if log.get("timestamp") not in existing_timestamps:
+            merged_logs.append(log)
+
+    result_dict = result.to_db_dict()
+    result_dict["logs"] = merged_logs
+    execution["docker"] = result_dict
+
+    docker_exec = execution["docker"]
+    docker_exec["retries"] = docker_exec.get("retries", 0)
+    docker_exec["build_number"] = docker_exec.get("build_number", 1)
+
     if result.status == ExecutionStatus.SUCCESS:
         state["current_phase"] = "docker_build_success"
     elif result.status == ExecutionStatus.FAILED:
         state["current_phase"] = "docker_build_failed"
 
+    logger.info(
+        "[Execution] Persisted logs count=%d status=%s task=%s",
+        len(merged_logs), result.status, task.id,
+    )
     TaskService.save_workflow_state(db, task_obj, state)
 
 
@@ -98,8 +125,20 @@ async def _run_build_background(
     task_id: str,
     artifacts: dict[str, str],
     image_tag: str,
+    is_retry: bool = False,
+    build_number: int = 1,
 ) -> None:
     """Coroutine that runs the full build lifecycle and persists results."""
+    logger.info("[Execution] Build background task started: task=%s build_number=%d", task_id, build_number)
+
+    if is_retry:
+        separator_entry = ExecutionLogEntry(
+            level=LogLevel.INFO,
+            message=f"========== RETRY BUILD #{build_number} ==========",
+        )
+        stream = log_stream_manager.get_or_create(task_id)
+        await stream.publish(separator_entry)
+
     executor = DockerExecutor(
         task_id=task_id,
         artifacts=artifacts,
@@ -112,17 +151,16 @@ async def _run_build_background(
 
     result = await executor.build_image()
 
-    # Persist to DB after build completes
     db = SessionLocal()
     try:
         task = TaskService.get_task(db, task_id)
         if task:
-            _save_execution_state(db, task, result)
+            _save_execution_state(db, task, result, is_retry=is_retry)
     finally:
         db.close()
 
     logger.info(
-        "[Execution] Build finished for task %s: status=%s exit_code=%s",
+        "[Execution] Stream completed: task=%s status=%s exit_code=%s",
         task_id, result.status, result.exit_code,
     )
 
@@ -134,13 +172,7 @@ async def start_docker_build(
     task_id: str,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """
-    Start an async Docker build for the given task.
-
-    Validates that the workflow is in the `docker_completed` phase,
-    extracts generated Docker artifacts, then launches a background build.
-    Returns immediately with status=running and a WebSocket URL for log streaming.
-    """
+    """Start an async Docker build for the given task."""
     task = TaskService.get_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -150,13 +182,17 @@ async def start_docker_build(
         raise HTTPException(status_code=422, detail="No workflow state found for this task")
 
     current_phase = state.get("current_phase", "")
+    if current_phase in _BLOCKED_BUILD_PHASES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Build already in progress or workflow completed. Current phase: '{current_phase}'",
+        )
     if current_phase not in _ALLOWED_BUILD_PHASES:
         raise HTTPException(
             status_code=409,
-            detail=f"Expected phase 'docker_completed', got '{current_phase}'",
+            detail=f"Expected phase one of {_ALLOWED_BUILD_PHASES}, got '{current_phase}'",
         )
 
-    # Retrieve project name for tag generation
     plan = state.get("plan") or {}
     project_name = (
         plan.get("project_name")
@@ -179,25 +215,32 @@ async def start_docker_build(
         registry_username=settings.DOCKER_REGISTRY_USERNAME,
     )
 
-    # Mark phase as running and persist
+    execution = state.setdefault("execution", {})
+    docker_exec = execution.setdefault("docker", {})
+
+    is_retry = current_phase == "docker_build_failed"
+    build_number = docker_exec.get("build_number", 0) + 1
+    previous_logs = docker_exec.get("logs", []) if is_retry else []
+
     state["current_phase"] = "docker_build_running"
-    state.setdefault("execution", {})["docker"] = {
+    docker_exec.update({
         "status": "running",
-        "logs": [],
-        "started_at": None,
+        "started_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None,
         "image": image_tag,
         "exit_code": None,
-    }
+        "build_number": build_number,
+        "retries": docker_exec.get("retries", 0) + (1 if is_retry else 0),
+        "logs": previous_logs,
+    })
     TaskService.save_workflow_state(db, task, state)
 
-    # Fire-and-forget background build
     asyncio.create_task(
-        _run_build_background(task_id, artifacts, image_tag),
+        _run_build_background(task_id, artifacts, image_tag, is_retry=is_retry, build_number=build_number),
         name=f"docker_build_{task_id[:8]}",
     )
 
-    logger.info("[Execution] Docker build started for task %s, image=%s", task_id, image_tag)
+    logger.info("[Execution] Docker build started: task=%s image=%s build_number=%d", task_id, image_tag, build_number)
 
     return {
         "status": "running",
@@ -225,36 +268,108 @@ def get_docker_build_status(
     execution = state.get("execution", {})
     docker_exec = execution.get("docker", {})
 
+    started_at = docker_exec.get("started_at")
+    finished_at = docker_exec.get("finished_at")
+    duration_seconds = None
+    if started_at and finished_at:
+        try:
+            start_dt = datetime.fromisoformat(started_at)
+            end_dt = datetime.fromisoformat(finished_at)
+            duration_seconds = int((end_dt - start_dt).total_seconds())
+        except (ValueError, TypeError):
+            pass
+    elif started_at and docker_exec.get("status") == "running":
+        try:
+            start_dt = datetime.fromisoformat(started_at)
+            duration_seconds = int((datetime.now(timezone.utc) - start_dt).total_seconds())
+        except (ValueError, TypeError):
+            pass
+
+    logs = docker_exec.get("logs", [])
+    logger.info(
+        "[Execution] Replay persisted logs: task=%s count=%d status=%s",
+        task_id, len(logs), docker_exec.get("status", "pending"),
+    )
+
     return {
         "status": docker_exec.get("status", "pending"),
-        "logs": docker_exec.get("logs", []),
+        "logs": logs,
         "image_tag": docker_exec.get("image"),
         "exit_code": docker_exec.get("exit_code"),
-        "started_at": docker_exec.get("started_at"),
-        "finished_at": docker_exec.get("finished_at"),
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "duration_seconds": duration_seconds,
+        "retries": docker_exec.get("retries", 0),
+        "build_number": docker_exec.get("build_number", 0),
         "execution_phase": "docker_build",
         "current_phase": state.get("current_phase", ""),
         "task_id": task_id,
+        "failure_reason": docker_exec.get("failure_reason"),
+        "docker_command": docker_exec.get("docker_command"),
+        "last_error_line": docker_exec.get("last_error_line"),
+        "failed_step": docker_exec.get("failed_step"),
     }
 
 
 # ── WebSocket /ws/execution/{task_id} ──────────────────────────────────────────
 
-@router.websocket("/ws/execution/{task_id}")  # mounted at root (no /api prefix)
+@router.websocket("/ws/execution/{task_id}")
 async def ws_execution_logs(websocket: WebSocket, task_id: str):
     """
     Stream live Docker build logs to the frontend.
 
+    Payload format (standardized):
+      log entry:  {"type": "log", "timestamp": "...", "level": "INFO", "message": "..."}
+      complete:   {"type": "complete", "status": "success|failed", "exit_code": 0}
+      error:      {"type": "error", "message": "...", "exit_code": 1}
+      heartbeat:  {"type": "pong"}
+
     Protocol:
-    - Server sends JSON lines:  {"timestamp": "...", "level": "INFO", "message": "..."}
-    - Final message:            {"type": "done", "status": "success|failed"}
-    - Reconnect-safe: replays full log history then continues live.
+      - Reconnect-safe: replays full log history from DB, then streams live.
+      - Separate asyncio task handles ping/close messages concurrently so the
+        main stream loop is NEVER blocked waiting for client input.
     """
     await websocket.accept()
-    logger.info("[WS] Client connected for task %s", task_id)
+    logger.info("[WS] Client connected: task_id=%s", task_id)
+
+    # Shared cancellation flag — set by ping-receiver task on disconnect/close
+    closed = asyncio.Event()
+
+    async def _ping_receiver() -> None:
+        """Background task: handle ping/close from client without blocking log streaming."""
+        while not closed.is_set():
+            try:
+                raw = await websocket.receive_text()
+                data = json.loads(raw)
+                if data.get("type") == "ping":
+                    try:
+                        await websocket.send_text(json.dumps({"type": "pong"}))
+                    except Exception:
+                        closed.set()
+                        break
+                elif data.get("type") == "close":
+                    closed.set()
+                    break
+            except WebSocketDisconnect:
+                closed.set()
+                break
+            except Exception:
+                closed.set()
+                break
+
+    async def _send(payload: dict) -> bool:
+        """Send a JSON payload; returns False if the connection is gone."""
+        if closed.is_set():
+            return False
+        try:
+            await websocket.send_text(json.dumps(payload))
+            return True
+        except Exception:
+            closed.set()
+            return False
 
     try:
-        # If build is already done, serve persisted logs from DB
+        # ── Load persisted state ──────────────────────────────────────────────
         db = SessionLocal()
         try:
             task = TaskService.get_task(db, task_id)
@@ -266,50 +381,108 @@ async def ws_execution_logs(websocket: WebSocket, task_id: str):
         finally:
             db.close()
 
-        # Case 1: build already finished — serve persisted logs from DB
+        logger.info(
+            "[WS] Task %s: final_status=%s buffered_logs=%d",
+            task_id, final_status or "none", len(persisted_logs),
+        )
+
+        # Start ping-receiver concurrently (never blocks the log stream)
+        ping_task = asyncio.create_task(_ping_receiver())
+
+        # ── Case 1: Build already finished — replay persisted logs from DB ────
         if final_status in ("success", "failed"):
-            for entry in persisted_logs:
-                await websocket.send_text(json.dumps(entry))
-            await websocket.send_text(json.dumps({"type": "done", "status": final_status}))
+            logger.info("[WS] Replaying %d persisted logs (build finished)", len(persisted_logs))
+            for i, entry in enumerate(persisted_logs):
+                if closed.is_set():
+                    break
+                logger.debug("[WS] Sending persisted log %d/%d", i + 1, len(persisted_logs))
+                await _send({**entry, "type": "log"})
+
+            if not closed.is_set():
+                logger.info("[WS] Sending complete event: status=%s", final_status)
+                await _send({
+                    "type": "complete",
+                    "status": final_status,
+                    "exit_code": docker_exec.get("exit_code"),
+                })
+
+            # Keep alive briefly for the client to receive done message
+            try:
+                await asyncio.wait_for(ping_task, timeout=30.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                ping_task.cancel()
             return
 
-        # Case 2: build is running or hasn't started yet — subscribe to live stream
-        # Wait briefly for the stream to be created if the build just started
-        for _ in range(20):
+        # ── Case 2: Build running or not yet started ──────────────────────────
+        # Send any persisted logs first (previous retry segments)
+        if persisted_logs:
+            logger.info("[WS] Sending %d persisted logs before live stream", len(persisted_logs))
+            for entry in persisted_logs:
+                if closed.is_set():
+                    break
+                await _send({**entry, "type": "log"})
+
+        # Wait up to 5 seconds for the stream to be created by the executor
+        stream = None
+        for attempt in range(20):
+            if closed.is_set():
+                break
             stream = log_stream_manager.get(task_id)
             if stream is not None:
+                logger.info("[WS] Stream found after %d polls for task %s", attempt, task_id)
                 break
             await asyncio.sleep(0.25)
 
-        stream = log_stream_manager.get(task_id)
-        if stream is None:
-            # No stream and no persisted result — nothing to serve
-            await websocket.send_text(
-                json.dumps({"type": "error", "message": "No active build found for this task"})
-            )
+        if stream is None or closed.is_set():
+            logger.info("[WS] No active stream for task %s, serving info", task_id)
+            await _send({"type": "info", "message": "Build not currently running. Reconnect when build starts."})
+            ping_task.cancel()
             return
 
+        # ── Stream live logs (no blocking wait between entries) ───────────────
+        logger.info("[WS] Starting live log stream: task=%s", task_id)
+        log_count = 0
         async for entry in stream.subscribe():
-            payload = entry.to_dict()
-            await websocket.send_text(json.dumps(payload))
+            if closed.is_set():
+                break
+            entry_dict = entry.to_dict()  # already has type="log" from model
+            logger.debug(
+                "[WS] Sending live log #%d: level=%s msg=%.60s",
+                log_count, entry_dict.get("level"), entry_dict.get("message", ""),
+            )
+            if not await _send(entry_dict):
+                break
+            log_count += 1
 
-        # Build finished — determine final status from DB
+        logger.info("[WS] Stream finished: task=%s total_lines=%d", task_id, log_count)
+        ping_task.cancel()
+
+        if closed.is_set():
+            return
+
+        # ── Determine final status from DB and send complete event ────────────
         db2 = SessionLocal()
         try:
             task2 = TaskService.get_task(db2, task_id)
             state2 = TaskService.load_workflow_state(db2, task2) if task2 else {}
             exec2 = (state2 or {}).get("execution", {}).get("docker", {})
             done_status = exec2.get("status", "failed")
+            exit_code = exec2.get("exit_code")
         finally:
             db2.close()
 
-        await websocket.send_text(json.dumps({"type": "done", "status": done_status}))
+        logger.info("[WS] Build complete: task=%s status=%s exit_code=%s", task_id, done_status, exit_code)
+        await _send({
+            "type": "complete",
+            "status": done_status,
+            "exit_code": exit_code,
+        })
 
     except WebSocketDisconnect:
-        logger.info("[WS] Client disconnected for task %s", task_id)
+        logger.info("[WS] Client disconnected: task_id=%s", task_id)
     except Exception as exc:
-        logger.exception("[WS] Unexpected error for task %s: %s", task_id, exc)
+        logger.exception("[WS] Unexpected error: task_id=%s error=%s", task_id, exc)
         try:
-            await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
+            await websocket.send_text(json.dumps({"type": "error", "message": str(exc), "exit_code": 1}))
         except Exception:
             pass
