@@ -46,9 +46,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Execution"])
 
 # ── Acceptable upstream phases for triggering a build ─────────────────────────
-_ALLOWED_BUILD_PHASES = {"docker_completed", "docker_build_failed", "docker_build_success"}
+_ALLOWED_BUILD_PHASES = {
+    "docker_completed",
+    "docker_build_failed",
+    "docker_build_success",
+    # Corrector phases: human reviewed analysis and approved a retry
+    "human_review_required",
+    "corrector_analysis_completed",
+}
 _BLOCKED_BUILD_PHASES = {
     "docker_build_running",
+    "corrector_analysis_running",  # Analysis in progress — wait for it
+    "execution_failed",            # Max retries exceeded — no more builds
     "terraform_completed",
     "kubernetes_completed",
     "completed",
@@ -164,6 +173,13 @@ async def _run_build_background(
         task_id, result.status, result.exit_code,
     )
 
+    # ── Corrector hook: trigger analysis on every build failure ───────────────
+    if result.status == ExecutionStatus.FAILED:
+        asyncio.create_task(
+            _run_corrector_on_failure(task_id, result),
+            name=f"corrector_{task_id[:8]}",
+        )
+
 
 # ── POST /api/execution/docker/build/{task_id} ─────────────────────────────────
 
@@ -218,7 +234,7 @@ async def start_docker_build(
     execution = state.setdefault("execution", {})
     docker_exec = execution.setdefault("docker", {})
 
-    is_retry = current_phase == "docker_build_failed"
+    is_retry = current_phase in ("docker_build_failed", "human_review_required", "corrector_analysis_completed")
     build_number = docker_exec.get("build_number", 0) + 1
     previous_logs = docker_exec.get("logs", []) if is_retry else []
 
@@ -486,3 +502,143 @@ async def ws_execution_logs(websocket: WebSocket, task_id: str):
             await websocket.send_text(json.dumps({"type": "error", "message": str(exc), "exit_code": 1}))
         except Exception:
             pass
+
+
+# ── Corrector orchestration hook ───────────────────────────────────────────────
+
+async def _run_corrector_on_failure(
+    task_id: str,
+    build_result: DockerBuildResult,
+) -> None:
+    """
+    Trigger corrector analysis after a Docker build failure.
+
+    State transitions driven by this function:
+      docker_build_failed
+        → corrector_analysis_running   (immediately)
+        → human_review_required        (retry budget remaining)
+        → execution_failed             (retry_count >= max_retries)
+
+    Retry lifecycle:
+      retry_count is incremented each time a build fails and corrector runs.
+      When retry_count reaches max_retries, the workflow moves to execution_failed
+      so no further automatic or manual retries are allowed without operator intervention.
+    """
+    logger.info("[Corrector] Starting analysis for task=%s", task_id)
+
+    # ── Step 1: Read current state, increment retry_count, set phase ──────────
+    db = SessionLocal()
+    retry_count: int = 0
+    max_retries: int = 3
+    artifacts: dict = {}
+
+    try:
+        task = TaskService.get_task(db, task_id)
+        if not task:
+            logger.warning("[Corrector] Task not found: task=%s", task_id)
+            return
+
+        state: dict = dict(TaskService.load_workflow_state(db, task) or {})
+        execution = state.setdefault("execution", {})
+        corrector: dict = execution.setdefault("corrector", {})
+
+        retry_count = corrector.get("retry_count", 0) + 1
+        max_retries = corrector.get("max_retries", 3)
+
+        corrector.update({
+            "status": "running",
+            "retry_count": retry_count,
+            "max_retries": max_retries,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "error": None,
+        })
+        state["current_phase"] = "corrector_analysis_running"
+        TaskService.save_workflow_state(db, task, state)
+        artifacts = _extract_docker_artifacts(state)
+    finally:
+        db.close()
+
+    logger.info(
+        "[Corrector] Retry count=%d/%d for task=%s",
+        retry_count, max_retries, task_id,
+    )
+
+    # ── Step 2: Reconstruct log text from DockerBuildResult ───────────────────
+    raw_logs = "\n".join(entry.message for entry in build_result.logs)
+
+    # ── Step 3: Run corrector analysis ────────────────────────────────────────
+    try:
+        from backend.app.services.corrector.docker_corrector import DockerCorrectorAgent
+        from backend.app.services.core.llm_service import get_llm_service
+
+        try:
+            llm = get_llm_service()
+        except Exception as llm_exc:
+            llm = None
+            logger.warning(
+                "[Corrector] LLM unavailable — using deterministic analysis only: %s",
+                llm_exc,
+            )
+
+        agent = DockerCorrectorAgent(llm_service=llm)
+        analysis = await agent.analyze(
+            raw_logs=raw_logs,
+            artifacts=artifacts,
+            context={
+                "task_id": task_id,
+                "exit_code": build_result.exit_code,
+                "failed_step": build_result.failed_step,
+                "build_number": retry_count,
+            },
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "[Corrector] Analysis failed for task=%s: %s", task_id, exc
+        )
+        analysis = None
+
+    # ── Step 4: Persist result and advance workflow phase ─────────────────────
+    db2 = SessionLocal()
+    try:
+        task2 = TaskService.get_task(db2, task_id)
+        if not task2:
+            return
+
+        state2: dict = dict(TaskService.load_workflow_state(db2, task2) or {})
+        execution2 = state2.setdefault("execution", {})
+        corrector2: dict = execution2.get("corrector", {})
+
+        if analysis is not None:
+            corrector2.update({
+                "status": "completed",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "analysis": analysis.to_dict(),
+                "error": None,
+            })
+        else:
+            corrector2.update({
+                "status": "error",
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "error": "Corrector analysis failed unexpectedly.",
+            })
+
+        execution2["corrector"] = corrector2
+
+        if retry_count >= max_retries:
+            state2["current_phase"] = "execution_failed"
+            logger.warning(
+                "[Corrector] Max retries exceeded: task=%s %d/%d → execution_failed",
+                task_id, retry_count, max_retries,
+            )
+        else:
+            state2["current_phase"] = "human_review_required"
+            logger.info(
+                "[Corrector] Analysis complete: task=%s retry=%d/%d → human_review_required",
+                task_id, retry_count, max_retries,
+            )
+
+        TaskService.save_workflow_state(db2, task2, state2)
+    finally:
+        db2.close()

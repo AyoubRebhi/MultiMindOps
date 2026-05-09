@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { TaskResponse, PlanPreviewResponse, LogEntry } from '@/types'
 import type { WorkflowPhaseResponse } from '@/services/workflowApi'
+import type { CorrectorStatusResponse } from '@/services/correctorApi'
 
 // ── Step definitions ──────────────────────────────────────────────────────────
 
@@ -10,27 +11,63 @@ export type WorkflowStep =
   | 'INFRA'
   | 'COST_ESTIMATION'
   | 'DOCKER_BUILD'
+  | 'CORRECTOR_REVIEW'
   | 'TERRAFORM'
   | 'KUBERNETES'
   | 'SUMMARY'
   | 'CICD'
   | 'RESULT'
 
+// Canonical step order — CORRECTOR_REVIEW sits between DOCKER_BUILD and TERRAFORM.
+// It is conditionally rendered in the sidebar (only when a failure/review phase
+// is active) but always present here so goToStep() and progress work correctly.
 export const WORKFLOW_STEPS: WorkflowStep[] = [
-  'INPUT', 'PLAN', 'COST_ESTIMATION', 'INFRA', 'DOCKER_BUILD', 'TERRAFORM', 'KUBERNETES', 'CICD', 'SUMMARY', 'RESULT',
+  'INPUT',
+  'PLAN',
+  'COST_ESTIMATION',
+  'INFRA',
+  'DOCKER_BUILD',
+  'CORRECTOR_REVIEW',
+  'TERRAFORM',
+  'KUBERNETES',
+  'CICD',
+  'SUMMARY',
+  'RESULT',
 ]
 
 export const STEP_META: Record<WorkflowStep, { label: string; description: string }> = {
-  INPUT:            { label: 'Project Input',    description: 'Define project requirements'             },
-  PLAN:             { label: 'Plan Review',      description: 'Approve the AI-generated plan'           },
-  INFRA:            { label: 'Infrastructure',   description: 'Docker & container configuration'        },
-  COST_ESTIMATION:  { label: 'Cost Estimation',  description: 'AWS monthly cost breakdown & tips'       },
-  DOCKER_BUILD:     { label: 'Docker Build',     description: 'Build & verify the Docker image'         },
-  TERRAFORM:        { label: 'Terraform',        description: 'Infrastructure as code (.tf files)'      },
-  KUBERNETES:       { label: 'Kubernetes',       description: 'Container orchestration manifests'       },
-  SUMMARY:          { label: 'Summary',          description: 'Architecture overview'                   },
-  CICD:             { label: 'CI/CD Pipeline',   description: 'GitHub Actions workflows'                },
-  RESULT:           { label: 'Final Output',     description: 'Logs, artifacts & download'              },
+  INPUT:            { label: 'Project Input',      description: 'Define project requirements'              },
+  PLAN:             { label: 'Plan Review',         description: 'Approve the AI-generated plan'            },
+  INFRA:            { label: 'Infrastructure',      description: 'Docker & container configuration'         },
+  COST_ESTIMATION:  { label: 'Cost Estimation',     description: 'AWS monthly cost breakdown & tips'        },
+  DOCKER_BUILD:     { label: 'Docker Build',        description: 'Build & verify the Docker image'          },
+  CORRECTOR_REVIEW: { label: 'AI Remediation',      description: 'Review AI-suggested fixes for build failure' },
+  TERRAFORM:        { label: 'Terraform',           description: 'Infrastructure as code (.tf files)'       },
+  KUBERNETES:       { label: 'Kubernetes',          description: 'Container orchestration manifests'        },
+  SUMMARY:          { label: 'Summary',             description: 'Architecture overview'                    },
+  CICD:             { label: 'CI/CD Pipeline',      description: 'GitHub Actions workflows'                 },
+  RESULT:           { label: 'Final Output',        description: 'Logs, artifacts & download'               },
+}
+
+// Phases that activate the CORRECTOR_REVIEW step
+const CORRECTOR_ACTIVE_PHASES = new Set([
+  'docker_build_failed',
+  'corrector_analysis_running',
+  'corrector_analysis_completed',
+  'human_review_required',
+  'execution_failed',
+])
+
+export function shouldShowCorrectorStep(currentPhase: string): boolean {
+  return CORRECTOR_ACTIVE_PHASES.has(currentPhase)
+}
+
+export function hasExecutionFailed(currentPhase: string): boolean {
+  return currentPhase === 'execution_failed'
+}
+
+export function canRetryBuild(retryCount: number, maxRetries: number): boolean {
+  return retryCount < maxRetries
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -59,8 +96,11 @@ interface WorkflowStore {
   currentPhase: string
   isPhaseLoading: boolean
 
-  // Locally-edited artifact content — key matches artifact record key
+  // Locally-edited artifact content
   editedArtifacts: Record<string, string>
+
+  // Corrector agent state
+  correctorData?: CorrectorStatusResponse
 
   isLoading: boolean
   isGenerating: boolean
@@ -76,6 +116,7 @@ interface WorkflowStore {
   setTask: (task: TaskResponse) => void
   mergePhaseResponse: (resp: WorkflowPhaseResponse) => void
   editArtifact: (key: string, content: string) => void
+  setCorrectorData: (data: CorrectorStatusResponse) => void
   setLoading: (v: boolean) => void
   setPhaseLoading: (v: boolean) => void
   setGenerating: (v: boolean) => void
@@ -140,6 +181,8 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
   editArtifact: (key, content) =>
     set((s) => ({ editedArtifacts: { ...s.editedArtifacts, [key]: content } })),
 
+  setCorrectorData: (correctorData) => set({ correctorData }),
+
   setLoading: (isLoading) => set({ isLoading }),
 
   setPhaseLoading: (isPhaseLoading) => set({ isPhaseLoading }),
@@ -164,6 +207,7 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
       editedArtifacts: {},
       phaseArtifacts: {},
       currentPhase: '',
+      correctorData: undefined,
       isLoading: false,
       isPhaseLoading: false,
       isGenerating: false,

@@ -12,12 +12,14 @@ import {
   Check,
   Loader2,
   DollarSign,
+  Wrench,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   useWorkflowStore,
   WORKFLOW_STEPS,
   STEP_META,
+  shouldShowCorrectorStep,
   type WorkflowStep,
 } from '@/store/workflowStore'
 
@@ -29,6 +31,7 @@ const STEP_ICONS: Record<WorkflowStep, React.ElementType> = {
   INFRA:            Container,
   COST_ESTIMATION:  DollarSign,
   DOCKER_BUILD:     Play,
+  CORRECTOR_REVIEW: Wrench,
   TERRAFORM:        Layers,
   KUBERNETES:       Ship,
   SUMMARY:          LayoutGrid,
@@ -36,14 +39,24 @@ const STEP_ICONS: Record<WorkflowStep, React.ElementType> = {
   RESULT:           CheckCircle2,
 }
 
-// Determines which steps are navigable (completed or current)
+// CORRECTOR_REVIEW is only displayed when the workflow phase indicates a
+// build failure / active remediation. Otherwise it is hidden from the sidebar
+// so normal successful builds don't show a redundant step.
+function useVisibleSteps(currentPhase: string): WorkflowStep[] {
+  const showCorrector = shouldShowCorrectorStep(currentPhase)
+  return WORKFLOW_STEPS.filter(
+    (s) => s !== 'CORRECTOR_REVIEW' || showCorrector,
+  )
+}
+
 function getStepStatus(
   step: WorkflowStep,
   current: WorkflowStep,
+  visibleSteps: WorkflowStep[],
   isGenerating: boolean,
 ): 'completed' | 'current' | 'generating' | 'locked' {
-  const currentIdx = WORKFLOW_STEPS.indexOf(current)
-  const stepIdx    = WORKFLOW_STEPS.indexOf(step)
+  const currentIdx = visibleSteps.indexOf(current)
+  const stepIdx    = visibleSteps.indexOf(step)
 
   if (isGenerating && step === current) return 'generating'
   if (stepIdx < currentIdx) return 'completed'
@@ -57,11 +70,13 @@ function StepItem({
   step,
   index,
   status,
+  isCorrectorStep,
   onClick,
 }: {
   step: WorkflowStep
   index: number
   status: ReturnType<typeof getStepStatus>
+  isCorrectorStep: boolean
   onClick: () => void
 }) {
   const Icon = STEP_ICONS[step]
@@ -76,31 +91,23 @@ function StepItem({
       className={cn(
         'w-full text-left flex items-start gap-3 px-3 py-3 rounded-xl transition-all',
         'border',
-        status === 'current'
-          ? cn(
-              'bg-brand-50 dark:bg-brand-600/15',
-              'border-brand-200 dark:border-brand-500/25',
-            )
+        isCorrectorStep && status === 'current'
+          ? cn('bg-amber-500/8 border-amber-500/25')
+          : status === 'current'
+          ? cn('bg-brand-50 dark:bg-brand-600/15', 'border-brand-200 dark:border-brand-500/25')
           : status === 'completed'
-          ? cn(
-              'border-transparent',
-              'hover:bg-slate-100 dark:hover:bg-white/[0.04]',
-              'hover:border-slate-200 dark:hover:border-white/[0.06]',
-            )
+          ? cn('border-transparent', 'hover:bg-slate-100 dark:hover:bg-white/[0.04]', 'hover:border-slate-200 dark:hover:border-white/[0.06]')
           : status === 'generating'
-          ? cn(
-              'bg-amber-50 dark:bg-amber-500/10',
-              'border-amber-200 dark:border-amber-500/20',
-            )
-          : cn(
-              'border-transparent opacity-40 cursor-not-allowed',
-            ),
+          ? cn('bg-amber-50 dark:bg-amber-500/10', 'border-amber-200 dark:border-amber-500/20')
+          : cn('border-transparent opacity-40 cursor-not-allowed'),
       )}
     >
-      {/* ── Circle with number / icon ── */}
+      {/* Circle with number / icon */}
       <div className={cn(
         'shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mt-0.5',
-        status === 'current'
+        isCorrectorStep && status === 'current'
+          ? 'bg-amber-500 text-slate-900'
+          : status === 'current'
           ? 'bg-brand-600 text-white'
           : status === 'completed'
           ? 'bg-emerald-500 dark:bg-emerald-600 text-white'
@@ -117,12 +124,14 @@ function StepItem({
         )}
       </div>
 
-      {/* ── Labels ── */}
+      {/* Labels */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <p className={cn(
             'text-sm font-medium leading-tight truncate',
-            status === 'current'
+            isCorrectorStep && status === 'current'
+              ? 'text-amber-600 dark:text-amber-300'
+              : status === 'current'
               ? 'text-brand-700 dark:text-brand-300'
               : status === 'completed'
               ? 'text-slate-700 dark:text-slate-200'
@@ -138,7 +147,9 @@ function StepItem({
         </div>
         <p className={cn(
           'text-xs mt-0.5 leading-tight truncate',
-          status === 'current'
+          isCorrectorStep && status === 'current'
+            ? 'text-amber-600/60 dark:text-amber-400/60'
+            : status === 'current'
             ? 'text-brand-600/70 dark:text-brand-400/70'
             : 'text-slate-400 dark:text-slate-600',
         )}>
@@ -146,7 +157,7 @@ function StepItem({
         </p>
       </div>
 
-      {/* ── Step number badge (top-right) ── */}
+      {/* Step number badge */}
       <span className={cn(
         'shrink-0 text-[10px] font-mono mt-0.5',
         status === 'locked'
@@ -177,8 +188,9 @@ function Connector({ active }: { active: boolean }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function StepperSidebar() {
-  const { currentStep, isGenerating, goToStep } = useWorkflowStore()
-  const currentIdx = WORKFLOW_STEPS.indexOf(currentStep)
+  const { currentStep, currentPhase, isGenerating, goToStep } = useWorkflowStore()
+  const visibleSteps = useVisibleSteps(currentPhase)
+  const currentIdx   = visibleSteps.indexOf(currentStep)
 
   return (
     <aside className={cn(
@@ -193,27 +205,29 @@ export function StepperSidebar() {
           Workflow Steps
         </p>
         <p className="text-[10px] text-slate-300 dark:text-slate-700 mt-0.5">
-          {currentIdx + 1} of {WORKFLOW_STEPS.length}
+          {Math.max(currentIdx + 1, 1)} of {visibleSteps.length}
         </p>
       </div>
 
       {/* Steps */}
       <nav className="flex-1 px-3 py-3 space-y-0">
-        {WORKFLOW_STEPS.map((step, i) => {
-          const status = getStepStatus(step, currentStep, isGenerating)
+        {visibleSteps.map((step, i) => {
+          const status = getStepStatus(step, currentStep, visibleSteps, isGenerating)
+          const isCorrectorStep = step === 'CORRECTOR_REVIEW'
           return (
             <div key={step}>
               <StepItem
                 step={step}
                 index={i}
                 status={status}
+                isCorrectorStep={isCorrectorStep}
                 onClick={() => {
                   if (status === 'completed' || status === 'current') {
                     goToStep(step)
                   }
                 }}
               />
-              {i < WORKFLOW_STEPS.length - 1 && (
+              {i < visibleSteps.length - 1 && (
                 <Connector active={i < currentIdx} />
               )}
             </div>
@@ -225,12 +239,20 @@ export function StepperSidebar() {
       <div className="px-4 py-4 border-t border-slate-100 dark:border-white/[0.04]">
         <div className="flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-600 mb-1.5">
           <span>Progress</span>
-          <span>{Math.round((currentIdx / (WORKFLOW_STEPS.length - 1)) * 100)}%</span>
+          <span>
+            {visibleSteps.length > 1
+              ? Math.round((Math.max(currentIdx, 0) / (visibleSteps.length - 1)) * 100)
+              : 0}%
+          </span>
         </div>
         <div className="h-1 rounded-full bg-slate-100 dark:bg-surface-800">
           <div
             className="h-1 rounded-full bg-brand-500 transition-all duration-500"
-            style={{ width: `${(currentIdx / (WORKFLOW_STEPS.length - 1)) * 100}%` }}
+            style={{
+              width: `${visibleSteps.length > 1
+                ? (Math.max(currentIdx, 0) / (visibleSteps.length - 1)) * 100
+                : 0}%`,
+            }}
           />
         </div>
       </div>

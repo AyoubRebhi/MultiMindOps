@@ -8,6 +8,7 @@ import { PlanStep }              from '@/steps/PlanStep'
 import { InfraStep }             from '@/steps/InfraStep'
 import { CostEstimationStep }    from '@/steps/CostEstimationStep'
 import { DockerBuildStep }       from '@/steps/DockerBuildStep'
+import { CorrectorReviewStep }   from '@/steps/CorrectorReviewStep'
 import { TerraformStep }         from '@/steps/TerraformStep'
 import { KubernetesStep }        from '@/steps/KubernetesStep'
 import { SummaryStep }           from '@/steps/SummaryStep'
@@ -15,6 +16,7 @@ import { CicdStep }              from '@/steps/CicdStep'
 import { ResultStep }            from '@/steps/ResultStep'
 
 import { useWorkflowStore, useWorkflowStore as _store } from '@/store/workflowStore'
+import { shouldShowCorrectorStep }                       from '@/store/workflowStore'
 import type { WorkflowStep } from '@/store/workflowStore'
 import {
   generateArtifacts,
@@ -27,34 +29,37 @@ import {
   workflowRunCicd,
   workflowGetState,
 } from '@/services/workflowApi'
-import { TASKS_KEY } from '@/hooks/useTasks'
+import { getCorrectorAnalysis } from '@/services/correctorApi'
+import { TASKS_KEY }        from '@/hooks/useTasks'
 import { isTerminalStatus } from '@/lib/utils'
-import { cn } from '@/lib/utils'
+import { cn }               from '@/lib/utils'
 import type { PlanValidationDecision } from '@/types'
 
 const SESSION_KEY = 'wf_task_id'
 
 // Backend phase → UI step used when restoring state after page refresh.
-// COST_ESTIMATION is a frontend-only step with no backend phase; page-refresh
-// restores the nearest real phase instead.
 const PHASE_TO_STEP: Record<string, WorkflowStep> = {
-  planning_complete:      'PLAN',
-  docker_completed:       'INFRA',       // user already saw cost estimation
-  docker_build_running:   'DOCKER_BUILD',
-  docker_build_success:   'DOCKER_BUILD',
-  docker_build_failed:    'DOCKER_BUILD',
-  terraform_completed:    'TERRAFORM',
-  kubernetes_completed:   'KUBERNETES',
-  completed:              'CICD',
+  planning_complete:          'PLAN',
+  docker_completed:           'INFRA',
+  docker_build_running:       'DOCKER_BUILD',
+  docker_build_success:       'DOCKER_BUILD',
+  docker_build_failed:        'DOCKER_BUILD',      // keep on Docker; corrector poll auto-advances
+  corrector_analysis_running: 'CORRECTOR_REVIEW',
+  human_review_required:      'CORRECTOR_REVIEW',
+  execution_failed:           'CORRECTOR_REVIEW',
+  terraform_completed:        'TERRAFORM',
+  kubernetes_completed:       'KUBERNETES',
+  completed:                  'CICD',
 }
 
-// Expected backend phase that must be active before the step's API call fires.
+// Expected backend phase for each step's continuation guard.
 const STEP_TO_EXPECTED_PHASE: Partial<Record<WorkflowStep, string>> = {
-  PLAN:         'planning_complete',
-  INFRA:        'docker_completed',
-  DOCKER_BUILD: 'docker_build_success',
-  TERRAFORM:    'terraform_completed',
-  KUBERNETES:   'kubernetes_completed',
+  PLAN:             'planning_complete',
+  INFRA:            'docker_completed',
+  DOCKER_BUILD:     'docker_build_success',
+  CORRECTOR_REVIEW: 'human_review_required',
+  TERRAFORM:        'terraform_completed',
+  KUBERNETES:       'kubernetes_completed',
 }
 
 // ── Debug panel ───────────────────────────────────────────────────────────────
@@ -194,6 +199,69 @@ function useGenerationPolling() {
   }, [isGenerating, taskId])
 }
 
+// ── Corrector phase polling hook ──────────────────────────────────────────────
+// When on DOCKER_BUILD with a failed build, the backend runs the corrector
+// agent asynchronously. This hook polls the corrector endpoint until the
+// backend phase transitions to human_review_required or execution_failed,
+// then auto-routes the user to CORRECTOR_REVIEW.
+
+function useCorrectorPolling() {
+  const {
+    taskId, currentStep, currentPhase,
+    goToStep, setCorrectorData, mergePhaseResponse,
+  } = useWorkflowStore()
+
+  const stoppedRef = useRef(false)
+  const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    // Only activate on DOCKER_BUILD while build has failed
+    if (currentStep !== 'DOCKER_BUILD') return
+    if (currentPhase !== 'docker_build_failed') return
+    if (!taskId) return
+
+    stoppedRef.current = false
+
+    async function poll() {
+      if (stoppedRef.current) return
+      try {
+        const data = await getCorrectorAnalysis(taskId!)
+        setCorrectorData(data)
+
+        const phase = data.current_phase
+        if (phase === 'human_review_required' || phase === 'execution_failed') {
+          stoppedRef.current = true
+          // Sync workflow phase into store so StepperSidebar shows corrector step
+          mergePhaseResponse({
+            task_id: taskId!,
+            current_phase: phase,
+            status: 'in_progress',
+            artifacts: {},
+            terraform_outputs: {},
+            logs: [],
+            message: '',
+          })
+          goToStep('CORRECTOR_REVIEW')
+          return
+        }
+      } catch { /* ignore polling errors */ }
+
+      if (!stoppedRef.current) {
+        timerRef.current = setTimeout(poll, 3_000)
+      }
+    }
+
+    // Small initial delay so the build's done message lands first
+    timerRef.current = setTimeout(poll, 2_000)
+
+    return () => {
+      stoppedRef.current = true
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, currentStep, currentPhase])
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function WorkflowPage() {
@@ -222,6 +290,7 @@ export default function WorkflowPage() {
   } = useWorkflowStore()
 
   useGenerationPolling()
+  useCorrectorPolling()
 
   const rejectedMsgRef  = useRef<string | null>(null)
   const overlayLabelRef = useRef<string>('')
@@ -317,9 +386,7 @@ export default function WorkflowPage() {
     }
   }, [userInput, envFile, clearError, setLoading, setTaskId, setTask, setGenerating, setError])
 
-  // ── Step 2b: Step-by-step — plan approved → show Cost Estimation ──────────
-  // Docker artifact generation is deferred to handleApproveCostEstimation so
-  // the user can review the estimated AWS cost BEFORE infra generation begins.
+  // ── Step 2b: Step-by-step — plan approved → Cost Estimation ──────────────
   const handleApproveStepByStep = useCallback(async () => {
     if (!taskId) { setError('No task ID. Re-run plan.'); return }
     const state = _store.getState()
@@ -327,7 +394,6 @@ export default function WorkflowPage() {
       setError('Invalid workflow order — plan must be complete first'); return
     }
     clearError()
-    // Navigate to cost estimation; docker artifacts generated after user approves cost.
     goToStep('COST_ESTIMATION')
   }, [taskId, clearError, goToStep, setError])
 
@@ -345,7 +411,6 @@ export default function WorkflowPage() {
       mergePhaseResponse(fresh)
       const task = await pollTask(taskId)
       setTask(task)
-      // Backend phase is now docker_completed → INFRA step
       const nextStep = PHASE_TO_STEP[fresh.current_phase]
       if (nextStep) goToStep(nextStep)
       else goToStep('INFRA')
@@ -364,7 +429,6 @@ export default function WorkflowPage() {
       setError('Invalid workflow order — infrastructure must be generated first'); return
     }
     clearError()
-    // Docker build is auto-started inside DockerBuildStep when currentPhase === docker_completed.
     goToStep('DOCKER_BUILD')
   }, [taskId, clearError, goToStep, setError])
 
@@ -394,6 +458,15 @@ export default function WorkflowPage() {
       setPhaseLoading(false)
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
+
+  // ── Step 5b: Corrector retry approved → back to Docker Build ─────────────
+  // startDockerBuild is called inside CorrectorReviewStep itself before invoking
+  // this callback, so here we only need to navigate and let DockerBuildStep
+  // reconnect via its restore-from-DB effect.
+  const handleCorrectorRetry = useCallback(() => {
+    clearError()
+    goToStep('DOCKER_BUILD')
+  }, [clearError, goToStep])
 
   // ── Step 6: Terraform approved → run Kubernetes ───────────────────────────
   const handleApproveTerraform = useCallback(async () => {
@@ -477,7 +550,6 @@ export default function WorkflowPage() {
         }
 
         if (decision === 'approved') {
-          // Show cost estimation before generating docker artifacts
           goToStep('COST_ESTIMATION')
         }
       } catch (e) {
@@ -497,6 +569,9 @@ export default function WorkflowPage() {
 
   const showOverlay = isGenerating || isPhaseLoading
 
+  // Corrector step visibility flag (passed to DockerBuildStep for UI hint)
+  const correctorPhaseActive = shouldShowCorrectorStep(currentPhase)
+
   // ── Step routing ──────────────────────────────────────────────────────────
   const stepContent = {
     INPUT: (
@@ -511,9 +586,6 @@ export default function WorkflowPage() {
         rejectedMessage={rejectedMsgRef.current}
       />
     ),
-    // Cost estimation is now BEFORE infrastructure generation.
-    // The user reviews the estimated AWS cost and clicks "Continue" to trigger
-    // docker artifact generation, then proceeds to INFRA for review.
     COST_ESTIMATION: (
       <CostEstimationStep
         onContinue={handleApproveCostEstimation}
@@ -535,10 +607,22 @@ export default function WorkflowPage() {
         isPhaseLoading={isPhaseLoading}
       />
     ),
+    CORRECTOR_REVIEW: (
+      <CorrectorReviewStep
+        onRetryBuild={handleCorrectorRetry}
+        onBackToInfra={() => goToStep('INFRA')}
+        onStopWorkflow={handleReset}
+      />
+    ),
     TERRAFORM: (
       <TerraformStep
         onApprove={handleApproveTerraform}
-        onBack={() => goToStep('DOCKER_BUILD')}
+        onBack={() => {
+          // After a successful corrector retry, go back to docker build.
+          // Otherwise go back to infra.
+          if (correctorPhaseActive) goToStep('CORRECTOR_REVIEW')
+          else goToStep('DOCKER_BUILD')
+        }}
         isPhaseLoading={isPhaseLoading}
       />
     ),
@@ -550,7 +634,11 @@ export default function WorkflowPage() {
       />
     ),
     CICD: (
-      <CicdStep onApprove={() => goToStep('SUMMARY')} onBack={() => goToStep('KUBERNETES')} isLoading={isPhaseLoading} />
+      <CicdStep
+        onApprove={() => goToStep('SUMMARY')}
+        onBack={() => goToStep('KUBERNETES')}
+        isLoading={isPhaseLoading}
+      />
     ),
     SUMMARY: (
       <SummaryStep onApprove={() => goToStep('RESULT')} onBack={() => goToStep('CICD')} />
