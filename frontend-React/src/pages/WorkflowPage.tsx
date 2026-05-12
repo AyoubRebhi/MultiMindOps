@@ -2,64 +2,61 @@ import { useCallback, useEffect, useRef } from 'react'
 import { Loader2, RotateCcw, AlertCircle, X } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 
-import { StepperSidebar }       from '@/components/workflow/StepperSidebar'
-import { InputStep }             from '@/steps/InputStep'
-import { PlanStep }              from '@/steps/PlanStep'
-import { InfraStep }             from '@/steps/InfraStep'
-import { CostEstimationStep }    from '@/steps/CostEstimationStep'
-import { DockerBuildStep }       from '@/steps/DockerBuildStep'
-import { CorrectorReviewStep }   from '@/steps/CorrectorReviewStep'
-import { TerraformStep }         from '@/steps/TerraformStep'
-import { KubernetesStep }        from '@/steps/KubernetesStep'
-import { SummaryStep }           from '@/steps/SummaryStep'
-import { CicdStep }              from '@/steps/CicdStep'
-import { ResultStep }            from '@/steps/ResultStep'
+import { StepperSidebar }             from '@/components/workflow/StepperSidebar'
+import { InputStep }                   from '@/steps/InputStep'
+import { ArchitectureDecisionStep }    from '@/steps/ArchitectureDecisionStep'
+import { InfraStep }                   from '@/steps/InfraStep'
+import { DockerBuildStep }             from '@/steps/DockerBuildStep'
+import { CorrectorReviewStep }         from '@/steps/CorrectorReviewStep'
+import { TerraformStep }               from '@/steps/TerraformStep'
+import { KubernetesStep }              from '@/steps/KubernetesStep'
+import { SummaryStep }                 from '@/steps/SummaryStep'
+import { CicdStep }                    from '@/steps/CicdStep'
+import { ResultStep }                  from '@/steps/ResultStep'
 
 import { useWorkflowStore, useWorkflowStore as _store } from '@/store/workflowStore'
 import { shouldShowCorrectorStep }                       from '@/store/workflowStore'
 import type { WorkflowStep } from '@/store/workflowStore'
 import {
-  generateArtifacts,
-  approvePlanHumanValidation,
-  pollTask,
-  workflowPlan,
+  workflowArchitectureDecision,
+  workflowSelectPlan,
   workflowRunDocker,
   workflowRunTerraform,
   workflowRunKubernetes,
   workflowRunCicd,
   workflowGetState,
+  pollTask,
 } from '@/services/workflowApi'
 import { getCorrectorAnalysis } from '@/services/correctorApi'
 import { TASKS_KEY }        from '@/hooks/useTasks'
 import { isTerminalStatus } from '@/lib/utils'
 import { cn }               from '@/lib/utils'
-import type { PlanValidationDecision } from '@/types'
 
 const SESSION_KEY = 'wf_task_id'
 
-// Backend phase → UI step used when restoring state after page refresh.
+// Backend phase → UI step (used when restoring state on page refresh).
 const PHASE_TO_STEP: Record<string, WorkflowStep> = {
-  planning_complete:          'PLAN',
-  docker_completed:           'INFRA',
-  docker_build_running:       'DOCKER_BUILD',
-  docker_build_success:       'DOCKER_BUILD',
-  docker_build_failed:        'DOCKER_BUILD',      // keep on Docker; corrector poll auto-advances
-  corrector_analysis_running: 'CORRECTOR_REVIEW',
-  human_review_required:      'CORRECTOR_REVIEW',
-  execution_failed:           'CORRECTOR_REVIEW',
-  terraform_completed:        'TERRAFORM',
-  kubernetes_completed:       'KUBERNETES',
-  completed:                  'CICD',
+  architecture_decision_complete: 'ARCHITECTURE_DECISION',
+  planning_complete:              'ARCHITECTURE_DECISION',   // legacy compat
+  docker_completed:               'INFRA',
+  docker_build_running:           'DOCKER_BUILD',
+  docker_build_success:           'DOCKER_BUILD',
+  docker_build_failed:            'DOCKER_BUILD',
+  corrector_analysis_running:     'CORRECTOR_REVIEW',
+  human_review_required:          'CORRECTOR_REVIEW',
+  execution_failed:               'CORRECTOR_REVIEW',
+  terraform_completed:            'TERRAFORM',
+  kubernetes_completed:           'KUBERNETES',
+  completed:                      'CICD',
 }
 
-// Expected backend phase for each step's continuation guard.
 const STEP_TO_EXPECTED_PHASE: Partial<Record<WorkflowStep, string>> = {
-  PLAN:             'planning_complete',
-  INFRA:            'docker_completed',
-  DOCKER_BUILD:     'docker_build_success',
-  CORRECTOR_REVIEW: 'human_review_required',
-  TERRAFORM:        'terraform_completed',
-  KUBERNETES:       'kubernetes_completed',
+  ARCHITECTURE_DECISION: 'planning_complete',
+  INFRA:                 'docker_completed',
+  DOCKER_BUILD:          'docker_build_success',
+  CORRECTOR_REVIEW:      'human_review_required',
+  TERRAFORM:             'terraform_completed',
+  KUBERNETES:            'kubernetes_completed',
 }
 
 // ── Debug panel ───────────────────────────────────────────────────────────────
@@ -87,13 +84,12 @@ function DebugPanel({ currentStep, currentPhase, lastApiCall }: {
 
 function GeneratingOverlay({ taskId, label }: { taskId?: string; label?: string }) {
   const STAGES = [
-    { label: 'Codebase analysis',      color: 'bg-purple-500' },
-    { label: 'Infrastructure gen.',    color: 'bg-cyan-500'   },
-    { label: 'Terraform & Kubernetes', color: 'bg-orange-500' },
-    { label: 'CI/CD pipeline',         color: 'bg-brand-500'  },
-    { label: 'Security scanning',      color: 'bg-rose-500'   },
+    { label: 'Architecture analysis',   color: 'bg-purple-500' },
+    { label: 'Cost estimation',         color: 'bg-emerald-500' },
+    { label: 'Infrastructure gen.',     color: 'bg-cyan-500'   },
+    { label: 'Terraform & Kubernetes',  color: 'bg-orange-500' },
+    { label: 'CI/CD pipeline',          color: 'bg-brand-500'  },
   ]
-
   return (
     <div className={cn(
       'absolute inset-0 z-20 flex items-center justify-center',
@@ -175,14 +171,10 @@ function useGenerationPolling() {
         qc.setQueryData([...TASKS_KEY, taskId], task)
         qc.invalidateQueries({ queryKey: TASKS_KEY })
         if (task.logs?.length) task.logs.forEach((l) => addLog(l))
-
         if (isTerminalStatus(task.status) || task.status === 'awaiting_human_review') {
           stoppedRef.current = true
-          if (task.status === 'failed') {
-            setError(task.error_message ?? 'Generation failed.')
-          } else {
-            setTask(task)
-          }
+          if (task.status === 'failed') setError(task.error_message ?? 'Generation failed.')
+          else setTask(task)
           setGenerating(false)
           return
         }
@@ -199,27 +191,17 @@ function useGenerationPolling() {
   }, [isGenerating, taskId])
 }
 
-// ── Corrector phase polling hook ──────────────────────────────────────────────
-// When on DOCKER_BUILD with a failed build, the backend runs the corrector
-// agent asynchronously. This hook polls the corrector endpoint until the
-// backend phase transitions to human_review_required or execution_failed,
-// then auto-routes the user to CORRECTOR_REVIEW.
+// ── Corrector polling hook ────────────────────────────────────────────────────
 
 function useCorrectorPolling() {
-  const {
-    taskId, currentStep, currentPhase,
-    goToStep, setCorrectorData, mergePhaseResponse,
-  } = useWorkflowStore()
-
+  const { taskId, currentStep, currentPhase, goToStep, setCorrectorData, mergePhaseResponse } = useWorkflowStore()
   const stoppedRef = useRef(false)
   const timerRef   = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    // Only activate on DOCKER_BUILD while build has failed
     if (currentStep !== 'DOCKER_BUILD') return
     if (currentPhase !== 'docker_build_failed') return
     if (!taskId) return
-
     stoppedRef.current = false
 
     async function poll() {
@@ -227,33 +209,18 @@ function useCorrectorPolling() {
       try {
         const data = await getCorrectorAnalysis(taskId!)
         setCorrectorData(data)
-
         const phase = data.current_phase
         if (phase === 'human_review_required' || phase === 'execution_failed') {
           stoppedRef.current = true
-          // Sync workflow phase into store so StepperSidebar shows corrector step
-          mergePhaseResponse({
-            task_id: taskId!,
-            current_phase: phase,
-            status: 'in_progress',
-            artifacts: {},
-            terraform_outputs: {},
-            logs: [],
-            message: '',
-          })
+          mergePhaseResponse({ task_id: taskId!, current_phase: phase, status: 'in_progress', artifacts: {}, terraform_outputs: {}, logs: [], message: '' })
           goToStep('CORRECTOR_REVIEW')
           return
         }
-      } catch { /* ignore polling errors */ }
-
-      if (!stoppedRef.current) {
-        timerRef.current = setTimeout(poll, 3_000)
-      }
+      } catch { /* ignore */ }
+      if (!stoppedRef.current) timerRef.current = setTimeout(poll, 3_000)
     }
 
-    // Small initial delay so the build's done message lands first
     timerRef.current = setTimeout(poll, 2_000)
-
     return () => {
       stoppedRef.current = true
       if (timerRef.current) clearTimeout(timerRef.current)
@@ -266,52 +233,35 @@ function useCorrectorPolling() {
 
 export default function WorkflowPage() {
   const {
-    currentStep,
-    currentPhase,
-    userInput,
-    envFile,
-    isLoading,
-    isGenerating,
-    isPhaseLoading,
-    error,
-    requiresHumanValidation,
-    taskId,
-    setLoading,
-    setPhaseLoading,
-    setGenerating,
-    setError,
-    clearError,
-    goToStep,
-    setPlanPreview,
-    setTaskId,
-    setTask,
-    mergePhaseResponse,
-    reset,
+    currentStep, currentPhase, userInput, envFile,
+    isLoading, isGenerating, isPhaseLoading, error, taskId,
+    setLoading, setPhaseLoading, setGenerating,
+    setError, clearError, goToStep,
+    setArchitectureDecision, setSelectedPlanId,
+    setTaskId, setTask, mergePhaseResponse, reset,
   } = useWorkflowStore()
 
   useGenerationPolling()
   useCorrectorPolling()
 
-  const rejectedMsgRef  = useRef<string | null>(null)
   const overlayLabelRef = useRef<string>('')
   const lastApiCallRef  = useRef<string>('')
 
-  // ── Persist taskId across page refreshes ─────────────────────────────────
+  // ── Session persistence ───────────────────────────────────────────────────
   useEffect(() => {
     if (taskId) sessionStorage.setItem(SESSION_KEY, taskId)
   }, [taskId])
 
-  // ── Restore workflow state on page load ───────────────────────────────────
   useEffect(() => {
     const stored = sessionStorage.getItem(SESSION_KEY)
     if (!stored || _store.getState().taskId) return
-
     Promise.all([workflowGetState(stored), pollTask(stored)])
       .then(([phaseResp, restoredTask]) => {
         const s = _store.getState()
         s.mergePhaseResponse(phaseResp)
         s.setTaskId(phaseResp.task_id)
         s.setTask(restoredTask)
+        if (phaseResp.architecture_decision) s.setArchitectureDecision(phaseResp.architecture_decision)
         const step = PHASE_TO_STEP[phaseResp.current_phase]
         if (step) s.goToStep(step)
       })
@@ -319,13 +269,14 @@ export default function WorkflowPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ── Step 1: Submit → plan ─────────────────────────────────────────────────
-  const handlePlanPreview = useCallback(async (file: File) => {
+  // ── Step 1: Submit → Architecture Decision ────────────────────────────────
+  const handleArchitectureDecision = useCallback(async (file: File) => {
     clearError()
     setLoading(true)
-    overlayLabelRef.current = 'Running AI planning…'
+    overlayLabelRef.current = 'AI architect is analysing your project & generating strategies…'
+    lastApiCallRef.current = 'architecture-decision'
     try {
-      const resp = await workflowPlan(
+      const resp = await workflowArchitectureDecision(
         {
           prompt:                userInput.prompt,
           repo_url:              userInput.repo_url,
@@ -335,71 +286,42 @@ export default function WorkflowPage() {
         file,
       )
       mergePhaseResponse(resp)
-      setPlanPreview({
-        task_id:             resp.task_id,
-        status:              resp.status,
-        requires_user_input: true,
-        plan:                resp.logs as unknown as undefined,
-        logs:                resp.logs as never[],
-      })
+      if (resp.architecture_decision) setArchitectureDecision(resp.architecture_decision)
       const task = await pollTask(resp.task_id)
       setTask(task)
-      if (task.plan) {
-        setPlanPreview({
-          task_id:             resp.task_id,
-          status:              resp.status,
-          requires_user_input: true,
-          plan:                task.plan,
-          logs:                (task.logs ?? []) as never[],
-        })
-      }
-      goToStep('PLAN')
+      setTaskId(resp.task_id)
+      goToStep('ARCHITECTURE_DECISION')
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setLoading(false)
     }
-  }, [userInput, clearError, setLoading, setPlanPreview, goToStep, setError, mergePhaseResponse, setTask])
+  }, [userInput, clearError, setLoading, setArchitectureDecision, setTaskId, setTask, goToStep, setError, mergePhaseResponse])
 
-  // ── Step 2a: Standard (legacy) path ──────────────────────────────────────
-  const handleApproveStandard = useCallback(async (approvedArtifacts: string[]) => {
+  // ── Step 2a: Select a plan ────────────────────────────────────────────────
+  const handleSelectPlan = useCallback(async (planId: string) => {
+    if (!taskId) { setError('No task ID. Re-run architecture analysis.'); return }
     clearError()
-    setLoading(true)
+    lastApiCallRef.current = 'select-plan'
     try {
-      const task = await generateArtifacts(
-        {
-          prompt:                userInput.prompt,
-          repo_url:              userInput.repo_url,
-          repository_visibility: userInput.repository_visibility,
-          github_token:          userInput.github_token || undefined,
-          approved_artifacts:    approvedArtifacts,
-        },
-        envFile,
-      )
-      setTaskId(task.id)
-      setTask(task)
-      setGenerating(true)
+      const resp = await workflowSelectPlan(taskId, planId)
+      mergePhaseResponse(resp)
+      setSelectedPlanId(planId)
     } catch (e) {
       setError((e as Error).message)
-    } finally {
-      setLoading(false)
     }
-  }, [userInput, envFile, clearError, setLoading, setTaskId, setTask, setGenerating, setError])
+  }, [taskId, clearError, setSelectedPlanId, mergePhaseResponse, setError])
 
-  // ── Step 2b: Step-by-step — plan approved → Cost Estimation ──────────────
-  const handleApproveStepByStep = useCallback(async () => {
-    if (!taskId) { setError('No task ID. Re-run plan.'); return }
-    const state = _store.getState()
-    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['PLAN']!) {
-      setError('Invalid workflow order — plan must be complete first'); return
-    }
-    clearError()
-    goToStep('COST_ESTIMATION')
-  }, [taskId, clearError, goToStep, setError])
-
-  // ── Step 3: Cost estimation approved → generate docker artifacts → INFRA ──
-  const handleApproveCostEstimation = useCallback(async () => {
+  // ── Step 2b: Confirm → run-docker → INFRA ────────────────────────────────
+  const handleConfirmAndGenerate = useCallback(async () => {
     if (!taskId) return
+    const state = _store.getState()
+    // Guard: need planning_complete (set by /select-plan or legacy tasks)
+    const validPhases = ['planning_complete', 'architecture_decision_complete']
+    if (!validPhases.includes(state.currentPhase)) {
+      setError('Select a deployment strategy before generating infrastructure.')
+      return
+    }
     clearError()
     setPhaseLoading(true)
     overlayLabelRef.current = 'Generating Docker & infrastructure artifacts…'
@@ -421,22 +343,20 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 4: INFRA approved → start Docker build ───────────────────────────
+  // ── Step 3: INFRA approved → Docker build ───────────────────────────────
   const handleApproveInfra = useCallback(async () => {
     if (!taskId) return
-    const state = _store.getState()
-    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['INFRA']!) {
-      setError('Invalid workflow order — infrastructure must be generated first'); return
+    if (_store.getState().currentPhase !== STEP_TO_EXPECTED_PHASE['INFRA']!) {
+      setError('Infrastructure must be generated first'); return
     }
     clearError()
     goToStep('DOCKER_BUILD')
   }, [taskId, clearError, goToStep, setError])
 
-  // ── Step 5: Docker build succeeded → run Terraform ────────────────────────
+  // ── Step 4: Docker succeeded → Terraform ────────────────────────────────
   const handleDockerBuildContinue = useCallback(async () => {
     if (!taskId) return
-    const state = _store.getState()
-    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['DOCKER_BUILD']!) {
+    if (_store.getState().currentPhase !== STEP_TO_EXPECTED_PHASE['DOCKER_BUILD']!) {
       setError('Docker build must succeed before running Terraform'); return
     }
     clearError()
@@ -459,20 +379,15 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 5b: Corrector retry approved → back to Docker Build ─────────────
-  // startDockerBuild is called inside CorrectorReviewStep itself before invoking
-  // this callback, so here we only need to navigate and let DockerBuildStep
-  // reconnect via its restore-from-DB effect.
+  // ── Corrector retry ───────────────────────────────────────────────────────
   const handleCorrectorRetry = useCallback(() => {
-    clearError()
-    goToStep('DOCKER_BUILD')
+    clearError(); goToStep('DOCKER_BUILD')
   }, [clearError, goToStep])
 
-  // ── Step 6: Terraform approved → run Kubernetes ───────────────────────────
+  // ── Step 5: Terraform approved → Kubernetes ─────────────────────────────
   const handleApproveTerraform = useCallback(async () => {
     if (!taskId) return
-    const state = _store.getState()
-    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['TERRAFORM']!) {
+    if (_store.getState().currentPhase !== STEP_TO_EXPECTED_PHASE['TERRAFORM']!) {
       setError('Invalid workflow order'); return
     }
     clearError()
@@ -495,11 +410,10 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Step 7: Kubernetes approved → run CI/CD ───────────────────────────────
+  // ── Step 6: Kubernetes approved → CI/CD ─────────────────────────────────
   const handleApproveKubernetes = useCallback(async () => {
     if (!taskId) return
-    const state = _store.getState()
-    if (state.currentPhase !== STEP_TO_EXPECTED_PHASE['KUBERNETES']!) {
+    if (_store.getState().currentPhase !== STEP_TO_EXPECTED_PHASE['KUBERNETES']!) {
       setError('Invalid workflow order'); return
     }
     clearError()
@@ -522,81 +436,32 @@ export default function WorkflowPage() {
     }
   }, [taskId, clearError, setPhaseLoading, mergePhaseResponse, setTask, goToStep, setError])
 
-  // ── Human validation path ─────────────────────────────────────────────────
-  const handleApproveHuman = useCallback(
-    async (decision: PlanValidationDecision, feedback?: string) => {
-      if (!taskId) { setError('No task ID.'); return }
-      clearError()
-      setLoading(true)
-      try {
-        const result = await approvePlanHumanValidation({ task_id: taskId, decision, feedback })
-
-        if (decision === 'rejected') {
-          rejectedMsgRef.current = result.message ?? 'Plan rejected.'
-          return
-        }
-
-        if (decision === 'modified' && result.plan) {
-          const { planPreview: current } = useWorkflowStore.getState()
-          if (current) {
-            setPlanPreview({
-              ...current,
-              plan:                result.plan,
-              task_id:             result.task_id,
-              requires_user_input: result.requires_user_input ?? true,
-            })
-          }
-          return
-        }
-
-        if (decision === 'approved') {
-          goToStep('COST_ESTIMATION')
-        }
-      } catch (e) {
-        setError((e as Error).message)
-      } finally {
-        setLoading(false)
-      }
-    },
-    [taskId, clearError, setLoading, setPlanPreview, setError, goToStep],
-  )
-
   const handleReset = useCallback(() => {
-    rejectedMsgRef.current = null
     sessionStorage.removeItem(SESSION_KEY)
     reset()
   }, [reset])
 
   const showOverlay = isGenerating || isPhaseLoading
-
-  // Corrector step visibility flag (passed to DockerBuildStep for UI hint)
   const correctorPhaseActive = shouldShowCorrectorStep(currentPhase)
 
   // ── Step routing ──────────────────────────────────────────────────────────
   const stepContent = {
     INPUT: (
-      <InputStep onSubmit={handlePlanPreview} isLoading={isLoading} />
+      <InputStep onSubmit={handleArchitectureDecision} isLoading={isLoading} />
     ),
-    PLAN: (
-      <PlanStep
-        onApproveStandard={requiresHumanValidation ? handleApproveStandard : handleApproveStepByStep}
-        onApproveHuman={handleApproveHuman}
+    ARCHITECTURE_DECISION: (
+      <ArchitectureDecisionStep
+        onSelectPlan={handleSelectPlan}
+        onConfirm={handleConfirmAndGenerate}
         onBack={() => goToStep('INPUT')}
         isLoading={isLoading || isPhaseLoading}
-        rejectedMessage={rejectedMsgRef.current}
-      />
-    ),
-    COST_ESTIMATION: (
-      <CostEstimationStep
-        onContinue={handleApproveCostEstimation}
-        onBack={() => goToStep('PLAN')}
-        isPhaseLoading={isPhaseLoading}
+        isGenerating={isPhaseLoading}
       />
     ),
     INFRA: (
       <InfraStep
         onApprove={handleApproveInfra}
-        onBack={() => goToStep('COST_ESTIMATION')}
+        onBack={() => goToStep('ARCHITECTURE_DECISION')}
         isPhaseLoading={isPhaseLoading}
       />
     ),
@@ -618,8 +483,6 @@ export default function WorkflowPage() {
       <TerraformStep
         onApprove={handleApproveTerraform}
         onBack={() => {
-          // After a successful corrector retry, go back to docker build.
-          // Otherwise go back to infra.
           if (correctorPhaseActive) goToStep('CORRECTOR_REVIEW')
           else goToStep('DOCKER_BUILD')
         }}
@@ -651,7 +514,6 @@ export default function WorkflowPage() {
       <StepperSidebar />
 
       <div className="flex-1 flex flex-col min-h-0 min-w-0 relative">
-        {/* Top bar */}
         <div className={cn(
           'shrink-0 flex items-center justify-between px-6 py-3',
           'border-b border-slate-200 dark:border-white/[0.06]',

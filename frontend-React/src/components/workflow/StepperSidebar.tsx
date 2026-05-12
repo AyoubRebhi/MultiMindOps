@@ -1,6 +1,5 @@
 import {
   Terminal,
-  ClipboardList,
   Container,
   Play,
   Layers,
@@ -11,7 +10,7 @@ import {
   Lock,
   Check,
   Loader2,
-  DollarSign,
+  Network,
   Wrench,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -26,17 +25,16 @@ import {
 // ── Step icon map ─────────────────────────────────────────────────────────────
 
 const STEP_ICONS: Record<WorkflowStep, React.ElementType> = {
-  INPUT:            Terminal,
-  PLAN:             ClipboardList,
-  INFRA:            Container,
-  COST_ESTIMATION:  DollarSign,
-  DOCKER_BUILD:     Play,
-  CORRECTOR_REVIEW: Wrench,
-  TERRAFORM:        Layers,
-  KUBERNETES:       Ship,
-  SUMMARY:          LayoutGrid,
-  CICD:             GitBranch,
-  RESULT:           CheckCircle2,
+  INPUT:                 Terminal,
+  ARCHITECTURE_DECISION: Network,
+  INFRA:                 Container,
+  DOCKER_BUILD:          Play,
+  CORRECTOR_REVIEW:      Wrench,
+  TERRAFORM:             Layers,
+  KUBERNETES:            Ship,
+  SUMMARY:               LayoutGrid,
+  CICD:                  GitBranch,
+  RESULT:                CheckCircle2,
 }
 
 // CORRECTOR_REVIEW is only displayed when the workflow phase indicates a

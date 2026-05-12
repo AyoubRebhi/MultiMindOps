@@ -200,6 +200,36 @@ export interface PlanPreviewResponse {
   logs: LogEntry[]
 }
 
+// ─── Architecture Decision types ──────────────────────────────────────────────
+export interface ArchitecturePlan {
+  id: string                          // "low_cost" | "balanced" | "high_performance"
+  title: string
+  description: string
+  tradeoffs: string[]
+  scalability_tier: string
+  availability_level: string
+  monthly_cost: number
+  yearly_cost: number
+  cost_breakdown: Record<string, number>
+  cost_profile: string                // "startup" | "small_production" | ...
+  optimization_tips: string[]
+  assumptions: string[]
+  pricing_model_version: string
+  infrastructure: Record<string, unknown>
+  aws_services: string[]
+  // Underlying planner data for the generation phase
+  plan?: PlanData
+  required_artifacts?: string[]
+  reasoning_summary?: string
+  estimated_complexity?: string
+  steps?: string[]
+}
+
+export interface ArchitectureDecision {
+  plans: ArchitecturePlan[]
+  recommended_plan: string            // "balanced"
+}
+
 // ─── Plan validation ───────────────────────────────────────────────────────────
 export type PlanValidationDecision = 'approved' | 'rejected' | 'modified'
 

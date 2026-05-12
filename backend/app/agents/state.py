@@ -46,6 +46,12 @@ class OrchestratorState(TypedDict, total=False):
 
     cost_estimation: Optional[Dict[str, Any]]
 
+    # Architecture Decision phase (replaces separate PLAN + COST_ESTIMATION)
+    # Contains: { "plans": [...enriched strategies...], "recommended_plan": str }
+    architecture_decision: Optional[Dict[str, Any]]
+    # ID of the plan the user selected ("low_cost" | "balanced" | "high_performance")
+    selected_plan_id: Optional[str]
+
     application_profile: Optional[Dict[str, Any]]
 
     # TerraformAgent → KubernetesAgent contract

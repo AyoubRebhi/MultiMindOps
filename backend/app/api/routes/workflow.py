@@ -66,6 +66,8 @@ class WorkflowPhaseResponse(BaseModel):
     terraform_outputs: dict[str, Any] = {}
     logs: list[Any] = []
     message: str = ""
+    # Populated only for architecture-decision and GET state calls
+    architecture_decision: dict[str, Any] | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -78,13 +80,14 @@ def _extract_artifacts(state: dict) -> dict[str, str]:
 
 def _phase_response(task_id: str, state: dict, message: str = "") -> dict:
     return {
-        "task_id":          task_id,
-        "current_phase":    state.get("current_phase", "unknown"),
-        "status":           state.get("status", "in_progress"),
-        "artifacts":        _extract_artifacts(state),
-        "terraform_outputs": state.get("terraform_outputs") or {},
-        "logs":             state.get("logs", []),
-        "message":          message,
+        "task_id":              task_id,
+        "current_phase":        state.get("current_phase", "unknown"),
+        "status":               state.get("status", "in_progress"),
+        "artifacts":            _extract_artifacts(state),
+        "terraform_outputs":    state.get("terraform_outputs") or {},
+        "logs":                 state.get("logs", []),
+        "message":              message,
+        "architecture_decision": state.get("architecture_decision"),
     }
 
 
@@ -101,7 +104,126 @@ def _load_state(db: Session, task_id: str) -> dict:
     return state, task
 
 
-# ── Phase 0: plan ─────────────────────────────────────────────────────────────
+class SelectPlanRequest(BaseModel):
+    plan_id: str  # "low_cost" | "balanced" | "high_performance"
+
+
+# ── Architecture Decision phase (replaces /plan for new workflow) ─────────────
+
+@router.post("/architecture-decision", response_model=WorkflowPhaseResponse)
+async def workflow_architecture_decision(request: Request, db: Session = Depends(get_db)):
+    """
+    Unified PLAN + COST_ESTIMATION replacement.
+
+    Runs repository analysis (if repo_url provided) then generates 1–3 deployment
+    strategies each enriched with AWS cost estimates.  Returns all strategies for
+    user comparison before any infrastructure is generated.
+
+    Frontend must NOT call run-docker until /select-plan is called first.
+    """
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        payload_data = await request.json()
+        prompt      = payload_data.get("prompt", "")
+        repo_url    = payload_data.get("repo_url") or ""
+        visibility  = payload_data.get("repository_visibility") or "public"
+        token       = payload_data.get("github_token")
+        env_input   = None
+    else:
+        form       = await request.form()
+        prompt     = str(form.get("prompt") or "").strip()
+        repo_url   = str(form.get("repo_url") or "").strip() or ""
+        visibility = str(form.get("repository_visibility") or "public")
+        token      = str(form.get("github_token") or "") or None
+        env_input  = None
+        env_file   = form.get("env_file")
+        if getattr(env_file, "filename", None):
+            env_input = await _env_service.build_input_from_upload(env_file)
+
+    task = TaskService.create_task(db, prompt)
+    TaskService.update_task_status(db, task, "in_progress")
+
+    try:
+        orchestrator = OrchestratorAgent()
+        state = orchestrator.run_architecture_decision_phase(
+            prompt=prompt,
+            repo_url=repo_url or None,
+            repository_visibility=visibility,
+            github_token=token,
+            uploaded_env_input=env_input,
+        )
+
+        TaskService.save_plan_awaiting_validation(db, task, state)
+
+        logger.info(
+            "[Workflow] architecture-decision complete for task %s — phase: %s",
+            task.id, state.get("current_phase"),
+        )
+        return _phase_response(task.id, state, "Architecture strategies generated — awaiting selection")
+    except Exception as exc:
+        traceback.print_exc()
+        TaskService.save_error(db, task, str(exc))
+        raise HTTPException(status_code=500, detail=f"Architecture decision failed: {exc}")
+
+
+# ── Plan selection gate ────────────────────────────────────────────────────────
+
+@router.post("/{task_id}/select-plan", response_model=WorkflowPhaseResponse)
+async def select_plan(
+    task_id: str,
+    body: SelectPlanRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Apply the user's plan selection from the architecture-decision phase.
+
+    Validates that the task is in 'architecture_decision_complete' phase,
+    promotes the selected strategy's plan + cost into top-level state fields,
+    and sets current_phase = 'planning_complete' so the existing run-docker
+    endpoint can be called next.
+
+    This endpoint is the hard gate: run-docker MUST NOT be called before this.
+    """
+    state, task = _load_state(db, task_id)
+
+    current_phase = state.get("current_phase", "")
+    # Accept both the new phase and the legacy planning_complete for backward compat
+    if current_phase not in ("architecture_decision_complete", "planning_complete"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Expected phase 'architecture_decision_complete', "
+                f"got '{current_phase}'. Run /architecture-decision first."
+            ),
+        )
+
+    try:
+        orchestrator = OrchestratorAgent()
+        state = orchestrator.resume_with_selected_plan(
+            prior_state=state,
+            selected_plan_id=body.plan_id,
+        )
+        TaskService.save_workflow_state(db, task, state)
+        TaskService.update_task_status(db, task, "in_progress")
+
+        logger.info(
+            "[Workflow] select-plan '%s' applied for task %s — phase now: %s",
+            body.plan_id, task_id, state.get("current_phase"),
+        )
+        return _phase_response(
+            task_id,
+            state,
+            f"Plan '{body.plan_id}' selected — ready to generate infrastructure",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        traceback.print_exc()
+        TaskService.save_error(db, task, str(exc))
+        raise HTTPException(status_code=500, detail=f"Plan selection failed: {exc}")
+
+
+# ── Phase 0: plan (preserved for backward compat) ─────────────────────────────
 
 @router.post("/plan", response_model=WorkflowPhaseResponse)
 async def workflow_plan(request: Request, db: Session = Depends(get_db)):

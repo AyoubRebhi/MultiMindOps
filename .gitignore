@@ -19,7 +19,6 @@ Thumbs.db
 .history/
 
 .github/
-.claude
 
 nefhmou.txt
 frontend-React/.env
@@ -32,4 +31,7 @@ devsecops.db
 
 # documentations/
 .pytest_cache/
+
 .claude/
+
+.vscode/

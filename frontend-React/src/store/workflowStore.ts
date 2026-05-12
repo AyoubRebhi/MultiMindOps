@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { TaskResponse, PlanPreviewResponse, LogEntry } from '@/types'
+import type { TaskResponse, PlanPreviewResponse, LogEntry, ArchitectureDecision } from '@/types'
 import type { WorkflowPhaseResponse } from '@/services/workflowApi'
 import type { CorrectorStatusResponse } from '@/services/correctorApi'
 
@@ -7,9 +7,8 @@ import type { CorrectorStatusResponse } from '@/services/correctorApi'
 
 export type WorkflowStep =
   | 'INPUT'
-  | 'PLAN'
+  | 'ARCHITECTURE_DECISION'   // unified replacement for PLAN + COST_ESTIMATION
   | 'INFRA'
-  | 'COST_ESTIMATION'
   | 'DOCKER_BUILD'
   | 'CORRECTOR_REVIEW'
   | 'TERRAFORM'
@@ -23,8 +22,7 @@ export type WorkflowStep =
 // is active) but always present here so goToStep() and progress work correctly.
 export const WORKFLOW_STEPS: WorkflowStep[] = [
   'INPUT',
-  'PLAN',
-  'COST_ESTIMATION',
+  'ARCHITECTURE_DECISION',
   'INFRA',
   'DOCKER_BUILD',
   'CORRECTOR_REVIEW',
@@ -36,17 +34,16 @@ export const WORKFLOW_STEPS: WorkflowStep[] = [
 ]
 
 export const STEP_META: Record<WorkflowStep, { label: string; description: string }> = {
-  INPUT:            { label: 'Project Input',      description: 'Define project requirements'              },
-  PLAN:             { label: 'Plan Review',         description: 'Approve the AI-generated plan'            },
-  INFRA:            { label: 'Infrastructure',      description: 'Docker & container configuration'         },
-  COST_ESTIMATION:  { label: 'Cost Estimation',     description: 'AWS monthly cost breakdown & tips'        },
-  DOCKER_BUILD:     { label: 'Docker Build',        description: 'Build & verify the Docker image'          },
-  CORRECTOR_REVIEW: { label: 'AI Remediation',      description: 'Review AI-suggested fixes for build failure' },
-  TERRAFORM:        { label: 'Terraform',           description: 'Infrastructure as code (.tf files)'       },
-  KUBERNETES:       { label: 'Kubernetes',          description: 'Container orchestration manifests'        },
-  SUMMARY:          { label: 'Summary',             description: 'Architecture overview'                    },
-  CICD:             { label: 'CI/CD Pipeline',      description: 'GitHub Actions workflows'                 },
-  RESULT:           { label: 'Final Output',        description: 'Logs, artifacts & download'               },
+  INPUT:                  { label: 'Project Input',           description: 'Define project requirements'                },
+  ARCHITECTURE_DECISION:  { label: 'Architecture Decision',   description: 'Compare strategies & select deployment plan' },
+  INFRA:                  { label: 'Infrastructure',          description: 'Docker & container configuration'            },
+  DOCKER_BUILD:           { label: 'Docker Build',            description: 'Build & verify the Docker image'             },
+  CORRECTOR_REVIEW:       { label: 'AI Remediation',          description: 'Review AI-suggested fixes for build failure' },
+  TERRAFORM:              { label: 'Terraform',               description: 'Infrastructure as code (.tf files)'          },
+  KUBERNETES:             { label: 'Kubernetes',              description: 'Container orchestration manifests'           },
+  SUMMARY:                { label: 'Summary',                 description: 'Architecture overview'                       },
+  CICD:                   { label: 'CI/CD Pipeline',          description: 'GitHub Actions workflows'                    },
+  RESULT:                 { label: 'Final Output',            description: 'Logs, artifacts & download'                  },
 }
 
 // Phases that activate the CORRECTOR_REVIEW step
@@ -85,6 +82,11 @@ interface WorkflowStore {
   userInput: WorkflowUserInput
   envFile?: File
 
+  // Architecture Decision phase state (replaces planPreview + requiresHumanValidation)
+  architectureDecision?: ArchitectureDecision
+  selectedPlanId?: string               // set after user clicks "Select This Plan"
+
+  // Kept for legacy/backward-compat (old tasks that only have a single plan)
   planPreview?: PlanPreviewResponse
   requiresHumanValidation: boolean
 
@@ -111,6 +113,8 @@ interface WorkflowStore {
   goToStep: (step: WorkflowStep) => void
   setUserInput: (input: Partial<WorkflowUserInput>) => void
   setEnvFile: (file: File | undefined) => void
+  setArchitectureDecision: (data: ArchitectureDecision) => void
+  setSelectedPlanId: (id: string | undefined) => void
   setPlanPreview: (preview: PlanPreviewResponse) => void
   setTaskId: (id: string) => void
   setTask: (task: TaskResponse) => void
@@ -154,6 +158,10 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
 
   setEnvFile: (envFile) => set({ envFile }),
 
+  setArchitectureDecision: (architectureDecision) => set({ architectureDecision }),
+
+  setSelectedPlanId: (selectedPlanId) => set({ selectedPlanId }),
+
   setPlanPreview: (planPreview) =>
     set({
       planPreview,
@@ -170,6 +178,8 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
       taskId: resp.task_id || s.taskId,
       currentPhase: resp.current_phase,
       phaseArtifacts: { ...s.phaseArtifacts, ...resp.artifacts },
+      // Preserve architecture_decision if the response contains one
+      ...(resp.architecture_decision ? { architectureDecision: resp.architecture_decision } : {}),
       logs: [
         ...s.logs,
         ...(resp.logs as LogEntry[]).filter(
@@ -200,6 +210,8 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
       currentStep: 'INPUT',
       userInput: defaultUserInput,
       envFile: undefined,
+      architectureDecision: undefined,
+      selectedPlanId: undefined,
       planPreview: undefined,
       requiresHumanValidation: false,
       taskId: undefined,

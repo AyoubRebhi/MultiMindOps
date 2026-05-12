@@ -6,6 +6,7 @@ import type {
   GenerateArtifactsRequest,
   ValidatePlanRequest,
   ReviewArtifactsRequest,
+  ArchitectureDecision,
 } from '@/types'
 
 // ── Step-by-step workflow API ─────────────────────────────────────────────────
@@ -18,6 +19,8 @@ export interface WorkflowPhaseResponse {
   terraform_outputs: Record<string, string>
   logs: unknown[]
   message: string
+  // Populated for /architecture-decision and GET /workflow/{id}
+  architecture_decision?: ArchitectureDecision
 }
 
 const BASE = (import.meta as unknown as { env: { VITE_API_BASE_URL?: string } }).env.VITE_API_BASE_URL ?? ''
@@ -112,6 +115,36 @@ export async function workflowPlan(
     return res.json()
   }
   return _workflowPost('/workflow/plan', params)
+}
+
+/** Unified architecture decision phase — replaces /workflow/plan for new flow. */
+export async function workflowArchitectureDecision(
+  params: PlanPreviewRequest & { approved_artifacts?: string[] },
+  envFile?: File | null,
+): Promise<WorkflowPhaseResponse> {
+  if (envFile) {
+    const form = new FormData()
+    form.append('prompt', params.prompt)
+    if (params.repo_url) form.append('repo_url', params.repo_url)
+    form.append('repository_visibility', params.repository_visibility ?? 'public')
+    if (params.github_token) form.append('github_token', params.github_token)
+    form.append('env_file', envFile)
+    const res = await fetch(`${BASE}/api/workflow/architecture-decision`, { method: 'POST', body: form })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(d.detail ?? `Architecture decision failed: ${res.status}`)
+    }
+    return res.json()
+  }
+  return _workflowPost('/workflow/architecture-decision', params)
+}
+
+/** Confirm the user's plan selection — sets current_phase to planning_complete. */
+export function workflowSelectPlan(
+  taskId: string,
+  planId: string,
+): Promise<WorkflowPhaseResponse> {
+  return _workflowPost(`/workflow/${taskId}/select-plan`, { plan_id: planId })
 }
 
 export function workflowRunDocker(taskId: string): Promise<WorkflowPhaseResponse> {

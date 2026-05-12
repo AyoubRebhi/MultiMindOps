@@ -34,6 +34,7 @@ from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
 
+from backend.app.agents.architecture_decision_agent import ArchitectureDecisionAgent
 from backend.app.agents.base_agent import BaseAgent
 from backend.app.agents.codebase_analysis_agent import CodebaseAnalysisAgent
 from backend.app.agents.cost_estimation_agent import CostEstimationAgent
@@ -123,6 +124,10 @@ class OrchestratorAgent(BaseAgent):
         )
         self.cicd_agent = CICDAgent()
         self.cost_estimation_agent = CostEstimationAgent()
+        self.architecture_decision_agent = ArchitectureDecisionAgent(
+            planner_agent=self.planner_agent,
+            cost_agent=self.cost_estimation_agent,
+        )
         self.multi_plan_agent = MultiPlanAgent()
         self.artifact_quality_validator = ArtifactQualityValidator()
         self.artifact_contract_service = ArtifactContractService()
@@ -1135,6 +1140,8 @@ class OrchestratorAgent(BaseAgent):
             "terraform_outputs": None,
             "cicd": None,
             "cost_estimation": None,
+            "architecture_decision": None,
+            "selected_plan_id": None,
             "application_profile": None,
             "validation": None,
             "result": None,
@@ -1203,6 +1210,180 @@ class OrchestratorAgent(BaseAgent):
             env_security_runtime=state.get("env_security_runtime"),
         )
 
+        return state
+
+    # ── NEW: Architecture Decision phase ──────────────────────────────────────
+
+    def run_architecture_decision_phase(
+        self,
+        prompt: str,
+        repo_url: str | None = None,
+        repository_visibility: str = "public",
+        github_token: str | None = None,
+        uploaded_env_input: dict | None = None,
+    ) -> dict:
+        """
+        Unified replacement for run_plan_preview.
+
+        Runs repo analysis (if repo_url provided) then generates 1–3 deployment
+        strategies — each enriched with AWS cost estimates — in one atomic phase.
+
+        Returns state with:
+          state["architecture_decision"] = { plans: [...], recommended_plan: str }
+          state["current_phase"]         = "architecture_decision_complete"
+          state["status"]                = "awaiting_architecture_selection"
+        """
+        logger.info("[OrchestratorAgent] run_architecture_decision_phase — starting")
+
+        state: OrchestratorState = self._base_state(
+            prompt=prompt,
+            repo_url=repo_url,
+            repository_visibility=repository_visibility,
+            github_token=github_token,
+            uploaded_env_input=uploaded_env_input,
+        )
+        state["approved_artifacts"] = None
+
+        state = self._initialize_node(state)
+
+        if repo_url:
+            state = self._analyze_repository_node(state)
+            if (state.get("repository_security") or {}).get("status") == "blocked":
+                state["status"] = "blocked"
+                logger.info("[OrchestratorAgent] run_architecture_decision_phase — blocked by security")
+                return state
+
+        # Build planner context from analysis results
+        agent_context = state.get("agent_context") or {}
+        application_profile = (
+            state.get("application_profile")
+            or agent_context.get("application_profile")
+        )
+
+        planner_context: dict = dict(agent_context.get("planner_context") or {})
+        planner_context["application_profile"] = application_profile
+
+        logs = list(state.get("logs", []))
+        logs.append({"step": "architecture_decision", "message": "Generating architecture strategies…"})
+        state["logs"] = logs
+
+        try:
+            arch_result = self.architecture_decision_agent.run(
+                prompt=prompt,
+                planner_context=planner_context or None,
+                application_profile=application_profile,
+            )
+        except Exception as exc:
+            logger.error("[OrchestratorAgent] ArchitectureDecisionAgent failed: %s", exc)
+            raise
+
+        # Keep a backward-compatible plan/cost_estimation in state (balanced variant)
+        balanced_plan = next(
+            (p for p in (arch_result.get("plans") or []) if p.get("id") == "balanced"),
+            (arch_result.get("plans") or [{}])[0] if arch_result.get("plans") else {},
+        )
+        state["plan"] = balanced_plan.get("plan") or {}
+        state["cost_estimation"] = {
+            "monthly_cost":         balanced_plan.get("monthly_cost", 0.0),
+            "breakdown":            balanced_plan.get("cost_breakdown") or {},
+            "cost_profile":         balanced_plan.get("cost_profile", "unknown"),
+            "optimization_tips":    balanced_plan.get("optimization_tips") or [],
+            "assumptions":          balanced_plan.get("assumptions") or [],
+            "pricing_model_version": balanced_plan.get("pricing_model_version", "aws-simplified-v1"),
+        }
+
+        state["architecture_decision"] = arch_result
+        state["current_phase"] = "architecture_decision_complete"
+        state["status"] = "awaiting_architecture_selection"
+        state["requires_user_input"] = True
+
+        logs = list(state.get("logs", []))
+        plans_count = len(arch_result.get("plans") or [])
+        logs.append({
+            "step": "architecture_decision",
+            "message": (
+                f"{plans_count} architecture strategy/strategies generated — "
+                f"recommended: '{arch_result.get('recommended_plan', 'balanced')}'"
+            ),
+        })
+        state["logs"] = logs
+
+        state["security"] = SecurityScoreTransformer.transform(
+            repository_security=state.get("repository_security"),
+            env_security_runtime=state.get("env_security_runtime"),
+        )
+
+        logger.info(
+            "[OrchestratorAgent] run_architecture_decision_phase — complete (%d strategies)",
+            plans_count,
+        )
+        return state
+
+    def resume_with_selected_plan(
+        self,
+        prior_state: dict,
+        selected_plan_id: str,
+    ) -> dict:
+        """
+        Apply the user's plan selection from the architecture-decision phase.
+
+        Sets ``state["plan"]`` and ``state["cost_estimation"]`` from the chosen
+        strategy, marks ``current_phase = "planning_complete"``, and returns
+        the updated state so the caller can persist it and subsequently trigger
+        the Docker phase via the existing run-docker endpoint.
+        """
+        logger.info(
+            "[OrchestratorAgent] resume_with_selected_plan — plan_id='%s'", selected_plan_id
+        )
+
+        state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
+
+        arch_decision = state.get("architecture_decision") or {}
+        plans: list[dict] = arch_decision.get("plans") or []
+
+        selected = next(
+            (p for p in plans if p.get("id") == selected_plan_id),
+            None,
+        )
+        if not selected:
+            available = [p.get("id") for p in plans]
+            raise ValueError(
+                f"Plan ID '{selected_plan_id}' not found. "
+                f"Available: {available}"
+            )
+
+        # Promote selected strategy's plan + cost into top-level state fields
+        state["plan"] = selected.get("plan") or {}
+        state["cost_estimation"] = {
+            "monthly_cost":         selected.get("monthly_cost", 0.0),
+            "breakdown":            selected.get("cost_breakdown") or {},
+            "cost_profile":         selected.get("cost_profile", "unknown"),
+            "optimization_tips":    selected.get("optimization_tips") or [],
+            "assumptions":          selected.get("assumptions") or [],
+            "pricing_model_version": selected.get("pricing_model_version", "aws-simplified-v1"),
+        }
+        state["selected_plan_id"] = selected_plan_id
+
+        logs = list(state.get("logs", []))
+        logs.append({
+            "step": "architecture_decision",
+            "message": (
+                f"User selected strategy '{selected_plan_id}' "
+                f"(${selected.get('monthly_cost', 0):.2f}/month) — "
+                "workflow unblocked, ready for infrastructure generation"
+            ),
+        })
+        state["logs"] = logs
+        state["current_phase"] = "planning_complete"
+        state["status"] = "in_progress"
+        state["requires_user_input"] = False
+        state["awaiting_user_input"] = False
+
+        logger.info(
+            "[OrchestratorAgent] resume_with_selected_plan — plan '%s' applied, "
+            "current_phase set to 'planning_complete'",
+            selected_plan_id,
+        )
         return state
 
     def run_generation(
