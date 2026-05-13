@@ -1,0 +1,97 @@
+artifact_type: dockerfile
+
+metadata:
+  framework: generic
+  language: generic
+  strategy: multi_stage
+  version: v1
+
+sections:
+  - id: base_image
+    required: true
+    description: Base image appropriate for the detected language and framework
+    template: |
+      FROM {{ base_image }}
+    required_variables:
+      - base_image
+    rag_tags:
+      - base-image
+      - multi-stage-build
+    security_rules:
+      - use_specific_tag
+
+  - id: workdir
+    required: true
+    description: Application working directory
+    template: |
+      WORKDIR {{ workdir }}
+    required_variables:
+      - workdir
+
+  - id: build_dependencies
+    required: true
+    description: Copy dependency descriptor and install dependencies
+    template: |
+      COPY {{ dependency_file }} .
+      RUN {{ install_command }}
+    required_variables:
+      - dependency_file
+      - install_command
+    rag_tags:
+      - layer-caching
+      - dependency-management
+
+  - id: source_code
+    required: true
+    description: Copy application source code
+    static: true
+    template: |
+      COPY . .
+
+  - id: security
+    required: false
+    description: Security hardening — non-root user
+    template: |
+      RUN {{ create_user_command }}
+      USER {{ app_user }}
+    required_variables:
+      - create_user_command
+      - app_user
+    rag_tags:
+      - non-root-user
+      - security-hardening
+
+  - id: expose
+    required: true
+    description: Declare application port
+    template: |
+      EXPOSE {{ port }}
+    required_variables:
+      - port
+    validation_hints:
+      - port_must_be_numeric
+
+  - id: healthcheck
+    required: false
+    description: Container health probe
+    template: |
+      HEALTHCHECK --interval={{ healthcheck_interval }} --timeout={{ healthcheck_timeout }} --retries={{ healthcheck_retries }} \
+        CMD {{ healthcheck_cmd }}
+    required_variables:
+      - healthcheck_interval
+      - healthcheck_timeout
+      - healthcheck_retries
+      - healthcheck_cmd
+    rag_tags:
+      - healthcheck
+
+  - id: startup
+    required: true
+    description: Application startup command
+    template: |
+      CMD {{ startup_command }}
+    required_variables:
+      - startup_command
+    rag_tags:
+      - startup-command
+      - exec-form

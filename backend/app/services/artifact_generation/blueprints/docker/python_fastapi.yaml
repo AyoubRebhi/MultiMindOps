@@ -1,0 +1,147 @@
+artifact_type: dockerfile
+
+metadata:
+  framework: python_fastapi
+  language: python
+  strategy: multi_stage
+  version: v1
+
+sections:
+  - id: builder_base
+    required: true
+    description: Python builder stage base image for dependency installation
+    template: |
+      FROM {{ builder_image }} AS builder
+    required_variables:
+      - builder_image
+    rag_tags:
+      - python-base-image
+      - multi-stage-build
+      - builder-stage
+    security_rules:
+      - use_specific_tag
+
+  - id: build_workdir
+    required: true
+    description: Builder working directory
+    static: true
+    template: |
+      WORKDIR /build
+
+  - id: build_dependencies
+    required: true
+    description: Copy requirements and install Python packages with layer caching
+    template: |
+      COPY {{ requirements_file }} .
+      RUN pip install --no-cache-dir --user -r {{ requirements_file }}
+    required_variables:
+      - requirements_file
+    rag_tags:
+      - python-pip-install
+      - layer-caching
+      - dependency-management
+    security_rules:
+      - no_cache_dir
+      - no_root_pip
+
+  - id: runtime_base
+    required: true
+    description: Minimal Python runtime image (no build tools)
+    template: |
+      FROM {{ runtime_image }} AS runtime
+    required_variables:
+      - runtime_image
+    rag_tags:
+      - python-slim-image
+      - minimal-runtime
+    security_rules:
+      - use_specific_tag
+      - prefer_slim_or_distroless
+
+  - id: security_user
+    required: false
+    description: Create dedicated non-root application user and group
+    static: true
+    template: |
+      RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+    rag_tags:
+      - non-root-user
+      - least-privilege
+      - security-hardening
+
+  - id: workdir
+    required: true
+    description: Application working directory in runtime image
+    template: |
+      WORKDIR {{ workdir }}
+    required_variables:
+      - workdir
+    rag_tags:
+      - workdir-best-practices
+
+  - id: copy_dependencies
+    required: true
+    description: Copy pip user-installed packages from builder stage
+    static: true
+    template: |
+      COPY --from=builder /root/.local /home/appuser/.local
+
+  - id: copy_source
+    required: true
+    description: Copy application source code into runtime image
+    static: true
+    template: |
+      COPY . .
+
+  - id: environment
+    required: true
+    description: Add pip user-install directory to PATH
+    static: true
+    template: |
+      ENV PATH=/home/appuser/.local/bin:$PATH
+
+  - id: expose
+    required: true
+    description: Declare the port the application listens on
+    template: |
+      EXPOSE {{ port }}
+    required_variables:
+      - port
+    validation_hints:
+      - port_must_be_numeric
+
+  - id: user
+    required: false
+    description: Drop privileges to non-root user before starting
+    static: true
+    template: |
+      USER appuser
+    security_rules:
+      - run_as_non_root
+
+  - id: healthcheck
+    required: false
+    description: HTTP health probe for container orchestration
+    template: |
+      HEALTHCHECK --interval={{ healthcheck_interval }} --timeout={{ healthcheck_timeout }} --retries={{ healthcheck_retries }} \
+        CMD {{ healthcheck_cmd }}
+    required_variables:
+      - healthcheck_interval
+      - healthcheck_timeout
+      - healthcheck_retries
+      - healthcheck_cmd
+    rag_tags:
+      - healthcheck
+      - liveness-probe
+
+  - id: startup
+    required: true
+    description: Application startup command (uvicorn/gunicorn for FastAPI/Flask/Django)
+    template: |
+      CMD {{ startup_command }}
+    required_variables:
+      - startup_command
+    rag_tags:
+      - startup-command
+      - fastapi-uvicorn
+      - exec-form

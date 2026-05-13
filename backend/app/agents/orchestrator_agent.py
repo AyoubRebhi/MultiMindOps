@@ -630,7 +630,26 @@ class OrchestratorAgent(BaseAgent):
                 ),
             })
 
-        return {**state, "infra": infra, "logs": logs}
+        # Phase 1: persist structured generation trace from InfrastructureAgent
+        infra_gen = infra.get("infrastructure_generation")
+        if infra_gen:
+            blueprint_used = infra_gen.get("blueprint_used", "unknown")
+            meta = infra_gen.get("generation_metadata") or {}
+            logs.append({
+                "step": "structured_generation",
+                "message": (
+                    f"[StructuredGeneration] blueprint={blueprint_used} "
+                    f"sections={meta.get('generated_sections', '?')} "
+                    f"fallbacks={meta.get('fallback_sections', 0)} "
+                    f"rag_hits={meta.get('rag_hits', 0)} "
+                    f"time={meta.get('total_time_ms', 0):.0f}ms"
+                ),
+            })
+
+        updated_state: OrchestratorState = {**state, "infra": infra, "logs": logs}  # type: ignore[assignment]
+        if infra_gen is not None:
+            updated_state["infrastructure_generation"] = infra_gen
+        return updated_state
 
     def _filter_generated_artifacts(self, state: OrchestratorState) -> OrchestratorState:
         approved = set(state.get("approved_artifacts") or [])

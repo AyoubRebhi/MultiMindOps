@@ -58,5 +58,34 @@ class OrchestratorState(TypedDict, total=False):
     # Keys: cluster_endpoint, cluster_name, load_balancer_dns, ecr_repository_url
     terraform_outputs: Optional[Dict[str, Any]]
 
+    # Phase 1 — Structured Constrained Generation trace.
+    # Populated by InfrastructureAgent when the structured pipeline runs.
+    # Shape mirrors ArtifactGenerationResult.model_dump():
+    # {
+    #   "blueprint_used": str,          # e.g. "python_fastapi_multi_stage_v1"
+    #   "sections": {                   # per-section generation trace
+    #     "startup": {
+    #       "section_id": "startup",
+    #       "variables": {"startup_command": "..."},
+    #       "rendered_content": "CMD ...",
+    #       "rag_sources": [...],
+    #       "used_fallback": false,
+    #     },
+    #     ...
+    #   },
+    #   "validation": {                 # section-mapped validation result
+    #     "valid": true,
+    #     "errors": [],
+    #     "warnings": [{"section_id": "user", "rule": "root_user", ...}],
+    #   },
+    #   "generation_metadata": {        # timing, blueprint info, fallback counts
+    #     "blueprint_id": "...",
+    #     "total_time_ms": 1200,
+    #     "fallback_sections": 0,
+    #     "rag_hits": 3,
+    #   }
+    # }
+    infrastructure_generation: Optional[Dict[str, Any]]
+
     result: Optional[Dict[str, Any]]
     error_message: Optional[str]

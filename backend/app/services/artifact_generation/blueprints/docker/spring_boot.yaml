@@ -1,0 +1,145 @@
+artifact_type: dockerfile
+
+metadata:
+  framework: spring_boot
+  language: java
+  strategy: multi_stage
+  version: v1
+
+sections:
+  - id: builder_base
+    required: true
+    description: JDK builder image with Maven or Gradle for compilation
+    template: |
+      FROM {{ builder_image }} AS builder
+    required_variables:
+      - builder_image
+    rag_tags:
+      - java-jdk-image
+      - maven-builder
+      - multi-stage-build
+    security_rules:
+      - use_specific_tag
+      - prefer_temurin_or_eclipse
+
+  - id: build_workdir
+    required: true
+    description: Builder stage working directory
+    static: true
+    template: |
+      WORKDIR /build
+
+  - id: build_dependencies
+    required: true
+    description: Copy build descriptor and pre-fetch dependencies for layer caching
+    template: |
+      COPY {{ build_file }} .
+      RUN {{ dependency_cache_command }}
+    required_variables:
+      - build_file
+      - dependency_cache_command
+    rag_tags:
+      - maven-dependency-cache
+      - gradle-dependency-cache
+      - layer-caching
+
+  - id: copy_source
+    required: true
+    description: Copy full source tree for compilation
+    static: true
+    template: |
+      COPY src ./src
+
+  - id: build
+    required: true
+    description: Compile and package the application JAR
+    template: |
+      RUN {{ build_command }}
+    required_variables:
+      - build_command
+    rag_tags:
+      - maven-package
+      - gradle-build
+      - skip-tests
+
+  - id: runtime_base
+    required: true
+    description: Minimal JRE runtime image (no compiler or build tools)
+    template: |
+      FROM {{ runtime_image }} AS runtime
+    required_variables:
+      - runtime_image
+    rag_tags:
+      - java-jre-image
+      - minimal-runtime
+      - distroless-java
+    security_rules:
+      - use_specific_tag
+      - prefer_jre_over_jdk
+
+  - id: security_user
+    required: false
+    description: Create non-root user for Alpine-based images
+    static: true
+    template: |
+      RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+  - id: workdir
+    required: true
+    description: Application runtime working directory
+    template: |
+      WORKDIR {{ workdir }}
+    required_variables:
+      - workdir
+
+  - id: copy_jar
+    required: true
+    description: Copy compiled JAR from builder stage
+    template: |
+      COPY --from=builder /build/{{ jar_path }} app.jar
+    required_variables:
+      - jar_path
+    rag_tags:
+      - multi-stage-copy-jar
+
+  - id: expose
+    required: true
+    description: Declare the port Spring Boot listens on
+    template: |
+      EXPOSE {{ port }}
+    required_variables:
+      - port
+    validation_hints:
+      - port_must_be_numeric
+
+  - id: user
+    required: false
+    description: Switch to non-root user
+    static: true
+    template: |
+      USER appuser
+
+  - id: healthcheck
+    required: false
+    description: Spring Boot Actuator health check probe
+    template: |
+      HEALTHCHECK --interval={{ healthcheck_interval }} --timeout={{ healthcheck_timeout }} --retries={{ healthcheck_retries }} \
+        CMD {{ healthcheck_cmd }}
+    required_variables:
+      - healthcheck_interval
+      - healthcheck_timeout
+      - healthcheck_retries
+      - healthcheck_cmd
+    rag_tags:
+      - spring-actuator-healthcheck
+
+  - id: startup
+    required: true
+    description: JVM startup with the packaged JAR
+    template: |
+      ENTRYPOINT {{ startup_command }}
+    required_variables:
+      - startup_command
+    rag_tags:
+      - java-jar-entrypoint
+      - jvm-flags
