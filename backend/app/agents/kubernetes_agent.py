@@ -34,7 +34,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.app.agents.base_agent import EnhancedBaseAgent
-from backend.app.services.llm.llm_router import LLMRouter
+from backend.app.services.llm.provider_factory import ProviderFactory
 from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ class KubernetesAgent(EnhancedBaseAgent):
 
     def __init__(self, prompt_template: str = _DEFAULT_SYSTEM_PROMPT):
         super().__init__(name="KubernetesAgent", max_react_iterations=2)
-        self.llm = LLMRouter()
+        self.llm = ProviderFactory.for_agent("KubernetesAgent")
         self.prompt_template = prompt_template
         self._rag_pipeline = RAGPipelineService()
 
@@ -137,7 +137,7 @@ class KubernetesAgent(EnhancedBaseAgent):
         print("[DEBUG] Prompt size (messages):", len(user_prompt))
 
         # ── ReAct loop ────────────────────────────────────────────────────────
-        evaluate_fn = self._make_k8s_evaluator(terraform_outputs)
+        evaluate_fn = self._make_k8s_evaluator()
         iterations_used = [0]
 
         def _counted_evaluate(response: Dict[str, Any]) -> List[str]:
@@ -179,12 +179,8 @@ class KubernetesAgent(EnhancedBaseAgent):
 
     # ── Quality evaluator ─────────────────────────────────────────────────────
 
-    def _make_k8s_evaluator(
-        self, terraform_outputs: Dict[str, str]
-    ) -> Callable[[Dict[str, Any]], List[str]]:
+    def _make_k8s_evaluator(self) -> Callable[[Dict[str, Any]], List[str]]:
         """Return a closure that validates KubernetesAgent output quality."""
-        ecr_ref = (terraform_outputs or {}).get("ecr_repository_url", "")
-
         def evaluate(response: Dict[str, Any]) -> List[str]:
             issues: List[str] = []
             issues.extend(self._default_evaluate(response))

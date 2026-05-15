@@ -41,15 +41,58 @@ You are a DevSecOps infrastructure specialist generating Dockerfile section vari
 
 Task: fill variable values for the blueprint sections listed below.
 
-Rules:
-- Return ONLY a valid JSON object — nothing else.
-- Top-level keys are section IDs; values are objects with variable name/value pairs.
-- Do NOT generate Docker instructions — only the variable VALUES.
-- Use specific image tags (e.g. python:3.11-slim, NOT python:latest).
-- Non-root users improve security — prefer them.
-- Exec-form commands are preferred: ["cmd", "arg"] not shell form.
-- Never include real secrets, passwords, or API keys.
-- Adapt ALL values to the specific project context provided.\
+=== CRITICAL RULES — VIOLATIONS CAUSE BUILD FAILURES ===
+
+1. RETURN FORMAT
+   Return ONLY a valid JSON object — no markdown, no code fences, no explanations.
+   Top-level keys are section IDs; values are objects with variable name/value pairs.
+   Do NOT generate Docker instructions — only fill the variable VALUES.
+
+2. BASE IMAGES — use current, non-deprecated images
+   Java JRE:   eclipse-temurin:17-jre  (NOT openjdk:17-jre-slim — it is removed from Docker Hub)
+   Java JDK:   eclipse-temurin:17-jdk-alpine  (for builder stage)
+   Python:     python:3.11-slim
+   Node:       node:20-alpine
+   Always pin a specific tag — never use :latest
+
+3. DISTRO-AWARE USER CREATION
+   eclipse-temurin:*-jre (no alpine suffix) → Debian → use:
+     "groupadd -r appgroup && useradd -r -g appgroup appuser"
+   eclipse-temurin:*-alpine OR alpine:* → Alpine → use:
+     "addgroup -S appgroup && adduser -S appuser -G appgroup"
+   python:*-slim → Debian → use:
+     "groupadd -r appgroup && useradd -r -g appgroup appuser"
+   NEVER mix Alpine commands with Debian images or vice-versa.
+
+4. EXEC FORM — double quotes ONLY
+   CMD and ENTRYPOINT variables must be valid JSON arrays with DOUBLE QUOTES:
+     CORRECT:   ["java", "-jar", "app.jar"]
+     CORRECT:   ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+     WRONG:     ['java', '-jar', 'app.jar']   ← single quotes are not JSON
+     WRONG:     java -jar app.jar             ← shell form is not exec form
+
+5. RUN COMMANDS — always shell form (no brackets)
+   build_command, dependency_cache_command, install_command must be plain shell strings:
+     CORRECT:   "mvn clean package -DskipTests -q"
+     CORRECT:   "pip install --no-cache-dir --user -r requirements.txt"
+     WRONG:     ["mvn", "clean", "package"]   ← RUN does NOT support exec form
+
+6. HEALTHCHECK DEPENDENCIES
+   If healthcheck_cmd uses "curl": the image must have curl installed.
+   If the runtime image does NOT include curl by default, set healthcheck_cmd to:
+     Debian: "curl -f http://localhost:{port}/actuator/health || exit 1"  (after apt install curl)
+     Alpine: "wget -q --spider http://localhost:{port}/actuator/health || exit 1"
+   For Spring Boot without actuator: use a TCP check instead:
+     "echo 'GET / HTTP/1.0' | nc localhost {port} || exit 1"
+
+7. SPRING BOOT SPECIFICS
+   jar_path: use "target/*.jar" (Maven) or "build/libs/*.jar" (Gradle)
+   build_command: "mvn clean package -DskipTests -q" for Maven
+   dependency_cache_command: "mvn dependency:go-offline -q"
+   startup_command: ["java", "-jar", "app.jar"]
+
+Never include real secrets, passwords, or API keys.
+Adapt ALL values to the specific project context provided.\
 """
 
 
@@ -385,7 +428,8 @@ def _deterministic_fallbacks(
         # ── Network ──────────────────────────────────────────────────────────
         "port": port,
         # ── Security ─────────────────────────────────────────────────────────
-        "create_user_command": "groupadd -r appgroup && useradd -r -g appgroup appuser",
+        # Default to Debian-style (eclipse-temurin JRE is Debian-based)
+        "create_user_command": _create_user_command(language, runtime),
         "app_user": "appuser",
         # ── Startup ──────────────────────────────────────────────────────────
         "startup_command": _startup_command(language, framework, main_service, port),
@@ -527,3 +571,18 @@ def _extract_language(context: Dict[str, Any]) -> str:
     runtime = context.get("runtime") or {}
     langs: List[str] = runtime.get("languages") or []
     return langs[0] if langs else ""
+
+
+def _create_user_command(language: str, runtime: Dict[str, Any]) -> str:
+    """
+    Return the correct user+group creation command for the runtime image's distro.
+
+    eclipse-temurin (no alpine suffix) → Debian → groupadd/useradd
+    node:*-alpine, eclipse-temurin:*-alpine, python:*-alpine → Alpine → addgroup/adduser
+    python:*-slim → Debian → groupadd/useradd (default for python)
+    """
+    runtime_img = _runtime_image(language, runtime).lower()
+    if "alpine" in runtime_img:
+        return "addgroup -S appgroup && adduser -S appuser -G appgroup"
+    # Debian / slim / temurin non-alpine
+    return "groupadd -r appgroup && useradd -r -g appgroup appuser"

@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from pathlib import Path
@@ -5,6 +6,8 @@ from pathlib import Path
 from dotenv import dotenv_values
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_cfg_logger = logging.getLogger(__name__)
 
 # Resolve .env relative to this file's location so the key loads correctly
 # regardless of the working directory when running scripts like ingest_qdrant.py.
@@ -65,7 +68,14 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash-lite"
 
-    # GitHub Models — PRIMARY provider for agents (Azure-backed, OpenAI-compatible)
+    # OpenAI — PRIMARY provider for infrastructure agents (GPT-5-mini)
+    # Set OPENAI_KEY to enable; if absent the system falls back to Groq silently.
+    OPENAI_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-5.4-mini"
+    OPENAI_TIMEOUT: float = 120.0
+    OPENAI_MAX_RETRIES: int = 2
+
+    # GitHub Models — retained for legacy LLMRouter usage (Azure-backed, OpenAI-compatible)
     # Get a token at https://github.com/settings/tokens (no scopes required for public models)
     GITHUB_TOKEN: str = ""
     GITHUB_BASE_URL: str = "https://models.inference.ai.azure.com"
@@ -110,15 +120,20 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_provider_keys(self) -> "Settings":
+        # NOTE: TerraformAgent / KubernetesAgent now use ProviderFactory (OpenAI+Groq),
+        # not LLMRouter, so TERRAFORM_LLM_PROVIDER only affects legacy LLMRouter usage.
+        # We downgrade these checks from hard errors to warnings to avoid crashing startup.
         terraform_provider = (self.TERRAFORM_LLM_PROVIDER or "").strip().lower()
         if terraform_provider == "github" and not str(self.GITHUB_TOKEN or "").strip():
-            raise ValueError(
-                "GITHUB_TOKEN is required when TERRAFORM_LLM_PROVIDER=github. "
-                "Get a token at https://github.com/settings/tokens"
+            _cfg_logger.warning(
+                "TERRAFORM_LLM_PROVIDER=github but GITHUB_TOKEN is not set. "
+                "LLMRouter will fall back to Groq. "
+                "TerraformAgent/KubernetesAgent are unaffected (they use ProviderFactory)."
             )
         if terraform_provider == "lightning" and not str(self.LIGHTNING_API_KEY or "").strip():
-            raise ValueError(
-                "LIGHTNING_API_KEY is required when TERRAFORM_LLM_PROVIDER=lightning."
+            _cfg_logger.warning(
+                "TERRAFORM_LLM_PROVIDER=lightning but LIGHTNING_API_KEY is not set. "
+                "LLMRouter will fall back to Groq."
             )
         return self
 

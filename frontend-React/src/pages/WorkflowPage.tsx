@@ -66,7 +66,7 @@ function DebugPanel({ currentStep, currentPhase, lastApiCall }: {
 }) {
   return (
     <div style={{
-      position: 'fixed', bottom: 16, right: 16, zIndex: 9999,
+      position: 'fixed', bottom: 100, right: 16, zIndex: 9999,
       padding: '10px 14px', borderRadius: 8,
       background: 'rgba(0,0,0,0.88)', color: '#4ade80',
       fontFamily: 'monospace', fontSize: 11, lineHeight: 1.7,
@@ -258,7 +258,10 @@ export default function WorkflowPage() {
     Promise.all([workflowGetState(stored), pollTask(stored)])
       .then(([phaseResp, restoredTask]) => {
         const s = _store.getState()
+        // mergePhaseResponse first so phaseArtifacts is populated before setTask enriches infra
         s.mergePhaseResponse(phaseResp)
+        console.log('[InfrastructureFetch] session restore — phase:', phaseResp.current_phase, '| artifact keys:', Object.keys(phaseResp.artifacts ?? {}))
+        console.log('[InfrastructureFetch] session restore — pollTask infra?.artifacts keys:', Object.keys(restoredTask.infra?.artifacts ?? {}))
         s.setTaskId(phaseResp.task_id)
         s.setTask(restoredTask)
         if (phaseResp.architecture_decision) s.setArchitectureDecision(phaseResp.architecture_decision)
@@ -328,12 +331,17 @@ export default function WorkflowPage() {
     lastApiCallRef.current = 'run-docker'
     try {
       const resp = await workflowRunDocker(taskId)
+      console.log('[ArtifactHydration] run-docker response artifact keys:', Object.keys(resp.artifacts ?? {}))
       mergePhaseResponse(resp)
       const fresh = await workflowGetState(taskId)
+      console.log('[ArtifactHydration] workflow-state artifact keys:', Object.keys(fresh.artifacts ?? {}), '| phase:', fresh.current_phase)
       mergePhaseResponse(fresh)
       const task = await pollTask(taskId)
+      console.log('[ArtifactHydration] pollTask infra?.artifacts keys:', Object.keys(task.infra?.artifacts ?? {}))
+      console.log('[ArtifactHydration] pollTask result?.infrastructure?.artifacts keys:', Object.keys((task.result?.infrastructure as { artifacts?: Record<string, string> })?.artifacts ?? {}))
       setTask(task)
       const nextStep = PHASE_TO_STEP[fresh.current_phase]
+      console.log('[ArtifactHydration] navigating to step:', nextStep ?? 'INFRA', '(phase:', fresh.current_phase, ')')
       if (nextStep) goToStep(nextStep)
       else goToStep('INFRA')
     } catch (e) {

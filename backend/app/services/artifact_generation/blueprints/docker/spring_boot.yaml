@@ -79,10 +79,18 @@ sections:
 
   - id: security_user
     required: false
-    description: Create non-root user for Alpine-based images
-    static: true
+    description: Create non-root user and group (distro-aware — Debian uses groupadd/useradd, Alpine uses addgroup/adduser)
     template: |
-      RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+      RUN {{ create_user_command }}
+    required_variables:
+      - create_user_command
+    rag_tags:
+      - non-root-user
+      - least-privilege
+      - security-hardening
+    validation_hints:
+      - debian_uses_groupadd_useradd
+      - alpine_uses_addgroup_adduser
 
   - id: workdir
     required: true
@@ -135,7 +143,7 @@ sections:
 
   - id: startup
     required: true
-    description: JVM startup with the packaged JAR
+    description: JVM startup with the packaged JAR (must be JSON exec-form with double quotes)
     template: |
       ENTRYPOINT {{ startup_command }}
     required_variables:
@@ -143,3 +151,6 @@ sections:
     rag_tags:
       - java-jar-entrypoint
       - jvm-flags
+    validation_hints:
+      - exec_form_double_quotes_only
+      - example: '["java", "-jar", "app.jar"]'

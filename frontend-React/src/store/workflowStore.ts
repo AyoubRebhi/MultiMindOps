@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { TaskResponse, PlanPreviewResponse, LogEntry, ArchitectureDecision } from '@/types'
-import type { WorkflowPhaseResponse } from '@/services/workflowApi'
+import type { WorkflowPhaseResponse, TopologySummary } from '@/services/workflowApi'
 import type { CorrectorStatusResponse } from '@/services/correctorApi'
 
 // ── Step definitions ──────────────────────────────────────────────────────────
@@ -97,6 +97,8 @@ interface WorkflowStore {
   phaseArtifacts: Record<string, string>
   currentPhase: string
   isPhaseLoading: boolean
+  // Infrastructure Context Grounding Layer — topology from the last infra phase
+  topologySummary?: TopologySummary
 
   // Locally-edited artifact content
   editedArtifacts: Record<string, string>
@@ -171,22 +173,49 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
 
   setTaskId: (taskId) => set({ taskId }),
 
-  setTask: (task) => set({ task }),
+  setTask: (task) =>
+    set((s) => {
+      // [WorkflowStore] In step-by-step workflow mode the backend writes generated
+      // artifacts to workflow_state (JSONB) — it never updates task.result.
+      // pollTask() therefore returns a TaskResponse where task.infra is null.
+      // Merge the accumulated phaseArtifacts into task.infra.artifacts so that
+      // InfraStep / TerraformStep / KubernetesStep can read them immediately.
+      const dbArtifacts = task.infra?.artifacts ?? {}
+      const enrichedTask: TaskResponse = {
+        ...task,
+        infra: {
+          ...(task.infra ?? {}),
+          artifacts: {
+            ...s.phaseArtifacts,  // phase artifacts fill the gap when DB has none
+            ...dbArtifacts,       // DB artifacts win if they exist (future-proof)
+          },
+        },
+      }
+      console.log('[WorkflowStore] setTask — phaseArtifacts keys:', Object.keys(s.phaseArtifacts))
+      console.log('[WorkflowStore] setTask — dbArtifacts keys:', Object.keys(dbArtifacts))
+      console.log('[WorkflowStore] setTask — enriched infra.artifacts keys:', Object.keys(enrichedTask.infra?.artifacts ?? {}))
+      return { task: enrichedTask }
+    }),
 
   mergePhaseResponse: (resp) =>
-    set((s) => ({
-      taskId: resp.task_id || s.taskId,
-      currentPhase: resp.current_phase,
-      phaseArtifacts: { ...s.phaseArtifacts, ...resp.artifacts },
-      // Preserve architecture_decision if the response contains one
-      ...(resp.architecture_decision ? { architectureDecision: resp.architecture_decision } : {}),
-      logs: [
-        ...s.logs,
-        ...(resp.logs as LogEntry[]).filter(
-          (l) => !s.logs.some((e) => e.message === l.message),
-        ),
-      ],
-    })),
+    set((s) => {
+      console.log('[WorkflowStore] mergePhaseResponse — phase:', resp.current_phase, '| artifact keys:', Object.keys(resp.artifacts ?? {}))
+      return {
+        taskId: resp.task_id || s.taskId,
+        currentPhase: resp.current_phase,
+        phaseArtifacts: { ...s.phaseArtifacts, ...resp.artifacts },
+        // Preserve architecture_decision if the response contains one
+        ...(resp.architecture_decision ? { architectureDecision: resp.architecture_decision } : {}),
+        // Store topology summary when the infra phase completes
+        ...(resp.topology_summary ? { topologySummary: resp.topology_summary } : {}),
+        logs: [
+          ...s.logs,
+          ...(resp.logs as LogEntry[]).filter(
+            (l) => !s.logs.some((e) => e.message === l.message),
+          ),
+        ],
+      }
+    }),
 
   editArtifact: (key, content) =>
     set((s) => ({ editedArtifacts: { ...s.editedArtifacts, [key]: content } })),
@@ -219,6 +248,7 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
       editedArtifacts: {},
       phaseArtifacts: {},
       currentPhase: '',
+      topologySummary: undefined,
       correctorData: undefined,
       isLoading: false,
       isPhaseLoading: false,

@@ -11,6 +11,25 @@ import type {
 
 // ── Step-by-step workflow API ─────────────────────────────────────────────────
 
+export interface TopologySummary {
+  runtime_mode: 'development' | 'staging' | 'production'
+  hot_reload: boolean
+  backend_service?: string
+  build_context: string
+  dependency_file?: string
+  entrypoint?: string
+  framework?: string
+  language?: string
+  port?: number
+  compose_services: string[]
+  has_db: boolean
+  has_cache: boolean
+  is_monorepo: boolean
+  build_context_valid: boolean
+  build_context_issues: string[]
+  build_context_warnings: string[]
+}
+
 export interface WorkflowPhaseResponse {
   task_id: string
   current_phase: string
@@ -21,6 +40,8 @@ export interface WorkflowPhaseResponse {
   message: string
   // Populated for /architecture-decision and GET /workflow/{id}
   architecture_decision?: ArchitectureDecision
+  // Infrastructure Context Grounding Layer
+  topology_summary?: TopologySummary
 }
 
 const BASE = (import.meta as unknown as { env: { VITE_API_BASE_URL?: string } }).env.VITE_API_BASE_URL ?? ''

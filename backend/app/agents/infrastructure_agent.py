@@ -33,11 +33,14 @@ from typing import Any, Callable, Dict, List, Optional
 from backend.app.agents.base_agent import EnhancedBaseAgent
 from backend.app.services.artifact_generation.pipeline import StructuredDockerfileGenerator
 from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
-from backend.app.services.core.llm_service import LLMService
+from backend.app.services.infrastructure.build_context_resolver import BuildContextResolver
+from backend.app.services.infrastructure.compose_topology_analyzer import ComposeTopologyAnalyzer
 from backend.app.services.infrastructure.infrastructure_artifact_builder_service import (
     InfrastructureArtifactBuilderService,
 )
+from backend.app.services.infrastructure.infrastructure_context_assembler import InfrastructureContextAssembler
 from backend.app.services.infrastructure.infrastructure_context_mapper import InfrastructureContextMapper
+from backend.app.services.llm.provider_factory import ProviderFactory
 from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 from backend.app.services.rag.template_retrieval_service import TemplateRetrievalService
 
@@ -65,13 +68,17 @@ class InfrastructureAgent(EnhancedBaseAgent):
 
     def __init__(self, prompt_template: str):
         super().__init__(name="InfrastructureAgent", max_react_iterations=3)
-        self.llm = LLMService()
+        self.llm = ProviderFactory.for_agent("InfrastructureAgent")
         self.prompt_template = prompt_template
         self.context_mapper = InfrastructureContextMapper()
         self.artifact_builder = InfrastructureArtifactBuilderService()
         self.artifact_contract = ArtifactContractService()
         self.template_retrieval = TemplateRetrievalService()
         self._rag_pipeline = RAGPipelineService()
+        # Infrastructure Context Grounding Layer
+        self._compose_analyzer = ComposeTopologyAnalyzer()
+        self._build_context_resolver = BuildContextResolver()
+        self._context_assembler = InfrastructureContextAssembler()
         # Phase 1: Structured constrained generation pipeline
         self._structured_generator = StructuredDockerfileGenerator(
             llm=self.llm,
@@ -102,6 +109,44 @@ class InfrastructureAgent(EnhancedBaseAgent):
             infrastructure_context=infrastructure_context,
             approved_artifacts=approved_artifacts,
         )
+
+        # ── 1b. Infrastructure Context Grounding Layer ────────────────────────
+        # Parse docker-compose topology from infrastructure_context if available
+        compose_topology = None
+        compose_content = (infrastructure_context or {}).get("docker_compose_content")
+        if compose_content:
+            try:
+                compose_topology = self._compose_analyzer.analyze(compose_content)
+                logger.info(
+                    "[InfrastructureAgent] Compose topology analyzed: backend=%s mode=%s",
+                    compose_topology.backend_service,
+                    compose_topology.runtime_mode,
+                )
+            except Exception as exc:
+                logger.warning("[InfrastructureAgent] Compose topology analysis failed: %s", exc)
+
+        # Resolve build context against known repository files
+        known_files = (infrastructure_context or {}).get("known_files") or []
+        build_context = mapped_context.get("build_context", ".")
+        build_context_report = None
+        try:
+            report = self._build_context_resolver.resolve(
+                dockerfile_content="",  # no Dockerfile yet — resolve later in post-gen validation
+                build_context=build_context,
+                known_files=known_files or None,
+            )
+            build_context_report = report.to_dict()
+        except Exception as exc:
+            logger.warning("[InfrastructureAgent] Build context resolution failed: %s", exc)
+
+        # Assemble normalized, topology-aware context
+        mapped_context = self._context_assembler.assemble(
+            mapped_context=mapped_context,
+            compose_topology=compose_topology,
+            known_files=known_files or None,
+            build_context_report=build_context_report,
+        )
+
         fallback_artifacts = self.artifact_builder.build_fallback_artifacts(mapped_context)
 
         # ── 2. Structured Dockerfile generation (Tier 1 — Phase 1) ───────────
@@ -316,6 +361,11 @@ Approved artifacts to generate (Docker artifacts only):
         # Phase 1: attach full structured generation trace
         if infrastructure_generation is not None:
             response["infrastructure_generation"] = infrastructure_generation
+
+        # Infrastructure Context Grounding Layer — expose topology for UI
+        response["topology_summary"] = mapped_context.get("topology_summary")
+        if compose_topology is not None:
+            response["compose_topology"] = mapped_context.get("compose_topology")
 
         return response
 

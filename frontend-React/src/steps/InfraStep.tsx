@@ -1,9 +1,13 @@
 import { useState } from 'react'
-import { Container, FolderOpen, Loader2 } from 'lucide-react'
+import {
+  Container, FolderOpen, Loader2,
+  Server, Globe, Zap, Database, AlertTriangle, CheckCircle2,
+} from 'lucide-react'
 import { StepContainer } from '@/components/workflow/StepContainer'
 import { CodeEditor } from '@/components/workflow/CodeEditor'
 import { useWorkflowStore } from '@/store/workflowStore'
 import { getInfraArtifacts, displayName, artifactLanguage } from '@/services/workflowApi'
+import type { TopologySummary } from '@/services/workflowApi'
 import { cn } from '@/lib/utils'
 
 // ── File tab bar ──────────────────────────────────────────────────────────────
@@ -74,6 +78,137 @@ function EmptyArtifacts({ icon: Icon, label }: { icon: React.ElementType; label:
   )
 }
 
+// ── Topology panel ────────────────────────────────────────────────────────────
+
+const MODE_STYLE: Record<string, string> = {
+  development: 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/20',
+  staging:     'text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/20',
+  production:  'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20',
+}
+
+function TopologyPanel({ summary }: { summary: TopologySummary }) {
+  const modeStyle = MODE_STYLE[summary.runtime_mode] ?? MODE_STYLE.production
+  const hasIssues = !summary.build_context_valid || summary.build_context_issues.length > 0
+
+  return (
+    <div className={cn(
+      'rounded-xl border px-4 py-3 space-y-3',
+      'bg-slate-50 dark:bg-surface-800/30',
+      'border-slate-200 dark:border-white/[0.06]',
+    )}>
+      {/* Header row */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Server className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide">
+            Infrastructure Context
+          </span>
+        </div>
+        <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full border uppercase tracking-wide', modeStyle)}>
+          {summary.runtime_mode}{summary.hot_reload ? ' · hot-reload' : ''}
+        </span>
+      </div>
+
+      {/* Detail grid */}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+        {summary.backend_service && (
+          <TopologyRow icon={<Server className="w-3 h-3" />} label="Backend service" value={summary.backend_service} />
+        )}
+        <TopologyRow icon={<FolderOpen className="w-3 h-3" />} label="Build context" value={summary.build_context} mono />
+        {summary.framework && (
+          <TopologyRow icon={<Zap className="w-3 h-3" />} label="Framework" value={`${summary.framework}${summary.language ? ` (${summary.language})` : ''}`} />
+        )}
+        {summary.port !== undefined && (
+          <TopologyRow icon={<Globe className="w-3 h-3" />} label="Port" value={String(summary.port)} mono />
+        )}
+        {summary.dependency_file && (
+          <TopologyRow icon={<FolderOpen className="w-3 h-3" />} label="Dependencies" value={summary.dependency_file} mono />
+        )}
+        {summary.entrypoint && (
+          <TopologyRow icon={<Zap className="w-3 h-3" />} label="Entrypoint" value={summary.entrypoint} mono truncate />
+        )}
+        {(summary.has_db || summary.has_cache) && (
+          <TopologyRow
+            icon={<Database className="w-3 h-3" />}
+            label="Services"
+            value={[summary.has_db && 'database', summary.has_cache && 'cache'].filter(Boolean).join(', ')}
+          />
+        )}
+        {summary.is_monorepo && (
+          <TopologyRow icon={<FolderOpen className="w-3 h-3" />} label="Layout" value="monorepo" />
+        )}
+        {summary.compose_services.length > 0 && (
+          <div className="col-span-2 flex items-start gap-1.5 text-slate-500 dark:text-slate-400">
+            <Server className="w-3 h-3 shrink-0 mt-0.5 text-slate-400" />
+            <span className="text-slate-400 dark:text-slate-500 w-20 shrink-0">Compose</span>
+            <span className="font-mono text-slate-600 dark:text-slate-300">
+              {summary.compose_services.join(', ')}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Validation status */}
+      <div className="flex items-center gap-1.5 pt-1 border-t border-slate-200 dark:border-white/[0.04]">
+        {hasIssues ? (
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+        ) : (
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+        )}
+        <span className={cn(
+          'text-xs',
+          hasIssues ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400',
+        )}>
+          {hasIssues
+            ? `Build context issue: ${summary.build_context_issues[0] ?? 'validation warning'}`
+            : 'Build context validated'
+          }
+        </span>
+      </div>
+
+      {/* Warnings */}
+      {summary.build_context_warnings.length > 0 && (
+        <ul className="space-y-0.5">
+          {summary.build_context_warnings.slice(0, 3).map((w, i) => (
+            <li key={i} className="flex items-start gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+              {w}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function TopologyRow({
+  icon,
+  label,
+  value,
+  mono = false,
+  truncate = false,
+}: {
+  icon: React.ReactNode
+  label: string
+  value: string
+  mono?: boolean
+  truncate?: boolean
+}) {
+  return (
+    <div className="flex items-start gap-1.5 text-slate-500 dark:text-slate-400">
+      <span className="shrink-0 mt-0.5 text-slate-400">{icon}</span>
+      <span className="text-slate-400 dark:text-slate-500 w-24 shrink-0">{label}</span>
+      <span className={cn(
+        'text-slate-700 dark:text-slate-200',
+        mono && 'font-mono',
+        truncate && 'truncate max-w-[180px]',
+      )}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -82,10 +217,30 @@ interface Props {
   isPhaseLoading?: boolean
 }
 
-export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
-  const { task, editedArtifacts, editArtifact, currentPhase } = useWorkflowStore()
+const INFRA_ARTIFACT_KEYS = new Set(['dockerfile', 'dockerignore', 'docker_compose', 'env_example'])
 
-  const artifacts = task ? getInfraArtifacts(task) : {}
+export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
+  const { task, phaseArtifacts, editedArtifacts, editArtifact, currentPhase, topologySummary } = useWorkflowStore()
+
+  // Primary: task.infra.artifacts (enriched by setTask with phaseArtifacts)
+  // Fallback: phaseArtifacts filtered to Docker keys (belt-and-suspenders for
+  //           edge cases where setTask was not called before navigation)
+  const taskArtifacts = task ? getInfraArtifacts(task) : {}
+  const fallbackArtifacts = Object.fromEntries(
+    Object.entries(phaseArtifacts).filter(([k]) => INFRA_ARTIFACT_KEYS.has(k) || k.startsWith('docker_'))
+  )
+  const artifacts = Object.keys(taskArtifacts).length > 0 ? taskArtifacts : fallbackArtifacts
+
+  // Topology summary: prefer phase-level (real-time) over task-level (polled)
+  const topologyFromTask = (task?.infra as { topology_summary?: TopologySummary } | undefined)?.topology_summary
+  const resolvedTopology = topologySummary ?? topologyFromTask
+
+  console.log('[InfraUI] currentPhase:', currentPhase)
+  console.log('[InfraUI] task?.infra?.artifacts keys:', Object.keys(task?.infra?.artifacts ?? {}))
+  console.log('[InfraUI] taskArtifacts keys:', Object.keys(taskArtifacts))
+  console.log('[InfraUI] phaseArtifacts (docker) keys:', Object.keys(fallbackArtifacts))
+  console.log('[InfraUI] resolved artifacts keys:', Object.keys(artifacts))
+
   const keys = Object.keys(artifacts)
   const [activeKey, setActiveKey] = useState<string>(keys[0] ?? '')
 
@@ -155,6 +310,9 @@ export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
             </p>
           </div>
         </div>
+
+        {/* Topology panel — shown when the grounding layer produced metadata */}
+        {resolvedTopology && <TopologyPanel summary={resolvedTopology} />}
 
         {/* File tabs + editor */}
         <div className="rounded-xl border border-slate-200 dark:border-white/[0.06] overflow-hidden bg-white dark:bg-surface-900">

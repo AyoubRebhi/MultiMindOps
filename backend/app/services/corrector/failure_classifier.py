@@ -162,12 +162,67 @@ def _dependency_test(text: str, _extracted: ExtractedError) -> bool:
     ))
 
 
+def _distro_mismatch_test(text: str, _extracted: ExtractedError) -> bool:
+    """Detect Alpine/Debian command mixups that surface as 'not found' in build logs."""
+    return bool(re.search(
+        r"addgroup:\s+not\s+found"
+        r"|adduser:\s+not\s+found"
+        r"|groupadd:\s+not\s+found"
+        r"|useradd:\s+not\s+found"
+        r"|apk:\s+not\s+found"
+        r"|apt-get:\s+not\s+found"
+        r"|sh:\s+(?:addgroup|adduser|groupadd|useradd|apk|apt-get):\s+(?:command\s+not\s+found|not\s+found)",
+        text, re.IGNORECASE,
+    ))
+
+
+def _exec_form_test(text: str, _extracted: ExtractedError) -> bool:
+    """Detect invalid JSON exec form in Docker build output."""
+    return bool(re.search(
+        r"json:\s+cannot\s+unmarshal"
+        r"|invalid\s+character.*looking\s+for.*value"
+        r"|dockerfile\s+parse\s+error.*json"
+        r"|OCI\s+runtime\s+exec\s+failed.*JSON",
+        text, re.IGNORECASE,
+    ))
+
+
+def _healthcheck_dep_test(text: str, _extracted: ExtractedError) -> bool:
+    """Detect missing curl/wget for HEALTHCHECK."""
+    return bool(re.search(
+        r"HEALTHCHECK.*(?:curl|wget).*(?:not\s+found|failed|exit\s+1)"
+        r"|(?:curl|wget):\s+not\s+found"
+        r"|sh:\s+(?:curl|wget):\s+(?:command\s+not\s+found|not\s+found)",
+        text, re.IGNORECASE,
+    ))
+
+
 # ── Ordered rule chain (highest specificity / confidence first) ───────────────
 #
 # Ordering matters: the first matching rule wins as the PRIMARY classification.
 # Rules that are highly specific (rarely fire falsely) go first.
 
 _RULES: List[ClassificationRule] = [
+    # ── New Phase 2 rules (very specific — go first) ─────────────────────────
+    ClassificationRule(
+        failure_type=FailureType.EXEC_FORM_INVALID,
+        confidence=0.97,
+        matched_rule="docker_exec_form_invalid_json",
+        test=_exec_form_test,
+    ),
+    ClassificationRule(
+        failure_type=FailureType.HEALTHCHECK_DEPENDENCY,
+        confidence=0.96,
+        matched_rule="healthcheck_curl_wget_not_found",
+        test=_healthcheck_dep_test,
+    ),
+    ClassificationRule(
+        failure_type=FailureType.DISTRO_MISMATCH,
+        confidence=0.96,
+        matched_rule="alpine_debian_command_not_found",
+        test=_distro_mismatch_test,
+    ),
+    # ── Original rules ────────────────────────────────────────────────────────
     ClassificationRule(
         failure_type=FailureType.BASE_IMAGE_FAILURE,
         confidence=0.95,
