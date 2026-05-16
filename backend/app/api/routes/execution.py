@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.database.session import SessionLocal
+from backend.app.services.core.artifact_service import extract_current_from_state
 from backend.app.services.core.task_service import TaskService
 from backend.app.services.execution.docker_executor import DockerExecutor
 from backend.app.services.execution.docker_registry import generate_image_tag
@@ -77,15 +78,38 @@ def get_db():
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _extract_docker_artifacts(workflow_state: dict) -> dict[str, str]:
-    """Pull Dockerfile + compose artifacts from the persisted workflow state."""
+    """
+    Pull Dockerfile + compose artifacts from the persisted workflow state.
+
+    Priority:
+      1. workflow_state["artifacts"][key]["current_content"]  ← user-edited (wins)
+      2. workflow_state["infra"]["artifacts"]                 ← original generated (fallback)
+    """
+    docker_keys: set[str] = {"dockerfile", "dockerignore", "docker_compose", "env_example"}
+
+    # Editable artifact layer (set by ArtifactService, updated via PATCH endpoint)
+    result: dict[str, str] = extract_current_from_state(workflow_state)
+
+    if result.get("dockerfile"):
+        # Log which version we're using for audit / regression detection
+        meta = workflow_state.get("artifacts") or {}
+        for key in list(result):
+            artifact_meta = meta.get(key) or {}
+            logger.info(
+                "[ArtifactService] Loaded artifact=%s version=%s modified_by=%s",
+                key,
+                artifact_meta.get("version", "?"),
+                artifact_meta.get("last_modified_by", "?"),
+            )
+        return result
+
+    # Fallback: original generated artifacts (no editable layer yet)
     infra = workflow_state.get("infra") or {}
     artifacts: dict[str, str] = dict(infra.get("artifacts") or {})
-
-    result = workflow_state.get("result") or {}
-    infra_result = result.get("infrastructure") or {}
+    wf_result = workflow_state.get("result") or {}
+    infra_result = wf_result.get("infrastructure") or {}
     artifacts.update(infra_result.get("artifacts") or {})
 
-    docker_keys = {"dockerfile", "dockerignore", "docker_compose", "env_example"}
     return {k: v for k, v in artifacts.items() if k in docker_keys or k.startswith("docker_")}
 
 
@@ -222,6 +246,19 @@ async def start_docker_build(
         raise HTTPException(
             status_code=422,
             detail="No Dockerfile found in task artifacts. Run the Docker phase first.",
+        )
+
+    # Audit: log which artifact versions will be used for this build
+    artifact_meta = state.get("artifacts") or {}
+    for key in artifacts:
+        meta = artifact_meta.get(key) or {}
+        logger.info(
+            "[Execution] Using artifact=%s version=%s modified_by=%s checksum=%s task=%s",
+            key,
+            meta.get("version", "legacy"),
+            meta.get("last_modified_by", "generated"),
+            meta.get("checksum", "n/a"),
+            task_id,
         )
 
     image_tag = generate_image_tag(

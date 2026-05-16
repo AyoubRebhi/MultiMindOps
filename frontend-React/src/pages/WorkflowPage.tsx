@@ -26,6 +26,8 @@ import {
   workflowRunCicd,
   workflowGetState,
   pollTask,
+  patchArtifacts,
+  getArtifacts,
 } from '@/services/workflowApi'
 import { getCorrectorAnalysis } from '@/services/correctorApi'
 import { TASKS_KEY }        from '@/hooks/useTasks'
@@ -255,16 +257,40 @@ export default function WorkflowPage() {
   useEffect(() => {
     const stored = sessionStorage.getItem(SESSION_KEY)
     if (!stored || _store.getState().taskId) return
-    Promise.all([workflowGetState(stored), pollTask(stored)])
-      .then(([phaseResp, restoredTask]) => {
+    Promise.all([
+      workflowGetState(stored),
+      pollTask(stored),
+      // Non-fatal: task may not have reached the Docker phase yet
+      getArtifacts(stored).catch(() => null),
+    ])
+      .then(([phaseResp, restoredTask, persistedArtifacts]) => {
         const s = _store.getState()
         // mergePhaseResponse first so phaseArtifacts is populated before setTask enriches infra
         s.mergePhaseResponse(phaseResp)
-        console.log('[InfrastructureFetch] session restore — phase:', phaseResp.current_phase, '| artifact keys:', Object.keys(phaseResp.artifacts ?? {}))
-        console.log('[InfrastructureFetch] session restore — pollTask infra?.artifacts keys:', Object.keys(restoredTask.infra?.artifacts ?? {}))
+        console.log('[SessionRestore] phase:', phaseResp.current_phase, '| generated artifact keys:', Object.keys(phaseResp.artifacts ?? {}))
+        console.log('[SessionRestore] pollTask infra?.artifacts keys:', Object.keys(restoredTask.infra?.artifacts ?? {}))
         s.setTaskId(phaseResp.task_id)
         s.setTask(restoredTask)
         if (phaseResp.architecture_decision) s.setArchitectureDecision(phaseResp.architecture_decision)
+
+        // Hydrate editedArtifacts with user-edited content so "refresh keeps edits".
+        // Only restore artifacts the user actually edited (last_modified_by === 'user').
+        // Pristine generated content is already in phaseArtifacts from mergePhaseResponse.
+        if (persistedArtifacts?.artifacts && persistedArtifacts?.metadata) {
+          const { artifacts: content, metadata } = persistedArtifacts
+          const userEdits: Record<string, string> = {}
+          Object.entries(content).forEach(([key, value]) => {
+            if (!value) return
+            if (metadata[key]?.last_modified_by === 'user') {
+              userEdits[key] = value
+            }
+          })
+          if (Object.keys(userEdits).length > 0) {
+            s.setEditedArtifacts(userEdits)
+            console.log('[SessionRestore] restored', Object.keys(userEdits).length, 'user-edited artifact(s):', Object.keys(userEdits).join(', '))
+          }
+        }
+
         const step = PHASE_TO_STEP[phaseResp.current_phase]
         if (step) s.goToStep(step)
       })
@@ -358,6 +384,24 @@ export default function WorkflowPage() {
       setError('Infrastructure must be generated first'); return
     }
     clearError()
+
+    // Persist any in-editor changes before the build starts.
+    // The build pipeline reads from the backend — edits must land there first.
+    const { editedArtifacts } = _store.getState()
+    const dockerKeys = ['dockerfile', 'dockerignore', 'docker_compose', 'env_example'] as const
+    const editsToSave = Object.fromEntries(
+      Object.entries(editedArtifacts).filter(([k]) => (dockerKeys as readonly string[]).includes(k))
+    ) as Partial<Record<typeof dockerKeys[number], string>>
+
+    if (Object.keys(editsToSave).length > 0) {
+      try {
+        await patchArtifacts(taskId, editsToSave)
+      } catch (e) {
+        setError(`Failed to save artifact edits: ${(e as Error).message}`)
+        return
+      }
+    }
+
     goToStep('DOCKER_BUILD')
   }, [taskId, clearError, goToStep, setError])
 

@@ -1,61 +1,87 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Container, FolderOpen, Loader2,
   Server, Globe, Zap, Database, AlertTriangle, CheckCircle2,
+  Save, RotateCcw,
 } from 'lucide-react'
 import { StepContainer } from '@/components/workflow/StepContainer'
 import { CodeEditor } from '@/components/workflow/CodeEditor'
 import { useWorkflowStore } from '@/store/workflowStore'
-import { getInfraArtifacts, displayName, artifactLanguage } from '@/services/workflowApi'
+import { getInfraArtifacts, displayName, artifactLanguage, patchArtifacts, resetArtifact } from '@/services/workflowApi'
+import type { ArtifactKey } from '@/services/workflowApi'
 import type { TopologySummary } from '@/services/workflowApi'
 import { cn } from '@/lib/utils'
 
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
+
 // ── File tab bar ──────────────────────────────────────────────────────────────
+
+function SaveIndicator({ status }: { status: SaveStatus }) {
+  if (status === 'idle') return null
+  return (
+    <div className={cn(
+      'flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-md',
+      status === 'saving' && 'text-slate-400 dark:text-slate-500',
+      status === 'saved'  && 'text-emerald-600 dark:text-emerald-400',
+      status === 'error'  && 'text-red-600 dark:text-red-400',
+    )}>
+      {status === 'saving' && <Loader2 className="w-3 h-3 animate-spin" />}
+      {status === 'saved'  && <Save className="w-3 h-3" />}
+      {status === 'error'  && <AlertTriangle className="w-3 h-3" />}
+      {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : 'Save failed'}
+    </div>
+  )
+}
 
 function FileTabs({
   keys,
   active,
   onChange,
   editedKeys,
+  saveStatus,
 }: {
   keys: string[]
   active: string
   onChange: (k: string) => void
   editedKeys: Set<string>
+  saveStatus: SaveStatus
 }) {
   return (
     <div className={cn(
-      'flex gap-1 overflow-x-auto pb-1',
+      'flex items-end justify-between gap-1 overflow-x-auto pb-1',
       'border-b border-slate-200 dark:border-white/[0.06]',
       'bg-slate-50 dark:bg-surface-800/30 px-4 pt-3',
     )}>
-      {keys.map((k) => (
-        <button
-          key={k}
-          onClick={() => onChange(k)}
-          className={cn(
-            'shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-xs font-mono font-medium transition-colors border border-b-0',
-            active === k
-              ? cn(
-                  'bg-white dark:bg-surface-900',
-                  'border-slate-200 dark:border-white/[0.08]',
-                  'text-slate-800 dark:text-slate-200',
-                  '-mb-px pb-2',
-                )
-              : cn(
-                  'bg-transparent border-transparent',
-                  'text-slate-400 dark:text-slate-500',
-                  'hover:text-slate-600 dark:hover:text-slate-300',
-                  'hover:bg-slate-100 dark:hover:bg-white/[0.04]',
-                ),
-          )}
-        >
-          {displayName(k)}
-          {editedKeys.has(k) && (
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Edited" />
-          )}
-        </button>
-      ))}
+      <div className="flex gap-1 overflow-x-auto">
+        {keys.map((k) => (
+          <button
+            key={k}
+            onClick={() => onChange(k)}
+            className={cn(
+              'shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-xs font-mono font-medium transition-colors border border-b-0',
+              active === k
+                ? cn(
+                    'bg-white dark:bg-surface-900',
+                    'border-slate-200 dark:border-white/[0.08]',
+                    'text-slate-800 dark:text-slate-200',
+                    '-mb-px pb-2',
+                  )
+                : cn(
+                    'bg-transparent border-transparent',
+                    'text-slate-400 dark:text-slate-500',
+                    'hover:text-slate-600 dark:hover:text-slate-300',
+                    'hover:bg-slate-100 dark:hover:bg-white/[0.04]',
+                  ),
+            )}
+          >
+            {displayName(k)}
+            {editedKeys.has(k) && (
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Unsaved changes" />
+            )}
+          </button>
+        ))}
+      </div>
+      <SaveIndicator status={saveStatus} />
     </div>
   )
 }
@@ -220,7 +246,7 @@ interface Props {
 const INFRA_ARTIFACT_KEYS = new Set(['dockerfile', 'dockerignore', 'docker_compose', 'env_example'])
 
 export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
-  const { task, phaseArtifacts, editedArtifacts, editArtifact, currentPhase, topologySummary } = useWorkflowStore()
+  const { task, taskId, phaseArtifacts, editedArtifacts, editArtifact, currentPhase, topologySummary } = useWorkflowStore()
 
   // Primary: task.infra.artifacts (enriched by setTask with phaseArtifacts)
   // Fallback: phaseArtifacts filtered to Docker keys (belt-and-suspenders for
@@ -243,8 +269,44 @@ export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
 
   const keys = Object.keys(artifacts)
   const [activeKey, setActiveKey] = useState<string>(keys[0] ?? '')
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
 
   const editedKeys = new Set(Object.keys(editedArtifacts))
+
+  // ── Autosave: debounce 1.5s after any edit ────────────────────────────────
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!taskId || Object.keys(editedArtifacts).length === 0) return
+
+    setSaveStatus('idle')
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+
+    autosaveTimerRef.current = setTimeout(async () => {
+      const dockerKeys = ['dockerfile', 'dockerignore', 'docker_compose', 'env_example'] as const
+      const toSave = Object.fromEntries(
+        Object.entries(editedArtifacts).filter(([k]) => (dockerKeys as readonly string[]).includes(k))
+      ) as Partial<Record<typeof dockerKeys[number], string>>
+      if (Object.keys(toSave).length === 0) return
+
+      setSaveStatus('saving')
+      console.log('[ArtifactEditor] Autosave started — keys:', Object.keys(toSave))
+      try {
+        await patchArtifacts(taskId, toSave)
+        setSaveStatus('saved')
+        console.log('[ArtifactEditor] Autosave success — versions persisted')
+        setTimeout(() => setSaveStatus('idle'), 3000)
+      } catch (err) {
+        setSaveStatus('error')
+        console.error('[ArtifactEditor] Autosave failed:', err)
+      }
+    }, 1500)
+
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editedArtifacts, taskId])
 
   // Safety check: backend must be in `docker_completed` phase before this
   // step is allowed to render. If we got here with the wrong phase, bail out
@@ -316,14 +378,55 @@ export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
 
         {/* File tabs + editor */}
         <div className="rounded-xl border border-slate-200 dark:border-white/[0.06] overflow-hidden bg-white dark:bg-surface-900">
-          {keys.length > 1 && (
+          {keys.length > 1 ? (
             <FileTabs
               keys={keys}
               active={activeKey}
               onChange={setActiveKey}
               editedKeys={editedKeys}
+              saveStatus={saveStatus}
             />
-          )}
+          ) : activeKey ? (
+            /* Single-file header: filename + save indicator + reset button */
+            <div className={cn(
+              'flex items-center justify-between px-4 py-2',
+              'bg-slate-50 dark:bg-surface-800/30',
+              'border-b border-slate-200 dark:border-white/[0.06]',
+            )}>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-medium text-slate-600 dark:text-slate-300">
+                  {displayName(activeKey)}
+                </span>
+                {editedKeys.has(activeKey) && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 font-medium">
+                    edited
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <SaveIndicator status={saveStatus} />
+                {editedKeys.has(activeKey) && taskId && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        await resetArtifact(taskId, activeKey as ArtifactKey)
+                        editArtifact(activeKey, artifacts[activeKey] ?? '')
+                        setSaveStatus('idle')
+                        console.log('[ArtifactEditor] Reset artifact:', activeKey)
+                      } catch (err) {
+                        console.error('[ArtifactEditor] Reset failed:', err)
+                      }
+                    }}
+                    className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                    title="Reset to generated content"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : null}
 
           {activeKey && (
             <CodeEditor

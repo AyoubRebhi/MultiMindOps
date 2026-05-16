@@ -122,6 +122,8 @@ interface WorkflowStore {
   setTask: (task: TaskResponse) => void
   mergePhaseResponse: (resp: WorkflowPhaseResponse) => void
   editArtifact: (key: string, content: string) => void
+  /** Bulk-replace editedArtifacts (used on session restore to load persisted user edits). */
+  setEditedArtifacts: (artifacts: Record<string, string>) => void
   setCorrectorData: (data: CorrectorStatusResponse) => void
   setLoading: (v: boolean) => void
   setPhaseLoading: (v: boolean) => void
@@ -219,6 +221,8 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
 
   editArtifact: (key, content) =>
     set((s) => ({ editedArtifacts: { ...s.editedArtifacts, [key]: content } })),
+
+  setEditedArtifacts: (artifacts) => set({ editedArtifacts: artifacts }),
 
   setCorrectorData: (correctorData) => set({ correctorData }),
 

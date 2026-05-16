@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.agents.orchestrator_agent import OrchestratorAgent
 from backend.app.database.session import SessionLocal
+from backend.app.services.core.artifact_service import ArtifactService
 from backend.app.services.core.task_service import TaskService
 from backend.app.services.environment.uploaded_env_file_service import UploadedEnvFileService
 
@@ -68,26 +69,45 @@ class WorkflowPhaseResponse(BaseModel):
     message: str = ""
     # Populated only for architecture-decision and GET state calls
     architecture_decision: dict[str, Any] | None = None
+    # Infrastructure context grounding — topology metadata from the Docker phase
+    topology_summary: dict[str, Any] | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _extract_artifacts(state: dict) -> dict[str, str]:
-    """Pull all generated artifacts from the orchestrator state."""
+    """
+    Pull artifacts, preferring user-edited content over generated.
+
+    Priority (highest first):
+      1. state["artifacts"][key]["current_content"]  — user-edited (wins)
+      2. state["infra"]["artifacts"][key]            — original generated (fallback)
+    """
+    # Base: all generated artifacts
     infra = state.get("infra") or {}
-    return dict(infra.get("artifacts") or {})
+    result: dict[str, str] = dict(infra.get("artifacts") or {})
+
+    # Override with user-edited current_content where available
+    for key, entry in (state.get("artifacts") or {}).items():
+        if isinstance(entry, dict):
+            content = entry.get("current_content")
+            if content:
+                result[key] = content
+
+    return result
 
 
 def _phase_response(task_id: str, state: dict, message: str = "") -> dict:
     return {
-        "task_id":              task_id,
-        "current_phase":        state.get("current_phase", "unknown"),
-        "status":               state.get("status", "in_progress"),
-        "artifacts":            _extract_artifacts(state),
-        "terraform_outputs":    state.get("terraform_outputs") or {},
-        "logs":                 state.get("logs", []),
-        "message":              message,
+        "task_id":               task_id,
+        "current_phase":         state.get("current_phase", "unknown"),
+        "status":                state.get("status", "in_progress"),
+        "artifacts":             _extract_artifacts(state),
+        "terraform_outputs":     state.get("terraform_outputs") or {},
+        "logs":                  state.get("logs", []),
+        "message":               message,
         "architecture_decision": state.get("architecture_decision"),
+        "topology_summary":      state.get("topology_summary"),
     }
 
 
@@ -298,6 +318,12 @@ async def run_docker(task_id: str, db: Session = Depends(get_db)):
     try:
         orchestrator = OrchestratorAgent()
         state = orchestrator.run_docker_phase(state)
+
+        # Initialize the editable artifact layer so user edits are persisted
+        # separately from the immutable generated content.
+        generated = dict((state.get("infra") or {}).get("artifacts") or {})
+        state = ArtifactService.initialize_from_state(state, generated)
+
         TaskService.save_workflow_state(db, task, state)
         TaskService.update_task_status(db, task, "in_progress")
 

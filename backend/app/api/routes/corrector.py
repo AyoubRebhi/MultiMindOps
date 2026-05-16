@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.app.database.session import SessionLocal
+from backend.app.services.core.artifact_service import extract_current_from_state
 from backend.app.services.core.task_service import TaskService
 
 logger = logging.getLogger(__name__)
@@ -63,13 +64,26 @@ def _docker_logs_text(workflow_state: dict) -> str:
 
 
 def _docker_artifacts(workflow_state: dict) -> dict:
-    """Extract Dockerfile artifacts from persisted workflow state."""
+    """
+    Extract Dockerfile artifacts from persisted workflow state.
+
+    Priority:
+      1. workflow_state["artifacts"][key]["current_content"]  ← user-edited (wins)
+      2. workflow_state["infra"]["artifacts"]                 ← original generated (fallback)
+    """
+    docker_keys = {"dockerfile", "dockerignore", "docker_compose", "env_example"}
+
+    # Editable artifact layer first
+    current = extract_current_from_state(workflow_state)
+    if current.get("dockerfile"):
+        return current
+
+    # Fallback to legacy generated artifacts
     infra = workflow_state.get("infra") or {}
     artifacts: dict = dict(infra.get("artifacts") or {})
     result = workflow_state.get("result") or {}
     infra_result = result.get("infrastructure") or {}
     artifacts.update(infra_result.get("artifacts") or {})
-    docker_keys = {"dockerfile", "dockerignore", "docker_compose", "env_example"}
     return {k: v for k, v in artifacts.items() if k in docker_keys}
 
 

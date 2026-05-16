@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from backend.app.api.routes.artifact_edit import router as artifact_edit_router
 from backend.app.api.routes.artifacts import router as artifacts_router
 from backend.app.api.routes.corrector import router as corrector_router
 from backend.app.api.routes.evaluation import router as evaluation_router
@@ -18,3 +19,5 @@ api_router.include_router(workflow_router, prefix="/api")
 api_router.include_router(execution_router)
 # Corrector agent routes (/api/corrector/...)
 api_router.include_router(corrector_router)
+# Editable artifact persistence (/api/tasks/{id}/artifacts)
+api_router.include_router(artifact_edit_router)

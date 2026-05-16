@@ -250,18 +250,111 @@ class ProviderFactory:
         """
         Sync chat returning a parsed JSON dict.
 
-        Signature matches LLMService.chat_json() and LLMRouter.chat_json()
-        exactly — direct drop-in for the ReAct loop and all agent callers.
-        """
-        from backend.app.services.core.llm_service import LLMService
+        OpenAI path (primary):
+          Uses ``response_format={"type": "json_object"}`` — the model is
+          schema-enforced to return syntactically valid JSON with no markdown
+          fences, no preamble, and no partial output truncation surprises.
+          On ``TruncatedResponseError`` (status=incomplete) the call is
+          automatically retried once with a doubled token budget (≤ 16 000).
+          On success ``json.loads()`` is used directly — no regex heuristics.
 
-        content = self.chat(
+        Groq path (fallback):
+          Falls back to ``_safe_json_loads()`` which handles markdown fences
+          and partial-output recovery for Groq responses.
+
+        Telemetry (INFO level):
+          [ArtifactGeneration] provider=... model=... output_tokens=...
+              finish_reason=... response_size=... structured_parse_success=...
+        """
+        import json as _json
+
+        from backend.app.services.core.llm_service import LLMService
+        from backend.app.services.llm.openai_provider import TruncatedResponseError
+
+        _JSON_OBJECT_FORMAT = {"type": "json_object"}
+        _MAX_RETRY_TOKENS = 16_000
+
+        if self._primary is not None:
+            current_max = max_tokens
+            for _attempt in range(2):  # one automatic retry with doubled budget
+                try:
+                    result = self._primary.generate_sync(
+                        prompt=user_prompt,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        max_tokens=current_max,
+                        response_format=_JSON_OBJECT_FORMAT,
+                    )
+                    logger.info(
+                        "[ArtifactGeneration] provider=openai model=%s "
+                        "output_tokens=%s finish_reason=%s response_size=%d",
+                        result.model,
+                        result.completion_tokens,
+                        result.finish_reason,
+                        len(result.content),
+                    )
+                    # json_object mode guarantees syntactically valid JSON —
+                    # use direct json.loads, no regex/markdown-strip heuristics.
+                    try:
+                        parsed = _json.loads(result.content)
+                        logger.info(
+                            "[ArtifactGeneration] structured_parse_success=true "
+                            "provider=openai model=%s",
+                            result.model,
+                        )
+                        if isinstance(parsed, dict):
+                            return parsed
+                    except _json.JSONDecodeError as exc:
+                        # json_object mode SHOULD always yield valid JSON; this
+                        # branch is a safety net only — fall through to _safe_json_loads.
+                        logger.warning(
+                            "[ArtifactGeneration] structured_parse_success=false "
+                            "provider=openai model=%s parse_error=%s — "
+                            "falling back to _safe_json_loads",
+                            result.model, exc,
+                        )
+                    return LLMService._safe_json_loads(result.content)
+
+                except TruncatedResponseError as exc:
+                    if _attempt == 0:
+                        current_max = min(max_tokens * 2, _MAX_RETRY_TOKENS)
+                        logger.warning(
+                            "[ProviderFactory] Response truncated "
+                            "(finish_reason=%s output_tokens=%s) — "
+                            "retrying with max_tokens=%d",
+                            exc.finish_reason, exc.tokens_used, current_max,
+                        )
+                        continue
+                    # Second attempt also truncated — fall through to Groq
+                    logger.error(
+                        "[ProviderFactory] Response still truncated after retry "
+                        "(max_tokens=%d finish_reason=%s output_tokens=%s) — "
+                        "switching to Groq fallback",
+                        current_max, exc.finish_reason, exc.tokens_used,
+                    )
+                    break
+
+                except Exception as exc:
+                    reason = _classify_error(exc)
+                    logger.warning(
+                        "[ProviderFactory] OpenAI chat_json failed (%s) — "
+                        "switching to Groq fallback",
+                        reason,
+                    )
+                    break
+
+        # ── Groq fallback ─────────────────────────────────────────────────────
+        result = self._fallback.generate_sync(
+            prompt=user_prompt,
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return LLMService._safe_json_loads(content)
+        logger.info(
+            "[ArtifactGeneration] provider=groq model=%s latency=%dms [FALLBACK]",
+            result.model, result.latency_ms,
+        )
+        return LLMService._safe_json_loads(result.content)
 
 
 # ── Module-level singleton (optional) ─────────────────────────────────────────

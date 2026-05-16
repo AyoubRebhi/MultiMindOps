@@ -77,6 +77,78 @@ export interface DockerBuildStatusResponse {
   failed_step: string | null
 }
 
+// ── Editable artifact persistence ─────────────────────────────────────────────
+
+/** Single canonical route string — prevents frontend/backend contract drift. */
+export const artifactsRoute = (taskId: string) => `${BASE}/api/tasks/${taskId}/artifacts`
+
+export type ArtifactKey = 'dockerfile' | 'dockerignore' | 'docker_compose' | 'env_example'
+
+export interface ArtifactMeta {
+  version: number
+  last_modified_by: 'agent' | 'user' | 'reset'
+  last_modified_at: string
+  checksum?: string
+  generated_content?: string
+  current_content?: string
+}
+
+export interface GetArtifactsResponse {
+  task_id: string
+  artifacts: Partial<Record<ArtifactKey, string>>
+  metadata: Record<string, ArtifactMeta>
+}
+
+export interface PatchArtifactsResponse {
+  task_id: string
+  saved: string[]
+  versions: Record<string, number>
+}
+
+/** Fetch the current (user-edited or generated) artifact content + metadata. */
+export async function getArtifacts(taskId: string): Promise<GetArtifactsResponse> {
+  const res = await fetch(artifactsRoute(taskId))
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(d.detail ?? `Artifact fetch failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+/** Persist user-edited artifact content to the backend. */
+export async function patchArtifacts(
+  taskId: string,
+  artifacts: Partial<Record<ArtifactKey, string>>,
+): Promise<PatchArtifactsResponse> {
+  console.log('[ArtifactAPI] PATCH starting — task=%s keys=%s', taskId, Object.keys(artifacts).join(','))
+  const res = await fetch(artifactsRoute(taskId), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(artifacts),
+  })
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({ detail: res.statusText }))
+    console.error('[ArtifactAPI] PATCH failed — status=%d detail=%s', res.status, d.detail)
+    throw new Error(d.detail ?? `Artifact save failed: ${res.status}`)
+  }
+  const result: PatchArtifactsResponse = await res.json()
+  console.log('[ArtifactAPI] PATCH success — saved=%s versions=%o', result.saved.join(','), result.versions)
+  return result
+}
+
+/** Reset one artifact to its generated content. */
+export async function resetArtifact(taskId: string, artifactType: ArtifactKey): Promise<void> {
+  const res = await fetch(`${artifactsRoute(taskId)}/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ artifact_type: artifactType }),
+  })
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(d.detail ?? `Artifact reset failed: ${res.status}`)
+  }
+}
+
 /** Start an async Docker build.  Returns immediately; connect WS for live logs. */
 export async function startDockerBuild(taskId: string): Promise<DockerBuildStartResponse> {
   const res = await fetch(`${BASE}/api/execution/docker/build/${taskId}`, { method: 'POST' })

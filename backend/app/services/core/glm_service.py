@@ -182,6 +182,13 @@ def _safe_json_loads(content: str) -> Dict[str, Any]:
     if match:
         candidates.append(match.group(0))
 
+    # Recovery: if the JSON looks truncated (starts with { but doesn't close),
+    # try appending common closing suffixes to recover partial artifact output.
+    trimmed = content.rstrip()
+    if trimmed.startswith("{") and not trimmed.endswith("}"):
+        for tail in ('"}}}', '"}}', '"}'  , '}}}', '}}', '}'):
+            candidates.append(trimmed + tail)
+
     seen: set[str] = set()
     last_error: Exception | None = None
 

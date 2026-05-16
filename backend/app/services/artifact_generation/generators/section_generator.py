@@ -240,7 +240,7 @@ class ArtifactSectionGenerator:
             system_prompt=_SYSTEM_PROMPT,
             user_prompt=user_prompt,
             temperature=0.1,
-            max_tokens=900,
+            max_tokens=1500,
         )
 
         if not isinstance(response, dict):

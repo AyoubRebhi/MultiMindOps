@@ -261,6 +261,13 @@ class LLMService:
         if match:
             candidates.append(match.group(0))
 
+        # Recovery: if the JSON looks truncated (starts with { but doesn't close),
+        # try appending common closing suffixes to recover partial artifact output.
+        trimmed = content.rstrip()
+        if trimmed.startswith("{") and not trimmed.endswith("}"):
+            for tail in ('"}}}', '"}}', '"}'  , '}}}', '}}', '}'):
+                candidates.append(trimmed + tail)
+
         seen: set[str] = set()
         last_error: Exception | None = None
         for candidate in candidates:
@@ -286,7 +293,16 @@ class LLMService:
                 except yaml.YAMLError as exc:
                     last_error = exc
 
-        raise ValueError(f"LLM did not return valid JSON. Raw output:\n{content}") from last_error
+        snippet = content[:300] + ("..." if len(content) > 300 else "")
+        truncation_hint = (
+            " The response appears truncated — consider increasing max_tokens."
+            if content and not content.rstrip().endswith("}")
+            else ""
+        )
+        raise ValueError(
+            f"Artifact generation response was malformed or truncated.{truncation_hint}\n"
+            f"response_size={len(content)} chars — first 300 chars:\n{snippet}"
+        ) from last_error
 
     @staticmethod
     def _escape_control_chars_in_strings(payload: str) -> str:

@@ -277,7 +277,7 @@ Approved artifacts to generate (Docker artifacts only):
             user_prompt=user_prompt,
             evaluate_fn=_counted_evaluate,
             temperature=0.2,
-            max_tokens=2200,
+            max_tokens=8000,
         )
 
         # ── 6. Inject structured Dockerfile (override ReAct result) ──────────

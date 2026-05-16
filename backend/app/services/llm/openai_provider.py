@@ -35,6 +35,25 @@ from backend.app.services.llm.models import LLMResponse
 
 logger = logging.getLogger(__name__)
 
+
+class TruncatedResponseError(RuntimeError):
+    """
+    Raised when the Responses API returns status='incomplete' (max_output_tokens hit).
+
+    Callers should catch this and retry with a larger max_output_tokens budget.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        finish_reason: str = "max_output_tokens",
+        tokens_used: Optional[int] = None,
+    ) -> None:
+        super().__init__(message)
+        self.finish_reason = finish_reason
+        self.tokens_used = tokens_used
+
+
 _RETRIABLE = (openai.APITimeoutError, openai.RateLimitError, openai.APIConnectionError)
 
 # ALL parameters unsupported by GPT-5 reasoning models via the Responses API.
@@ -197,6 +216,31 @@ def build_chat_payload(
 def _parse_responses_result(response: Any, t0: float, model: str) -> LLMResponse:
     """Parse an OpenAI Responses API response object into LLMResponse."""
     latency_ms = int((time.monotonic() - t0) * 1000)
+    status = getattr(response, "status", "completed")
+    usage = getattr(response, "usage", None)
+
+    # Detect truncation BEFORE extracting text — a truncated response must never
+    # be silently passed to JSON parsers (it produces corrupted partial JSON).
+    if status == "incomplete":
+        incomplete_details = getattr(response, "incomplete_details", None)
+        reason = (
+            getattr(incomplete_details, "reason", "max_output_tokens")
+            if incomplete_details
+            else "max_output_tokens"
+        )
+        tokens_used = getattr(usage, "output_tokens", None)
+        logger.warning(
+            "[OpenAIProvider] Response INCOMPLETE: reason=%s output_tokens=%s model=%s — "
+            "caller should retry with a higher max_output_tokens budget.",
+            reason, tokens_used, model,
+        )
+        raise TruncatedResponseError(
+            f"[OpenAIProvider] Response truncated "
+            f"(status=incomplete reason={reason} output_tokens={tokens_used} model={model}). "
+            "Retry with a higher max_output_tokens budget.",
+            finish_reason=reason,
+            tokens_used=tokens_used,
+        )
 
     # output_text is the convenient shortcut; fall back to traversing output array
     text: str = getattr(response, "output_text", None) or ""
@@ -216,7 +260,6 @@ def _parse_responses_result(response: Any, t0: float, model: str) -> LLMResponse
             f"[OpenAIProvider] Responses API returned empty content (model={model})"
         )
 
-    usage = getattr(response, "usage", None)
     return LLMResponse(
         content=text,
         provider="openai",
@@ -225,7 +268,7 @@ def _parse_responses_result(response: Any, t0: float, model: str) -> LLMResponse
         prompt_tokens=getattr(usage, "input_tokens", None),
         completion_tokens=getattr(usage, "output_tokens", None),
         total_tokens=getattr(usage, "total_tokens", None),
-        finish_reason=getattr(response, "status", None),
+        finish_reason=status,
         api_type="responses",
     )
 
