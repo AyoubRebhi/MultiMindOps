@@ -30,6 +30,41 @@ export interface TopologySummary {
   build_context_warnings: string[]
 }
 
+export interface BuildStrategy {
+  strategy: 'repo_root_context' | 'backend_context' | 'compose_driven'
+  context_path: string
+  dockerfile_path: string
+  recommended_copy_prefix?: string
+}
+
+export interface RepositoryBuildContext {
+  repo_root: string
+  backend_root?: string
+  frontend_root?: string
+  dependency_files: Record<string, string[]>  // {"python": ["backend/app/requirements.txt"]}
+  docker?: BuildStrategy
+  copy_instructions: Record<string, string>   // {"python": "COPY backend/app/requirements.txt ./requirements.txt"}
+}
+
+export interface BuildArtifactContext {
+  strategy: BuildStrategy
+  repository: RepositoryBuildContext
+  backend_root: string
+  dependency_copy_instructions: Record<string, string>
+  compose_context: string
+  compose_dockerfile: string
+  exposed_ports: number[]
+}
+
+export interface StaticValidationIssue {
+  copy_instruction: string
+  source_path: string
+  build_context: string
+  message: string
+  suggested_fix?: string
+  actual_repo_path?: string
+}
+
 export interface WorkflowPhaseResponse {
   task_id: string
   current_phase: string
@@ -42,6 +77,9 @@ export interface WorkflowPhaseResponse {
   architecture_decision?: ArchitectureDecision
   // Infrastructure Context Grounding Layer
   topology_summary?: TopologySummary
+  // Repository build context (Phase 1-4)
+  repository_build_context?: RepositoryBuildContext
+  build_artifact_context?: BuildArtifactContext
 }
 
 const BASE = (import.meta as unknown as { env: { VITE_API_BASE_URL?: string } }).env.VITE_API_BASE_URL ?? ''
@@ -86,20 +124,38 @@ export type ArtifactKey = 'dockerfile' | 'dockerignore' | 'docker_compose' | 'en
 
 export interface ArtifactMeta {
   version: number
-  last_modified_by: 'agent' | 'user' | 'reset'
+  last_modified_by: 'agent' | 'user' | 'reset' | 'corrector_ai'
   last_modified_at: string
+  updated_at?: string
+  user_modified?: boolean
   checksum?: string
+  original_content?: string
+  ai_patched_content?: string | null
   generated_content?: string
   current_content?: string
+}
+
+export interface ArtifactHistoryEntry {
+  version: number
+  source: 'generator' | 'corrector_ai' | 'user' | 'reset' | string
+  timestamp: string
+  summary: string
+  artifact_type?: string
 }
 
 export interface GetArtifactsResponse {
   task_id: string
   artifacts: Partial<Record<ArtifactKey, string>>
   metadata: Record<string, ArtifactMeta>
+  history?: ArtifactHistoryEntry[]
+  dockerfile?: ArtifactMeta
+  dockerignore?: ArtifactMeta
+  docker_compose?: ArtifactMeta
+  env_example?: ArtifactMeta
 }
 
 export interface PatchArtifactsResponse {
+  success?: boolean
   task_id: string
   saved: string[]
   versions: Record<string, number>
@@ -149,12 +205,32 @@ export async function resetArtifact(taskId: string, artifactType: ArtifactKey): 
   }
 }
 
+/** Promote the latest AI patch proposal into current editable artifacts. */
+export async function applyAiPatch(taskId: string): Promise<PatchArtifactsResponse> {
+  const res = await fetch(`${artifactsRoute(taskId)}/apply-ai-patch`, { method: 'POST' })
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(d.detail ?? `Apply AI patch failed: ${res.status}`)
+  }
+  return res.json()
+}
+
 /** Start an async Docker build.  Returns immediately; connect WS for live logs. */
 export async function startDockerBuild(taskId: string): Promise<DockerBuildStartResponse> {
   const res = await fetch(`${BASE}/api/execution/docker/build/${taskId}`, { method: 'POST' })
   if (!res.ok) {
     const d = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(d.detail ?? `Docker build start failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+/** Retry through the human-in-the-loop endpoint using latest saved artifacts. */
+export async function retryDockerBuild(taskId: string): Promise<DockerBuildStartResponse> {
+  const res = await fetch(`${BASE}/api/tasks/${taskId}/retry-build`, { method: 'POST' })
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(d.detail ?? `Docker retry failed: ${res.status}`)
   }
   return res.json()
 }

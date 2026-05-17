@@ -23,19 +23,27 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.database.session import SessionLocal
-from backend.app.services.core.artifact_service import extract_current_from_state
+from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
 from backend.app.services.execution.docker_executor import DockerExecutor
 from backend.app.services.execution.docker_registry import generate_image_tag
 from backend.app.services.execution.docker_streamer import log_stream_manager
+from backend.app.services.execution.execution_state_service import (
+    emit_execution_event,
+    load_execution_history,
+    record_execution_event,
+)
 from backend.app.services.execution.execution_models import (
     DockerBuildResult,
+    ExecutionEvent,
     ExecutionLogEntry,
+    ExecutionMachineStatus,
     ExecutionStatus,
     LogLevel,
 )
@@ -65,6 +73,10 @@ _BLOCKED_BUILD_PHASES = {
 }
 
 
+def _sse_payload(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 # ── DB dependency ──────────────────────────────────────────────────────────────
 
 def get_db():
@@ -85,32 +97,17 @@ def _extract_docker_artifacts(workflow_state: dict) -> dict[str, str]:
       1. workflow_state["artifacts"][key]["current_content"]  ← user-edited (wins)
       2. workflow_state["infra"]["artifacts"]                 ← original generated (fallback)
     """
-    docker_keys: set[str] = {"dockerfile", "dockerignore", "docker_compose", "env_example"}
-
-    # Editable artifact layer (set by ArtifactService, updated via PATCH endpoint)
-    result: dict[str, str] = extract_current_from_state(workflow_state)
-
-    if result.get("dockerfile"):
-        # Log which version we're using for audit / regression detection
-        meta = workflow_state.get("artifacts") or {}
-        for key in list(result):
-            artifact_meta = meta.get(key) or {}
-            logger.info(
-                "[ArtifactService] Loaded artifact=%s version=%s modified_by=%s",
-                key,
-                artifact_meta.get("version", "?"),
-                artifact_meta.get("last_modified_by", "?"),
-            )
-        return result
-
-    # Fallback: original generated artifacts (no editable layer yet)
-    infra = workflow_state.get("infra") or {}
-    artifacts: dict[str, str] = dict(infra.get("artifacts") or {})
-    wf_result = workflow_state.get("result") or {}
-    infra_result = wf_result.get("infrastructure") or {}
-    artifacts.update(infra_result.get("artifacts") or {})
-
-    return {k: v for k, v in artifacts.items() if k in docker_keys or k.startswith("docker_")}
+    result = ArtifactStateResolver.get_latest_artifacts(workflow_state)
+    meta = (workflow_state.get("infrastructure") or {}).get("artifacts") or workflow_state.get("artifacts") or {}
+    for key in list(result):
+        artifact_meta = meta.get(key) or {}
+        logger.info(
+            "[ArtifactResolver] Loaded artifact=%s version=%s modified_by=%s",
+            key,
+            artifact_meta.get("version", "legacy"),
+            artifact_meta.get("last_modified_by", "generated"),
+        )
+    return result
 
 
 def _save_execution_state(db: Session, task, result: DockerBuildResult, is_retry: bool = False) -> None:
@@ -160,11 +157,21 @@ async def _run_build_background(
     image_tag: str,
     is_retry: bool = False,
     build_number: int = 1,
+    build_strategy: dict | None = None,
 ) -> None:
     """Coroutine that runs the full build lifecycle and persists results."""
     logger.info("[Execution] Build background task started: task=%s build_number=%d", task_id, build_number)
 
     if is_retry:
+        await emit_execution_event(
+            task_id,
+            "retry_iteration",
+            message=f"Retry iteration {build_number}/3 started",
+            iteration=build_number,
+            max_iterations=3,
+            phase="retrying",
+            status="running",
+        )
         separator_entry = ExecutionLogEntry(
             level=LogLevel.INFO,
             message=f"========== RETRY BUILD #{build_number} ==========",
@@ -180,6 +187,8 @@ async def _run_build_background(
         registry_username=settings.DOCKER_REGISTRY_USERNAME,
         registry_password=settings.DOCKER_REGISTRY_PASSWORD,
         push_on_success=settings.DOCKER_PUSH_ON_SUCCESS,
+        build_strategy=build_strategy or {},
+        finish_stream=False,
     )
 
     result = await executor.build_image()
@@ -199,10 +208,10 @@ async def _run_build_background(
 
     # ── Corrector hook: trigger analysis on every build failure ───────────────
     if result.status == ExecutionStatus.FAILED:
-        asyncio.create_task(
-            _run_corrector_on_failure(task_id, result),
-            name=f"corrector_{task_id[:8]}",
-        )
+        await _run_corrector_on_failure(task_id, result)
+        await log_stream_manager.finish(task_id)
+    else:
+        await log_stream_manager.finish(task_id)
 
 
 # ── POST /api/execution/docker/build/{task_id} ─────────────────────────────────
@@ -249,7 +258,7 @@ async def start_docker_build(
         )
 
     # Audit: log which artifact versions will be used for this build
-    artifact_meta = state.get("artifacts") or {}
+    artifact_meta = (state.get("infrastructure") or {}).get("artifacts") or state.get("artifacts") or {}
     for key in artifacts:
         meta = artifact_meta.get(key) or {}
         logger.info(
@@ -276,6 +285,13 @@ async def start_docker_build(
     previous_logs = docker_exec.get("logs", []) if is_retry else []
 
     state["current_phase"] = "docker_build_running"
+    execution.update({
+        "state": "retrying" if is_retry else "building",
+        "active_iteration": build_number,
+        "max_iterations": 3,
+        "current_message": "Docker build running",
+        "last_retry_timestamp": datetime.now(timezone.utc).isoformat() if is_retry else execution.get("last_retry_timestamp"),
+    })
     docker_exec.update({
         "status": "running",
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -288,8 +304,20 @@ async def start_docker_build(
     })
     TaskService.save_workflow_state(db, task, state)
 
+    # Extract build strategy for executor tracing
+    infra_state = state.get("infrastructure") or {}
+    _build_strategy: dict = (
+        (infra_state.get("build_artifact_context") or {}).get("strategy")
+        or {}
+    )
+
     asyncio.create_task(
-        _run_build_background(task_id, artifacts, image_tag, is_retry=is_retry, build_number=build_number),
+        _run_build_background(
+            task_id, artifacts, image_tag,
+            is_retry=is_retry,
+            build_number=build_number,
+            build_strategy=_build_strategy,
+        ),
         name=f"docker_build_{task_id[:8]}",
     )
 
@@ -306,6 +334,16 @@ async def start_docker_build(
 
 
 # ── GET /api/execution/docker/status/{task_id} ─────────────────────────────────
+
+@router.post("/api/tasks/{task_id}/retry-build")
+async def retry_docker_build(
+    task_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Retry Docker build using the latest saved editable artifacts."""
+    logger.info("[Execution] Retry build requested for task=%s", task_id)
+    return await start_docker_build(task_id, db)
+
 
 @router.get("/api/execution/docker/status/{task_id}")
 def get_docker_build_status(
@@ -600,6 +638,15 @@ async def _run_corrector_on_failure(
         "[Corrector] Retry count=%d/%d for task=%s",
         retry_count, max_retries, task_id,
     )
+    await emit_execution_event(
+        task_id,
+        "corrector_analysis",
+        message=f"Corrector analyzing Docker build failure ({retry_count}/{max_retries})",
+        iteration=retry_count,
+        max_iterations=max_retries,
+        phase="analyzing_failure",
+        status="running",
+    )
 
     # ── Step 2: Reconstruct log text from DockerBuildResult ───────────────────
     raw_logs = "\n".join(entry.message for entry in build_result.logs)
@@ -618,7 +665,25 @@ async def _run_corrector_on_failure(
                 llm_exc,
             )
 
+        # Enrich corrector context with repository build context for phase-8 diagnosis
+        infra_state_for_corrector = state.get("infrastructure") or {}
+        repo_build_ctx_for_corrector = infra_state_for_corrector.get("repository_build_context") or {}
+        build_artifact_ctx_for_corrector = infra_state_for_corrector.get("build_artifact_context") or {}
+        static_val_for_corrector = (
+            (infra_state_for_corrector.get("infrastructure_generation") or {})
+            .get("static_validation") or {}
+        )
+
         agent = DockerCorrectorAgent(llm_service=llm)
+        await emit_execution_event(
+            task_id,
+            "generating_patch",
+            message="GPT-5-mini generating remediation patch preview",
+            iteration=retry_count,
+            max_iterations=max_retries,
+            phase="generating_patch",
+            status="running",
+        )
         analysis = await agent.analyze(
             raw_logs=raw_logs,
             artifacts=artifacts,
@@ -627,6 +692,9 @@ async def _run_corrector_on_failure(
                 "exit_code": build_result.exit_code,
                 "failed_step": build_result.failed_step,
                 "build_number": retry_count,
+                "repository_build_context": repo_build_ctx_for_corrector,
+                "build_artifact_context": build_artifact_ctx_for_corrector,
+                "static_validation": static_val_for_corrector,
             },
         )
 
@@ -648,13 +716,39 @@ async def _run_corrector_on_failure(
         corrector2: dict = execution2.get("corrector", {})
 
         if analysis is not None:
+            analysis_dict = analysis.to_dict()
+            fixes = analysis_dict.get("fixes") or []
+            structured_patches = analysis_dict.get("structured_patches") or []
+            await emit_execution_event(
+                task_id,
+                "patch_generated",
+                message=f"Corrector generated {len(fixes)} fix suggestion(s)",
+                iteration=retry_count,
+                max_iterations=max_retries,
+                phase="generating_patch",
+                status="completed",
+                metadata={
+                    "fix_count": len(fixes),
+                    "structured_patch_count": len(structured_patches),
+                    "root_cause": analysis_dict.get("root_cause"),
+                },
+            )
             corrector2.update({
                 "status": "completed",
                 "finished_at": datetime.now(timezone.utc).isoformat(),
-                "analysis": analysis.to_dict(),
+                "analysis": analysis_dict,
                 "error": None,
             })
         else:
+            await emit_execution_event(
+                task_id,
+                "execution_failed",
+                message="Corrector analysis failed unexpectedly.",
+                iteration=retry_count,
+                max_iterations=max_retries,
+                phase="failed",
+                status="failed",
+            )
             corrector2.update({
                 "status": "error",
                 "finished_at": datetime.now(timezone.utc).isoformat(),
@@ -665,17 +759,52 @@ async def _run_corrector_on_failure(
 
         if retry_count >= max_retries:
             state2["current_phase"] = "execution_failed"
+            await emit_execution_event(
+                task_id,
+                "max_retries_reached",
+                message=f"Maximum retry budget reached ({retry_count}/{max_retries})",
+                iteration=retry_count,
+                max_iterations=max_retries,
+                phase="max_retries_reached",
+                status="failed",
+            )
             logger.warning(
                 "[Corrector] Max retries exceeded: task=%s %d/%d → execution_failed",
                 task_id, retry_count, max_retries,
             )
         else:
             state2["current_phase"] = "human_review_required"
+            await emit_execution_event(
+                task_id,
+                "corrector_analysis",
+                message="Corrector analysis completed. Human review required before retry.",
+                iteration=retry_count,
+                max_iterations=max_retries,
+                phase="human_review_required",
+                status="completed",
+            )
             logger.info(
                 "[Corrector] Analysis complete: task=%s retry=%d/%d → human_review_required",
                 task_id, retry_count, max_retries,
             )
 
+        latest_state_for_history = TaskService.load_workflow_state(db2, task2) or {}
+        latest_execution = (latest_state_for_history.get("execution") or {})
+        execution2["history"] = latest_execution.get("history", execution2.get("history", []))
+        for key in (
+            "state",
+            "state_machine",
+            "active_iteration",
+            "max_iterations",
+            "current_message",
+            "current_phase_label",
+            "last_event_at",
+        ):
+            if key in latest_execution:
+                execution2[key] = latest_execution[key]
+
         TaskService.save_workflow_state(db2, task2, state2)
+        if analysis is not None:
+            ArtifactService.store_ai_patch_suggestions(db2, task2, analysis_dict)
     finally:
         db2.close()

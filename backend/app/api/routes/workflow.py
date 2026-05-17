@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.agents.orchestrator_agent import OrchestratorAgent
 from backend.app.database.session import SessionLocal
-from backend.app.services.core.artifact_service import ArtifactService
+from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
 from backend.app.services.environment.uploaded_env_file_service import UploadedEnvFileService
 
@@ -83,16 +83,12 @@ def _extract_artifacts(state: dict) -> dict[str, str]:
       1. state["artifacts"][key]["current_content"]  — user-edited (wins)
       2. state["infra"]["artifacts"][key]            — original generated (fallback)
     """
+    current = ArtifactStateResolver.get_latest_artifacts(state)
+
     # Base: all generated artifacts
     infra = state.get("infra") or {}
     result: dict[str, str] = dict(infra.get("artifacts") or {})
-
-    # Override with user-edited current_content where available
-    for key, entry in (state.get("artifacts") or {}).items():
-        if isinstance(entry, dict):
-            content = entry.get("current_content")
-            if content:
-                result[key] = content
+    result.update(current)
 
     return result
 

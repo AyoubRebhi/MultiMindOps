@@ -64,8 +64,8 @@ function MetricRow({ label, score, feedback, icon: Icon }: Omit<MetricItem, 'key
 export function MetricBreakdown({ metrics }: Props) {
   return (
     <div className="space-y-2">
-      {metrics.map((m) => (
-        <MetricRow key={m.key} {...m} />
+      {metrics.map(({ key, ...metric }) => (
+        <MetricRow key={key} {...metric} />
       ))}
     </div>
   )

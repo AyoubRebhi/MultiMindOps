@@ -63,8 +63,7 @@ GPT5_UNSUPPORTED_PARAMS: frozenset[str] = frozenset({
     # Legacy token params (Responses API uses max_output_tokens instead)
     "max_tokens",
     "max_completion_tokens",
-    # Sampling / generation params (not supported by GPT-5 reasoning models)
-    "temperature",
+    # Sampling / generation params not used in this provider's GPT-5 path
     "top_p",
     "frequency_penalty",
     "presence_penalty",
@@ -137,6 +136,7 @@ def build_gpt5_responses_payload(
     model: str,
     prompt: str,
     system_prompt: Optional[str],
+    temperature: float,
     max_tokens: int,
     response_format: Optional[dict],
 ) -> dict:
@@ -156,12 +156,19 @@ def build_gpt5_responses_payload(
         "model": model,
         "input": [{"role": "user", "content": prompt}],
         "max_output_tokens": max_tokens,
+        "reasoning": {"effort": "low"},
+        "temperature": temperature,
+        "parallel_tool_calls": False,
+        "store": False,
+        "stream": False,
     }
     if system_prompt:
         payload["instructions"] = system_prompt
+    text_options: dict[str, Any] = {"verbosity": "low"}
     if response_format:
-        # Responses API uses text.format instead of response_format
-        payload["text"] = {"format": response_format}
+        # Responses API uses text.format instead of response_format.
+        text_options["format"] = response_format
+    payload["text"] = text_options
     return payload
 
 
@@ -183,6 +190,7 @@ def build_responses_payload(
         model=model,
         prompt=prompt,
         system_prompt=system_prompt,
+        temperature=temperature,
         max_tokens=max_tokens,
         response_format=response_format,
     )
@@ -383,7 +391,7 @@ class OpenAIProvider(BaseLLMProvider):
         response_format: Optional[dict],
     ) -> LLMResponse:
         raw = build_gpt5_responses_payload(
-            self._model, prompt, system_prompt, max_tokens, response_format
+            self._model, prompt, system_prompt, temperature, max_tokens, response_format
         )
         payload = sanitize_gpt5_payload(raw)
         self._assert_gpt5_payload_safe(payload)
@@ -456,7 +464,7 @@ class OpenAIProvider(BaseLLMProvider):
         response_format: Optional[dict],
     ) -> LLMResponse:
         raw = build_gpt5_responses_payload(
-            self._model, prompt, system_prompt, max_tokens, response_format
+            self._model, prompt, system_prompt, temperature, max_tokens, response_format
         )
         payload = sanitize_gpt5_payload(raw)
         self._assert_gpt5_payload_safe(payload)

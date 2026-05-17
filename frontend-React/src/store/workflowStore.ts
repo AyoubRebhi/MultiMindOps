@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { TaskResponse, PlanPreviewResponse, LogEntry, ArchitectureDecision } from '@/types'
-import type { WorkflowPhaseResponse, TopologySummary } from '@/services/workflowApi'
+import type { WorkflowPhaseResponse, TopologySummary, RepositoryBuildContext, BuildArtifactContext } from '@/services/workflowApi'
 import type { CorrectorStatusResponse } from '@/services/correctorApi'
 
 // ── Step definitions ──────────────────────────────────────────────────────────
@@ -99,6 +99,9 @@ interface WorkflowStore {
   isPhaseLoading: boolean
   // Infrastructure Context Grounding Layer — topology from the last infra phase
   topologySummary?: TopologySummary
+  // Repository build context (Phases 1-4) — build strategy + COPY path analysis
+  repositoryBuildContext?: RepositoryBuildContext
+  buildArtifactContext?: BuildArtifactContext
 
   // Locally-edited artifact content
   editedArtifacts: Record<string, string>
@@ -210,6 +213,9 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
         ...(resp.architecture_decision ? { architectureDecision: resp.architecture_decision } : {}),
         // Store topology summary when the infra phase completes
         ...(resp.topology_summary ? { topologySummary: resp.topology_summary } : {}),
+        // Store repository build context for the UI debug panel
+        ...(resp.repository_build_context ? { repositoryBuildContext: resp.repository_build_context } : {}),
+        ...(resp.build_artifact_context ? { buildArtifactContext: resp.build_artifact_context } : {}),
         logs: [
           ...s.logs,
           ...(resp.logs as LogEntry[]).filter(
@@ -253,6 +259,8 @@ export const useWorkflowStore = create<WorkflowStore>((set) => ({
       phaseArtifacts: {},
       currentPhase: '',
       topologySummary: undefined,
+      repositoryBuildContext: undefined,
+      buildArtifactContext: undefined,
       correctorData: undefined,
       isLoading: false,
       isPhaseLoading: false,

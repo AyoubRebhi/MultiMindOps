@@ -319,6 +319,47 @@ def _build_batch_user_prompt(
         "",
     ]
 
+    # ── Repository build context block (CRITICAL for correct COPY paths) ──────
+    repo_ctx_dict = project_context.get("repository_build_context") or {}
+    docker_strategy = repo_ctx_dict.get("docker") or {}
+    if docker_strategy:
+        ctx_path  = docker_strategy.get("context_path", ".")
+        df_path   = docker_strategy.get("dockerfile_path", "Dockerfile")
+        strategy  = docker_strategy.get("strategy", "repo_root_context")
+        dep_files = repo_ctx_dict.get("dependency_files") or {}
+        copy_instrs = repo_ctx_dict.get("copy_instructions") or {}
+
+        lines += [
+            "=== REPOSITORY BUILD CONTEXT (use these exact paths in COPY instructions) ===",
+            f"  build strategy:   {strategy}",
+            f"  context path:     {ctx_path}",
+            f"  dockerfile path:  {df_path}",
+        ]
+        if dep_files:
+            for lang, files in dep_files.items():
+                if files:
+                    lines.append(f"  {lang} deps in repo: {', '.join(files[:3])}")
+        if copy_instrs:
+            lines.append("")
+            lines.append("  CORRECT COPY instructions (use EXACTLY these — do NOT invent paths):")
+            for lang, instr in copy_instrs.items():
+                lines.append(f"    {lang}: {instr}")
+
+        # Generate explicit COPY rules when context is repo root and files are in subdirectory
+        copy_prefix = docker_strategy.get("recommended_copy_prefix")
+        if ctx_path in (".", "") and copy_prefix:
+            lines += [
+                "",
+                f"  WARNING: Build context is '{ctx_path}' but source files are in '{copy_prefix}/'.",
+                f"  All COPY sources MUST include the '{copy_prefix}/' prefix:",
+                f"    ✓ CORRECT: COPY {copy_prefix}/requirements.txt ./requirements.txt",
+                f"    ✗ WRONG:   COPY requirements.txt .  (file is NOT at repo root)",
+                f"    ✓ CORRECT: COPY {copy_prefix}/main.py ./main.py",
+                f"    ✗ WRONG:   COPY main.py .  (file is NOT at repo root)",
+            ]
+        lines.append("=== END REPOSITORY BUILD CONTEXT ===")
+        lines.append("")
+
     # Corrector feedback (if any)
     if corrector_feedback:
         global_issues = corrector_feedback.get("issues") or []
@@ -402,12 +443,19 @@ def _deterministic_fallbacks(
 
     The goal is a syntactically valid artifact, not a perfect one.
     These values are overridden by the LLM in normal operation.
+
+    IMPORTANT: requirements_file and dependency_file return the full repo-relative
+    path (e.g., "backend/app/requirements-backend.txt") so that COPY instructions
+    are correct when the build context is the repository root.
     """
     main_service = project_context.get("main_service") or {}
     runtime = project_context.get("runtime") or {}
     language = (main_service.get("language") or "").lower()
     framework = (main_service.get("framework") or "").lower()
     port = str(main_service.get("port") or _default_port(framework))
+
+    # Use repo-relative path for requirements so COPY is correct for monorepos
+    req_file = _requirements_file(language, runtime)
 
     all_vars: Dict[str, Any] = {
         # ── Images ──────────────────────────────────────────────────────────
@@ -417,12 +465,13 @@ def _deterministic_fallbacks(
         # ── Paths ────────────────────────────────────────────────────────────
         "workdir": "/app",
         # ── Build ────────────────────────────────────────────────────────────
-        "requirements_file": _requirements_file(language, runtime),
-        "dependency_file": _requirements_file(language, runtime),
+        # Full repo-relative path (e.g., "backend/app/requirements-backend.txt")
+        "requirements_file": req_file,
+        "dependency_file": req_file,
         "build_file": _build_file(language),
         "dependency_cache_command": _dep_cache_cmd(language),
         "build_command": _build_cmd(language, framework),
-        "install_command": _install_cmd(language),
+        "install_command": _install_cmd_for_file(language, req_file),
         "package_files": _package_files(language),
         "jar_path": "target/*.jar",
         # ── Network ──────────────────────────────────────────────────────────
@@ -474,6 +523,7 @@ def _runtime_image(language: str, runtime: Dict[str, Any]) -> str:
 
 
 def _requirements_file(language: str, runtime: Dict[str, Any]) -> str:
+    # Prefer the full repo-relative path from dependency_files (correct for monorepos)
     dep_files: List[str] = runtime.get("dependency_files") or []
     if dep_files:
         return dep_files[0]
@@ -485,6 +535,24 @@ def _requirements_file(language: str, runtime: Dict[str, Any]) -> str:
         "typescript": "package.json",
     }
     return mapping.get(language, "requirements.txt")
+
+
+def _requirements_copy_instruction(language: str, project_context: Dict[str, Any]) -> str:
+    """
+    Return the correct COPY instruction for the primary dependency file,
+    accounting for the build context.  Prefers the precomputed copy_instructions
+    from RepositoryBuildContext; falls back to a plain COPY using the runtime path.
+    """
+    repo_ctx = project_context.get("repository_build_context") or {}
+    copy_instrs = repo_ctx.get("copy_instructions") or {}
+    if language in copy_instrs:
+        return copy_instrs[language]
+
+    # Fallback: compute from runtime dependency_files
+    runtime = project_context.get("runtime") or {}
+    dep_file = _requirements_file(language, runtime)
+    filename = dep_file.split("/")[-1]
+    return f"COPY {dep_file} ./{filename}"
 
 
 def _build_file(language: str) -> str:
@@ -521,6 +589,16 @@ def _install_cmd(language: str) -> str:
         "typescript": "npm ci --only=production",
     }
     return mapping.get(language, "pip install --no-cache-dir -r requirements.txt")
+
+
+def _install_cmd_for_file(language: str, req_file: str) -> str:
+    """Like _install_cmd but uses the actual file name (basename) after COPY."""
+    filename = req_file.split("/")[-1]  # basename — this is what ends up in WORKDIR after COPY
+    if language == "python":
+        return f"pip install --no-cache-dir -r {filename}"
+    if language in ("javascript", "typescript"):
+        return "npm ci --only=production"
+    return f"pip install --no-cache-dir -r {filename}"
 
 
 def _default_port(framework: str) -> int:

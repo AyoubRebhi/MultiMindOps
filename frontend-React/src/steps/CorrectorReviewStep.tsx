@@ -8,13 +8,14 @@ import {
   isAnalysisRunning,
   type CorrectorStatusResponse,
 } from '@/services/correctorApi'
-import { startDockerBuild } from '@/services/workflowApi'
+import { applyAiPatch, retryDockerBuild, resetArtifact, type ArtifactKey } from '@/services/workflowApi'
 
 import { FailureSummaryCard }   from '@/components/corrector/FailureSummaryCard'
 import { ErrorLogPanel }         from '@/components/corrector/ErrorLogPanel'
 import { AIDiagnosisPanel }      from '@/components/corrector/AIDiagnosisPanel'
 import { SuggestedFixCard }      from '@/components/corrector/SuggestedFixCard'
 import { RemediationActionBar }  from '@/components/corrector/RemediationActionBar'
+import { EditableArtifactTabs } from '@/components/corrector/EditableArtifactTabs'
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,8 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
   const [isRetrying, setIsRetrying]     = useState(false)
   const [isReanalyzing, setIsReanalyzing] = useState(false)
   const [reanalyzeError, setReanalyzeError] = useState<string>()
+  const [hasUnsavedArtifacts, setHasUnsavedArtifacts] = useState(false)
+  const [artifactRefresh, setArtifactRefresh] = useState(0)
 
   const pollingRef   = useRef<ReturnType<typeof setInterval> | null>(null)
   const isMountedRef = useRef(true)
@@ -157,9 +160,10 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
 
   const handleApproveRetry = useCallback(async () => {
     if (!taskId) return
+    if (hasUnsavedArtifacts && !window.confirm('You have unsaved artifact edits. Retry will use the latest saved version, not the draft. Continue?')) return
     setIsRetrying(true)
     try {
-      await startDockerBuild(taskId)
+      await retryDockerBuild(taskId)
       mergePhaseResponse({
         task_id: taskId,
         current_phase: 'docker_build_running',
@@ -175,7 +179,47 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
     } finally {
       setIsRetrying(false)
     }
-  }, [taskId, mergePhaseResponse, onRetryBuild])
+  }, [taskId, hasUnsavedArtifacts, mergePhaseResponse, onRetryBuild])
+
+  const handleApplyAiPatchRetry = useCallback(async () => {
+    if (!taskId) return
+    if (hasUnsavedArtifacts && !window.confirm('Applying the AI patch will save over the current artifact version. Continue?')) return
+    setIsRetrying(true)
+    try {
+      await applyAiPatch(taskId)
+      setArtifactRefresh((v) => v + 1)
+      await retryDockerBuild(taskId)
+      mergePhaseResponse({
+        task_id: taskId,
+        current_phase: 'docker_build_running',
+        status: 'in_progress',
+        artifacts: {},
+        terraform_outputs: {},
+        logs: [],
+        message: '',
+      })
+      onRetryBuild()
+    } catch (e) {
+      setFetchError((e as Error).message)
+    } finally {
+      setIsRetrying(false)
+    }
+  }, [taskId, hasUnsavedArtifacts, mergePhaseResponse, onRetryBuild])
+
+  const handleResetAllOriginal = useCallback(async () => {
+    if (!taskId) return
+    if (!window.confirm('Reset Dockerfile, Docker Compose, and .dockerignore to their original generated versions?')) return
+    setIsRetrying(true)
+    try {
+      await Promise.allSettled((['dockerfile', 'docker_compose', 'dockerignore'] as ArtifactKey[]).map((key) => resetArtifact(taskId, key)))
+      setArtifactRefresh((v) => v + 1)
+      setHasUnsavedArtifacts(false)
+    } catch (e) {
+      setFetchError((e as Error).message)
+    } finally {
+      setIsRetrying(false)
+    }
+  }, [taskId])
 
   const handleReanalyze = useCallback(async () => {
     if (!taskId) return
@@ -194,6 +238,16 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
       setIsReanalyzing(false)
     }
   }, [taskId])
+
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedArtifacts) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [hasUnsavedArtifacts])
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -325,6 +379,17 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
           </div>
         )}
 
+        {taskId && (
+          <div>
+            <SectionHeading label="Manual Artifact Correction" />
+            <EditableArtifactTabs
+              taskId={taskId}
+              refreshToken={artifactRefresh}
+              onDirtyChange={setHasUnsavedArtifacts}
+            />
+          </div>
+        )}
+
         {/* Empty state when no fixes and analysis complete */}
         {!isFetching && !analysisRunning && fixes.length === 0 && analysis && (
           <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/30">
@@ -347,6 +412,8 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
           isReanalyzing={isReanalyzing}
           executionFailed={execFailed}
           onApproveRetry={handleApproveRetry}
+          onApplyAiPatchRetry={handleApplyAiPatchRetry}
+          onResetOriginal={handleResetAllOriginal}
           onReanalyze={handleReanalyze}
           onBackToInfra={onBackToInfra}
           onStopWorkflow={onStopWorkflow}

@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -33,6 +35,48 @@ class ExecutionLogEntry(BaseModel):
             "level": self.level.value,
             "message": self.message,
         }
+
+
+class ExecutionEvent(BaseModel):
+    """Typed event used by SSE/WebSocket execution consoles."""
+
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    type: str
+    message: str | None = None
+    level: LogLevel | str | None = None
+    phase: str | None = None
+    status: str | None = None
+    iteration: int | None = None
+    max_iterations: int | None = None
+    patch: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "timestamp": self.timestamp,
+            "type": self.type,
+            "message": self.message,
+            "level": self.level.value if isinstance(self.level, LogLevel) else self.level,
+            "phase": self.phase,
+            "status": self.status,
+            "iteration": self.iteration,
+            "max_iterations": self.max_iterations,
+            "patch": self.patch,
+            "metadata": self.metadata,
+        }
+        return {key: value for key, value in payload.items() if value is not None}
+
+
+class ExecutionMachineStatus(str, Enum):
+    IDLE = "idle"
+    BUILDING = "building"
+    ANALYZING_FAILURE = "analyzing_failure"
+    GENERATING_PATCH = "generating_patch"
+    APPLYING_PATCH = "applying_patch"
+    RETRYING = "retrying"
+    SUCCESS = "success"
+    FAILED = "failed"
+    MAX_RETRIES_REACHED = "max_retries_reached"
 
 
 class ExecutionStatus(str, Enum):

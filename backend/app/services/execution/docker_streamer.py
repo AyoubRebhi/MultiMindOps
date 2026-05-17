@@ -11,7 +11,7 @@ import asyncio
 import logging
 from typing import AsyncGenerator
 
-from .execution_models import ExecutionLogEntry, LogLevel
+from .execution_models import ExecutionEvent, ExecutionLogEntry, LogLevel
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +35,35 @@ class TaskLogStream:
 
     def __init__(self) -> None:
         self._logs: list[ExecutionLogEntry] = []
+        self._events: list[ExecutionEvent] = []
         self._condition: asyncio.Condition = asyncio.Condition()
         self._done: bool = False
 
     async def publish(self, entry: ExecutionLogEntry) -> None:
+        event = ExecutionEvent(
+            type="build_log",
+            timestamp=entry.timestamp,
+            level=entry.level,
+            message=entry.message,
+            phase="building",
+        )
         async with self._condition:
             self._logs.append(entry)
+            self._events.append(event)
             self._condition.notify_all()
         logger.debug("[LogStream] Appended log entry: level=%s msg=%.60s total=%d",
                      entry.level.value, entry.message, len(self._logs))
+
+    async def publish_event(self, event: ExecutionEvent) -> None:
+        async with self._condition:
+            self._events.append(event)
+            self._condition.notify_all()
+        logger.debug(
+            "[LogStream] Appended event: type=%s msg=%.60s total=%d",
+            event.type,
+            event.message or "",
+            len(self._events),
+        )
 
     async def finish(self) -> None:
         async with self._condition:
@@ -73,9 +93,32 @@ class TaskLogStream:
                 logger.debug("[LogStream] Subscriber reached end of stream")
                 break
 
+    async def subscribe_events(self) -> AsyncGenerator[ExecutionEvent, None]:
+        """Yield typed execution events from the start, then continue live."""
+        idx = 0
+        logger.debug("[LogStream] New event subscriber attached")
+        while True:
+            async with self._condition:
+                while idx >= len(self._events) and not self._done:
+                    await self._condition.wait()
+                batch = self._events[idx:]
+                idx += len(batch)
+                done = self._done and idx >= len(self._events)
+
+            for event in batch:
+                yield event
+
+            if done:
+                logger.debug("[LogStream] Event subscriber reached end of stream")
+                break
+
     @property
     def logs(self) -> list[ExecutionLogEntry]:
         return list(self._logs)
+
+    @property
+    def events(self) -> list[ExecutionEvent]:
+        return list(self._events)
 
     @property
     def is_done(self) -> bool:
@@ -114,6 +157,11 @@ class LogStreamManager:
         stream = self.get_or_create(task_id)
         await stream.publish(entry)
         return entry
+
+    async def publish_event(self, task_id: str, event: ExecutionEvent) -> ExecutionEvent:
+        stream = self.get_or_create(task_id)
+        await stream.publish_event(event)
+        return event
 
     async def finish(self, task_id: str) -> None:
         stream = self.get(task_id)

@@ -1,10 +1,4 @@
-"""
-Editable artifact persistence endpoints.
-
-GET  /api/tasks/{task_id}/artifacts          — fetch current artifacts + metadata
-PATCH /api/tasks/{task_id}/artifacts         — persist user-edited content
-POST /api/tasks/{task_id}/artifacts/reset    — reset one artifact to generated content
-"""
+"""Editable artifact persistence endpoints."""
 
 from __future__ import annotations
 
@@ -22,7 +16,6 @@ from backend.app.services.core.task_service import TaskService
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Artifact Edit"])
 
-# Canonical path — keep in sync with frontend artifactsRoute()
 ARTIFACTS_BASE_ROUTE = "/api/tasks/{task_id}/artifacts"
 
 
@@ -45,29 +38,45 @@ class ResetArtifactRequest(BaseModel):
     artifact_type: str
 
 
-# ── GET /api/tasks/{task_id}/artifacts ───────────────────────────────────────
-
 @router.get("/api/tasks/{task_id}/artifacts")
 def get_artifacts(
     task_id: str,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Return current artifact content and per-artifact metadata (version, timestamps)."""
+    """Return current artifact content, comparison slots, and history."""
     task = TaskService.get_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    current = ArtifactService.get_all_current_artifacts(db, task)
     metadata = ArtifactService.get_artifact_metadata(db, task)
+    current = {
+        key: entry.get("current_content")
+        for key, entry in metadata.items()
+        if isinstance(entry, dict) and entry.get("current_content")
+    }
+    artifact_objects = {
+        key: {
+            "current_content": entry.get("current_content", ""),
+            "original_content": entry.get("original_content") or entry.get("generated_content") or "",
+            "ai_patched_content": entry.get("ai_patched_content"),
+            "version": entry.get("version", 1),
+            "user_modified": bool(entry.get("user_modified")),
+            "updated_at": entry.get("updated_at") or entry.get("last_modified_at"),
+            "last_modified_by": entry.get("last_modified_by", "agent"),
+            "checksum": entry.get("checksum"),
+        }
+        for key, entry in metadata.items()
+        if isinstance(entry, dict)
+    }
 
     return {
         "task_id": task_id,
         "artifacts": current,
         "metadata": metadata,
+        "history": ArtifactService.get_artifact_history(db, task),
+        **artifact_objects,
     }
 
-
-# ── PATCH /api/tasks/{task_id}/artifacts ─────────────────────────────────────
 
 @router.patch("/api/tasks/{task_id}/artifacts")
 def patch_artifacts(
@@ -75,18 +84,13 @@ def patch_artifacts(
     body: PatchArtifactsRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """
-    Persist user-edited artifact content.
-
-    Only provided fields are updated — omitted fields are left unchanged.
-    Each saved artifact gets its version incremented and last_modified_by = "user".
-    """
+    """Persist user-edited artifact content."""
     task = TaskService.get_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
     updates: dict[str, str] = {
-        k: v for k, v in body.model_dump().items() if v is not None
+        key: value for key, value in body.model_dump().items() if value is not None
     }
     if not updates:
         raise HTTPException(status_code=422, detail="No artifact content provided")
@@ -98,13 +102,12 @@ def patch_artifacts(
         len(saved), task_id, list(saved.keys()),
     )
     return {
+        "success": True,
         "task_id": task_id,
         "saved": list(saved.keys()),
-        "versions": {k: v.get("version") for k, v in saved.items()},
+        "versions": {key: value.get("version") for key, value in saved.items()},
     }
 
-
-# ── POST /api/tasks/{task_id}/artifacts/reset ────────────────────────────────
 
 @router.post("/api/tasks/{task_id}/artifacts/reset")
 def reset_artifact(
@@ -112,7 +115,7 @@ def reset_artifact(
     body: ResetArtifactRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Restore current_content to the immutable generated_content for one artifact."""
+    """Restore current_content to original_content for one artifact."""
     task = TaskService.get_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -125,12 +128,36 @@ def reset_artifact(
         )
 
     logger.info(
-        "[ArtifactEdit] Reset artifact=%s for task=%s → version=%d",
+        "[ArtifactEdit] Reset artifact=%s for task=%s version=%d",
         body.artifact_type, task_id, result.get("version"),
     )
     return {
+        "success": True,
         "task_id": task_id,
         "artifact_type": body.artifact_type,
         "version": result.get("version"),
-        "reset_to": "generated_content",
+        "reset_to": "original_content",
+    }
+
+
+@router.post("/api/tasks/{task_id}/artifacts/apply-ai-patch")
+def apply_ai_patch(
+    task_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Promote stored AI patch previews into current editable artifacts."""
+    task = TaskService.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    saved = ArtifactService.apply_ai_patches(db, task)
+    if not saved:
+        raise HTTPException(status_code=422, detail="No AI patch proposal is available to apply")
+
+    logger.info("[ArtifactEdit] Applied AI patches for task=%s keys=%s", task_id, list(saved))
+    return {
+        "success": True,
+        "task_id": task_id,
+        "saved": list(saved.keys()),
+        "versions": {key: value.get("version") for key, value in saved.items()},
     }

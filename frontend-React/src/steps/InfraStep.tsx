@@ -2,14 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Container, FolderOpen, Loader2,
   Server, Globe, Zap, Database, AlertTriangle, CheckCircle2,
-  Save, RotateCcw,
+  Save, RotateCcw, Layers,
 } from 'lucide-react'
 import { StepContainer } from '@/components/workflow/StepContainer'
 import { CodeEditor } from '@/components/workflow/CodeEditor'
 import { useWorkflowStore } from '@/store/workflowStore'
 import { getInfraArtifacts, displayName, artifactLanguage, patchArtifacts, resetArtifact } from '@/services/workflowApi'
-import type { ArtifactKey } from '@/services/workflowApi'
-import type { TopologySummary } from '@/services/workflowApi'
+import type { ArtifactKey, TopologySummary, RepositoryBuildContext, BuildArtifactContext } from '@/services/workflowApi'
 import { cn } from '@/lib/utils'
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
@@ -235,6 +234,122 @@ function TopologyRow({
   )
 }
 
+// ── Docker Build Context debug panel ─────────────────────────────────────────
+
+const STRATEGY_LABEL: Record<string, string> = {
+  repo_root_context: 'Repo root (docker build -f Dockerfile .)',
+  backend_context:   'Backend dir (docker build backend/app/)',
+  compose_driven:    'docker compose build',
+}
+
+function CopySourceRow({ lang, instruction }: { lang: string; instruction: string }) {
+  // Parse COPY src dest to show check icon
+  const parts = instruction.split(' ')
+  const src  = parts[1] ?? ''
+  const valid = src.includes('/')  // heuristic: includes subdirectory → likely correct
+  return (
+    <div className="flex items-start gap-1.5 text-xs font-mono">
+      {valid
+        ? <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0 mt-0.5" />
+        : <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0 mt-0.5" />
+      }
+      <span className="text-slate-400 dark:text-slate-500 w-12 shrink-0">{lang}</span>
+      <span className="text-slate-600 dark:text-slate-300">{instruction}</span>
+    </div>
+  )
+}
+
+function BuildContextPanel({
+  repoCtx,
+  artifactCtx,
+}: {
+  repoCtx: RepositoryBuildContext
+  artifactCtx?: BuildArtifactContext
+}) {
+  const strategy   = repoCtx.docker ?? artifactCtx?.strategy
+  const strategyLabel = strategy
+    ? (STRATEGY_LABEL[strategy.strategy] ?? strategy.strategy)
+    : 'unknown'
+  const copyInstrs = repoCtx.copy_instructions ?? artifactCtx?.dependency_copy_instructions ?? {}
+  const depFiles   = repoCtx.dependency_files ?? {}
+
+  return (
+    <div className={cn(
+      'rounded-xl border px-4 py-3 space-y-3',
+      'bg-indigo-50 dark:bg-indigo-500/10',
+      'border-indigo-200 dark:border-indigo-500/20',
+    )}>
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        <Layers className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+        <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 uppercase tracking-wide">
+          Docker Build Context
+        </span>
+      </div>
+
+      {/* Strategy + paths */}
+      <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+        <div className="col-span-2 flex items-start gap-1.5 text-slate-500 dark:text-slate-400">
+          <Zap className="w-3 h-3 shrink-0 mt-0.5 text-indigo-400" />
+          <span className="text-slate-400 dark:text-slate-500 w-24 shrink-0">Strategy</span>
+          <span className="text-slate-700 dark:text-slate-200">{strategyLabel}</span>
+        </div>
+        {strategy && (
+          <>
+            <TopologyRow icon={<FolderOpen className="w-3 h-3" />} label="Context" value={strategy.context_path} mono />
+            <TopologyRow icon={<Container  className="w-3 h-3" />} label="Dockerfile" value={strategy.dockerfile_path} mono />
+            {repoCtx.backend_root && (
+              <TopologyRow icon={<Server className="w-3 h-3" />} label="Backend root" value={repoCtx.backend_root} mono />
+            )}
+            {strategy.recommended_copy_prefix && (
+              <TopologyRow icon={<AlertTriangle className="w-3 h-3 text-amber-400" />}
+                label="COPY prefix"
+                value={strategy.recommended_copy_prefix}
+                mono />
+            )}
+          </>
+        )}
+        {artifactCtx && (
+          <>
+            <TopologyRow icon={<Globe className="w-3 h-3" />} label="Compose ctx" value={artifactCtx.compose_context} mono />
+            <TopologyRow icon={<FolderOpen className="w-3 h-3" />} label="Compose df" value={artifactCtx.compose_dockerfile} mono />
+          </>
+        )}
+      </div>
+
+      {/* Dep files in repo */}
+      {Object.keys(depFiles).length > 0 && (
+        <div className="space-y-0.5 pt-1 border-t border-indigo-200 dark:border-indigo-500/20">
+          <p className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wide mb-1">
+            Dependency files in repository
+          </p>
+          {Object.entries(depFiles).map(([lang, files]) =>
+            files.map((f, i) => (
+              <div key={`${lang}-${i}`} className="flex items-center gap-1.5 text-xs font-mono">
+                <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />
+                <span className="text-slate-400 dark:text-slate-500 w-12 shrink-0">{lang}</span>
+                <span className="text-slate-600 dark:text-slate-300">{f}</span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Resolved COPY sources */}
+      {Object.keys(copyInstrs).length > 0 && (
+        <div className="space-y-0.5 pt-1 border-t border-indigo-200 dark:border-indigo-500/20">
+          <p className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wide mb-1">
+            Resolved COPY sources
+          </p>
+          {Object.entries(copyInstrs).map(([lang, instr]) => (
+            <CopySourceRow key={lang} lang={lang} instruction={instr} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -246,7 +361,10 @@ interface Props {
 const INFRA_ARTIFACT_KEYS = new Set(['dockerfile', 'dockerignore', 'docker_compose', 'env_example'])
 
 export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
-  const { task, taskId, phaseArtifacts, editedArtifacts, editArtifact, currentPhase, topologySummary } = useWorkflowStore()
+  const {
+    task, taskId, phaseArtifacts, editedArtifacts, editArtifact,
+    currentPhase, topologySummary, repositoryBuildContext, buildArtifactContext,
+  } = useWorkflowStore()
 
   // Primary: task.infra.artifacts (enriched by setTask with phaseArtifacts)
   // Fallback: phaseArtifacts filtered to Docker keys (belt-and-suspenders for
@@ -375,6 +493,14 @@ export function InfraStep({ onApprove, onBack, isPhaseLoading }: Props) {
 
         {/* Topology panel — shown when the grounding layer produced metadata */}
         {resolvedTopology && <TopologyPanel summary={resolvedTopology} />}
+
+        {/* Docker Build Context panel — shows strategy, COPY sources, compose sync */}
+        {repositoryBuildContext && (
+          <BuildContextPanel
+            repoCtx={repositoryBuildContext}
+            artifactCtx={buildArtifactContext}
+          />
+        )}
 
         {/* File tabs + editor */}
         <div className="rounded-xl border border-slate-200 dark:border-white/[0.06] overflow-hidden bg-white dark:bg-surface-900">

@@ -125,27 +125,57 @@ _DEFAULT_FIXES: Dict[FailureType, List[Dict[str, Any]]] = {
 
     FailureType.MISSING_FILE: [
         {
-            "title": "Verify COPY source path exists in the build context",
+            "title": "COPY path does not match the build context (most common root cause)",
             "explanation": (
-                "The file referenced in COPY does not exist in the Docker build context. "
-                "All paths are relative to where `docker build` is run."
+                "The file referenced in COPY exists in the repository but NOT at the path "
+                "the Dockerfile expects. This almost always means a monorepo layout where "
+                "files live in a subdirectory (e.g., backend/app/) but the build context is "
+                "the repository root ('.'). "
+                "Example: file is at 'backend/app/requirements-backend.txt' but the Dockerfile "
+                "says COPY requirements-backend.txt — Docker looks for it at the repo root and "
+                "fails. "
+                "Fix: COPY backend/app/requirements-backend.txt ./requirements-backend.txt"
             ),
-            "patch": "COPY requirements.txt /app/requirements.txt",
+            "patch": (
+                "# If build context is '.' and file is in backend/app/:\n"
+                "COPY backend/app/requirements-backend.txt ./requirements-backend.txt\n"
+                "RUN pip install --no-cache-dir -r requirements-backend.txt\n\n"
+                "# OR: change docker-compose build context to the backend directory:\n"
+                "# build:\n"
+                "#   context: backend/app\n"
+                "#   dockerfile: Dockerfile"
+            ),
             "severity": RemediationSeverity.CRITICAL,
             "applies_to": "Dockerfile",
         },
         {
             "title": "Review .dockerignore for accidental exclusions",
-            "explanation": ".dockerignore may be excluding required files.",
+            "explanation": (
+                ".dockerignore may be excluding required files. "
+                "Check that the file is not matched by a pattern like '*.txt' or 'backend/*'."
+            ),
             "severity": RemediationSeverity.HIGH,
             "applies_to": ".dockerignore",
         },
         {
-            "title": "Use WORKDIR before relative COPY paths",
-            "explanation": "Set WORKDIR before using relative destination paths.",
-            "patch": "WORKDIR /app\nCOPY . .",
-            "severity": RemediationSeverity.MEDIUM,
-            "applies_to": "Dockerfile",
+            "title": "Align docker-compose build.context with Dockerfile COPY paths",
+            "explanation": (
+                "The build context in docker-compose.yml must match the COPY paths in "
+                "the Dockerfile. If context is '.', all COPY sources must be repo-relative. "
+                "If context is 'backend/app', COPY sources are relative to that directory."
+            ),
+            "patch": (
+                "# docker-compose.yml — option A: repo root context (files must include subdirectory)\n"
+                "build:\n"
+                "  context: .\n"
+                "  dockerfile: Dockerfile\n\n"
+                "# docker-compose.yml — option B: backend context (files relative to backend/app)\n"
+                "build:\n"
+                "  context: backend/app\n"
+                "  dockerfile: Dockerfile"
+            ),
+            "severity": RemediationSeverity.CRITICAL,
+            "applies_to": "docker-compose.yml",
         },
     ],
 
@@ -446,6 +476,7 @@ def _build_llm_user_prompt(
     blueprint_used: Optional[str],
     previous_retries: int,
     validator_output: Optional[dict],
+    context: Optional[dict] = None,
 ) -> str:
     dockerfile_lines = (artifacts.get("dockerfile") or "").splitlines()
     dockerfile_snippet = "\n".join(dockerfile_lines[:50])
@@ -473,6 +504,50 @@ def _build_llm_user_prompt(
         else ""
     )
 
+    # ── Build context section (Phase 8: context-aware MISSING_FILE diagnosis) ──
+    build_context_section = ""
+    ctx = context or {}
+    repo_ctx = ctx.get("repository_build_context") or {}
+    build_artifact_ctx = ctx.get("build_artifact_context") or {}
+    static_val = ctx.get("static_validation") or {}
+
+    if repo_ctx or build_artifact_ctx or static_val:
+        docker_strategy = repo_ctx.get("docker") or build_artifact_ctx.get("strategy") or {}
+        dep_files = repo_ctx.get("dependency_files") or {}
+        copy_instrs = repo_ctx.get("copy_instructions") or {}
+        static_issues = static_val.get("issues") or []
+
+        build_context_section = "\nREPOSITORY BUILD CONTEXT:\n"
+        if docker_strategy:
+            build_context_section += (
+                f"  strategy:        {docker_strategy.get('strategy', 'unknown')}\n"
+                f"  build context:   {docker_strategy.get('context_path', '.')}\n"
+                f"  dockerfile:      {docker_strategy.get('dockerfile_path', 'Dockerfile')}\n"
+                f"  copy_prefix:     {docker_strategy.get('recommended_copy_prefix', 'none')}\n"
+            )
+        if dep_files:
+            for lang, files in dep_files.items():
+                if files:
+                    build_context_section += f"  {lang} deps in repo: {', '.join(files[:3])}\n"
+        if copy_instrs:
+            build_context_section += "  Correct COPY instructions:\n"
+            for lang, instr in copy_instrs.items():
+                build_context_section += f"    {lang}: {instr}\n"
+        if static_issues:
+            build_context_section += f"\nSTATIC COPY VALIDATION FOUND {len(static_issues)} ISSUE(S):\n"
+            for issue in static_issues[:5]:
+                build_context_section += (
+                    f"  ✗ {issue.get('copy_instruction', '')}\n"
+                    f"    actual repo path: {issue.get('actual_repo_path', 'not found')}\n"
+                    f"    suggested fix:    {issue.get('suggested_fix', 'none')}\n"
+                )
+        build_context_section += (
+            "\nIMPORTANT: If the failure is MISSING_FILE, reason about the build context. "
+            "The file may exist in the repository at a different path than what COPY references. "
+            "A monorepo with context='.' requires COPY to include the subdirectory prefix "
+            "(e.g., COPY backend/app/requirements.txt not COPY requirements.txt).\n"
+        )
+
     return (
         f"Docker build failure analysis request:\n\n"
         f"FAILURE TYPE (deterministic): {classification.failure_type.value}\n"
@@ -482,6 +557,7 @@ def _build_llm_user_prompt(
         f"PACKAGE MANAGER DETECTED: {extracted.package_manager or 'none'}\n"
         f"{blueprint_section}"
         f"{retry_section}"
+        f"{build_context_section}"
         f"{validator_section}"
         f"\nERROR EXCERPT:\n"
         f"{'─' * 60}\n"
@@ -859,6 +935,7 @@ class DockerCorrectorAgent(BaseCorrectorAgent):
                     blueprint_used=blueprint_used,
                     previous_retries=previous_retries,
                     validator_output=validator_output,
+                    context=context,
                 )
 
                 llm_data = await asyncio.to_thread(

@@ -125,10 +125,18 @@ class EnhancedBaseAgent(BaseAgent):
         current_prompt = user_prompt
         last_response: Optional[Dict[str, Any]] = None
         last_exc: Optional[Exception] = None
-
-        for attempt in range(1, self.max_react_iterations + 1):
+        iteration_limit = (
+            1 if getattr(llm, "single_request_mode", False) else self.max_react_iterations
+        )
+        if iteration_limit == 1 and self.max_react_iterations > 1:
             self._log.info(
-                "[%s] ReAct iteration %d/%d", self.name, attempt, self.max_react_iterations
+                "[%s] Single-request mode enabled; ReAct refinement retries disabled",
+                self.name,
+            )
+
+        for attempt in range(1, iteration_limit + 1):
+            self._log.info(
+                "[%s] ReAct iteration %d/%d", self.name, attempt, iteration_limit
             )
 
             # ── 1. Cache check (first attempt only, unmodified prompt) ────────
@@ -161,10 +169,10 @@ class EnhancedBaseAgent(BaseAgent):
                     "[%s] LLM call failed (attempt %d/%d): %s",
                     self.name,
                     attempt,
-                    self.max_react_iterations,
+                    iteration_limit,
                     exc,
                 )
-                if attempt < self.max_react_iterations:
+                if attempt < iteration_limit:
                     time.sleep(0.5 * attempt)
                     continue
                 raise
@@ -201,13 +209,20 @@ class EnhancedBaseAgent(BaseAgent):
             self._log.warning(
                 "[%s] Quality issues at iteration %d: %s", self.name, attempt, issues
             )
+            if iteration_limit == 1:
+                self._log.warning(
+                    "[%s] Returning first response with quality issues because single-request mode is enabled",
+                    self.name,
+                )
+                self.memory.remember(user_prompt, response, confidence=0.45)
+                return response
             current_prompt = self._build_refinement_prompt(user_prompt, issues, attempt)
 
         # ── 5. Iteration budget exhausted ────────────────────────────────────
         self._log.warning(
             "[%s] ReAct loop exhausted after %d iterations — returning last response",
             self.name,
-            self.max_react_iterations,
+            iteration_limit,
         )
         if last_response is not None:
             self.memory.remember(user_prompt, last_response, confidence=0.3)
@@ -223,7 +238,7 @@ class EnhancedBaseAgent(BaseAgent):
             raise last_exc
         raise RuntimeError(
             f"[{self.name}] ReAct loop produced no response after "
-            f"{self.max_react_iterations} iterations"
+            f"{iteration_limit} iterations"
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────────

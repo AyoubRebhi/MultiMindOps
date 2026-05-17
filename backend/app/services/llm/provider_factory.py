@@ -35,6 +35,10 @@ import time
 from typing import Any, Dict, Optional
 
 from backend.app.services.llm.models import LLMResponse
+from backend.app.services.llm.token_strategy import (
+    get_agent_token_config,
+    resolve_output_token_budget,
+)
 
 # Agents that get OpenAI as primary provider; all others are Groq-only.
 # Mirrors AGENT_PROVIDER_MAP in config/llm_config.py.
@@ -71,11 +75,14 @@ class ProviderFactory:
         openai_max_retries: Optional[int] = None,
         groq_service=None,
         _force_groq_only: bool = False,
+        _agent_name: Optional[str] = None,
     ) -> None:
         from backend.app.core.config import settings
 
         self._primary: Optional[Any] = None
         self._openai_enabled = False
+        self._agent_name = _agent_name
+        self._agent_token_config = get_agent_token_config(_agent_name)
 
         if not _force_groq_only:
             api_key = (openai_api_key or settings.OPENAI_KEY or "").strip()
@@ -124,21 +131,54 @@ class ProviderFactory:
                 "[ProviderFactory] Agent '%s' → Groq-only (per AGENT_PROVIDER_MAP)",
                 agent_name,
             )
-            return cls(_force_groq_only=True, **kwargs)
+            return cls(_force_groq_only=True, _agent_name=agent_name, **kwargs)
         logger.info(
             "[ProviderFactory] Agent '%s' → OpenAI primary + Groq fallback",
             agent_name,
         )
-        return cls(**kwargs)
+        token_config = get_agent_token_config(agent_name)
+        if token_config and token_config.single_request_mode:
+            kwargs.setdefault("openai_max_retries", 0)
+        return cls(_agent_name=agent_name, **kwargs)
 
     # ── Compatibility properties ──────────────────────────────────────────────
 
     @property
     def model(self) -> str:
         """Returns the active model name — mirrors LLMService.model."""
+        max_tokens, temperature, _response_format, telemetry = self._resolve_call_options(
+            system_prompt,
+            user_prompt,
+            temperature,
+            max_tokens,
+            None,
+        )
         if self._primary is not None:
             return self._primary.model_name
         return self._fallback.model_name
+
+    @property
+    def single_request_mode(self) -> bool:
+        return bool(self._agent_token_config and self._agent_token_config.single_request_mode)
+
+    def _resolve_call_options(
+        self,
+        system_prompt: Optional[str],
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        response_format: Optional[dict],
+    ) -> tuple[int, float, Optional[dict], dict[str, Any]]:
+        resolved_tokens, telemetry = resolve_output_token_budget(
+            self._agent_name,
+            system_prompt,
+            user_prompt,
+            max_tokens,
+        )
+        if self._agent_token_config:
+            temperature = self._agent_token_config.temperature
+            response_format = response_format or {"type": "json_object"}
+        return resolved_tokens, temperature, response_format, telemetry
 
     # ── Async interface ───────────────────────────────────────────────────────
 
@@ -155,8 +195,16 @@ class ProviderFactory:
 
         Returns an LLMResponse with fallback_used=True when Groq was used.
         """
+        max_tokens, temperature, response_format, telemetry = self._resolve_call_options(
+            system_prompt,
+            prompt,
+            temperature,
+            max_tokens,
+            response_format,
+        )
         if self._primary is not None:
             try:
+                t0 = time.monotonic()
                 result = await self._primary.generate(
                     prompt=prompt,
                     system_prompt=system_prompt,
@@ -164,10 +212,23 @@ class ProviderFactory:
                     max_tokens=max_tokens,
                     response_format=response_format,
                 )
+                latency_s = time.monotonic() - t0
                 logger.info(
                     "[ProviderFactory] provider=openai model=%s api=%s latency=%dms tokens=%s",
                     result.model, result.api_type, result.latency_ms, result.total_tokens,
                 )
+                if telemetry.get("configured"):
+                    logger.info(
+                        "[OpenAIProvider] agent=%s model=%s api=%s tokens=%d "
+                        "latency=%.2fs single_request=%s retry_count=0 repo_size=%s",
+                        telemetry.get("agent"),
+                        result.model,
+                        result.api_type,
+                        max_tokens,
+                        latency_s,
+                        telemetry.get("single_request"),
+                        telemetry.get("repo_size"),
+                    )
                 return result
 
             except Exception as exc:
@@ -205,20 +266,41 @@ class ProviderFactory:
 
         Signature matches LLMService.chat() exactly.
         """
+        max_tokens, temperature, _response_format, telemetry = self._resolve_call_options(
+            system_prompt,
+            user_prompt,
+            temperature,
+            max_tokens,
+            None,
+        )
         if self._primary is not None:
             try:
+                t0 = time.monotonic()
                 result = self._primary.generate_sync(
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                latency_s = time.monotonic() - t0
                 logger.info(
                     "[ProviderFactory] provider=openai model=%s api=%s latency=%dms "
                     "tokens=%s/%s/%s",
                     result.model, result.api_type, result.latency_ms,
                     result.prompt_tokens, result.completion_tokens, result.total_tokens,
                 )
+                if telemetry.get("configured"):
+                    logger.info(
+                        "[OpenAIProvider] agent=%s model=%s api=%s tokens=%d "
+                        "latency=%.2fs single_request=%s retry_count=0 repo_size=%s",
+                        telemetry.get("agent"),
+                        result.model,
+                        result.api_type,
+                        max_tokens,
+                        latency_s,
+                        telemetry.get("single_request"),
+                        telemetry.get("repo_size"),
+                    )
                 return result.content
 
             except Exception as exc:
@@ -271,19 +353,24 @@ class ProviderFactory:
         from backend.app.services.core.llm_service import LLMService
         from backend.app.services.llm.openai_provider import TruncatedResponseError
 
-        _JSON_OBJECT_FORMAT = {"type": "json_object"}
-        _MAX_RETRY_TOKENS = 16_000
+        max_tokens, temperature, response_format, telemetry = self._resolve_call_options(
+            system_prompt,
+            user_prompt,
+            temperature,
+            max_tokens,
+            {"type": "json_object"},
+        )
 
         if self._primary is not None:
             current_max = max_tokens
-            for _attempt in range(2):  # one automatic retry with doubled budget
+            for _attempt in range(1):  # single request: no token escalation retry
                 try:
                     result = self._primary.generate_sync(
                         prompt=user_prompt,
                         system_prompt=system_prompt,
                         temperature=temperature,
                         max_tokens=current_max,
-                        response_format=_JSON_OBJECT_FORMAT,
+                        response_format=response_format,
                     )
                     logger.info(
                         "[ArtifactGeneration] provider=openai model=%s "
@@ -293,6 +380,21 @@ class ProviderFactory:
                         result.finish_reason,
                         len(result.content),
                     )
+                    if telemetry.get("configured"):
+                        logger.info(
+                            "[OpenAIProvider] agent=%s model=%s api=%s tokens=%d "
+                            "latency=%.2fs single_request=%s retry_count=0 repo_size=%s "
+                            "reasoning=%s verbosity=%s",
+                            telemetry.get("agent"),
+                            result.model,
+                            result.api_type,
+                            max_tokens,
+                            result.latency_ms / 1000,
+                            telemetry.get("single_request"),
+                            telemetry.get("repo_size"),
+                            telemetry.get("reasoning_effort"),
+                            telemetry.get("verbosity"),
+                        )
                     # json_object mode guarantees syntactically valid JSON —
                     # use direct json.loads, no regex/markdown-strip heuristics.
                     try:
@@ -316,7 +418,7 @@ class ProviderFactory:
                     return LLMService._safe_json_loads(result.content)
 
                 except TruncatedResponseError as exc:
-                    if _attempt == 0:
+                    if False and _attempt == 0:
                         current_max = min(max_tokens * 2, _MAX_RETRY_TOKENS)
                         logger.warning(
                             "[ProviderFactory] Response truncated "

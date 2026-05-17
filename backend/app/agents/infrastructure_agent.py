@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List, Optional
 from backend.app.agents.base_agent import EnhancedBaseAgent
 from backend.app.services.artifact_generation.pipeline import StructuredDockerfileGenerator
 from backend.app.services.cicd.artifact_contract_service import ArtifactContractService
+from backend.app.services.artifact_generation.validators.docker_static_validator import DockerBuildStaticValidator
 from backend.app.services.infrastructure.build_context_resolver import BuildContextResolver
 from backend.app.services.infrastructure.compose_topology_analyzer import ComposeTopologyAnalyzer
 from backend.app.services.infrastructure.infrastructure_artifact_builder_service import (
@@ -40,6 +41,7 @@ from backend.app.services.infrastructure.infrastructure_artifact_builder_service
 )
 from backend.app.services.infrastructure.infrastructure_context_assembler import InfrastructureContextAssembler
 from backend.app.services.infrastructure.infrastructure_context_mapper import InfrastructureContextMapper
+from backend.app.services.infrastructure.repository_build_context import BuildStrategyDetector
 from backend.app.services.llm.provider_factory import ProviderFactory
 from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 from backend.app.services.rag.template_retrieval_service import TemplateRetrievalService
@@ -79,6 +81,10 @@ class InfrastructureAgent(EnhancedBaseAgent):
         self._compose_analyzer = ComposeTopologyAnalyzer()
         self._build_context_resolver = BuildContextResolver()
         self._context_assembler = InfrastructureContextAssembler()
+        # Phase 2: Repository build context detection
+        self._strategy_detector = BuildStrategyDetector()
+        # Phase 5: Pre-build static validation
+        self._static_validator = DockerBuildStaticValidator()
         # Phase 1: Structured constrained generation pipeline
         self._structured_generator = StructuredDockerfileGenerator(
             llm=self.llm,
@@ -147,6 +153,34 @@ class InfrastructureAgent(EnhancedBaseAgent):
             build_context_report=build_context_report,
         )
 
+        # ── 1c. Repository Build Context (Phase 2) ────────────────────────────
+        # Detect strategy AFTER compose topology is available
+        try:
+            repo_build_ctx = self._strategy_detector.detect(
+                known_files=known_files or [],
+                mapped_context=mapped_context,
+                compose_topology=compose_topology,
+            )
+            build_artifact_ctx = self._strategy_detector.build_artifact_context(
+                repo_ctx=repo_build_ctx,
+                mapped_context=mapped_context,
+            )
+            # Inject into mapped_context so section_generator can use it
+            mapped_context["repository_build_context"] = repo_build_ctx.to_dict()
+            mapped_context["build_artifact_context"] = build_artifact_ctx.to_dict()
+            logger.info(
+                "[InfrastructureAgent] Repository build context: strategy=%s context=%s "
+                "backend_root=%s copy_prefix=%s",
+                repo_build_ctx.docker.strategy if repo_build_ctx.docker else "unknown",
+                repo_build_ctx.docker.context_path if repo_build_ctx.docker else ".",
+                repo_build_ctx.backend_root,
+                (repo_build_ctx.docker.recommended_copy_prefix if repo_build_ctx.docker else None),
+            )
+        except Exception as exc:
+            logger.warning("[InfrastructureAgent] Repository build context detection failed: %s", exc)
+            repo_build_ctx = None
+            build_artifact_ctx = None
+
         fallback_artifacts = self.artifact_builder.build_fallback_artifacts(mapped_context)
 
         # ── 2. Structured Dockerfile generation (Tier 1 — Phase 1) ───────────
@@ -163,6 +197,36 @@ class InfrastructureAgent(EnhancedBaseAgent):
 
             if structured_result.artifact and not structured_result.has_validation_errors():
                 structured_dockerfile = structured_result.artifact
+
+                # ── Phase 5: Post-generation static COPY validation ───────────
+                if known_files:
+                    build_ctx_path = (
+                        (repo_build_ctx.docker.context_path if repo_build_ctx and repo_build_ctx.docker else None)
+                        or mapped_context.get("build_context", ".")
+                    )
+                    try:
+                        static_val = self._static_validator.validate(
+                            dockerfile_content=structured_dockerfile,
+                            build_context=build_ctx_path,
+                            known_files=known_files,
+                        )
+                        infrastructure_generation = infrastructure_generation or {}
+                        infrastructure_generation["static_validation"] = static_val.to_dict()
+                        if not static_val.valid:
+                            logger.warning(
+                                "[InfrastructureAgent] Static COPY validation found %d issue(s) "
+                                "in generated Dockerfile — these may cause build failures:",
+                                len(static_val.issues),
+                            )
+                            for issue in static_val.issues:
+                                logger.warning(
+                                    "[InfrastructureAgent]   COPY mismatch: %s → fix: %s",
+                                    issue.message,
+                                    issue.suggested_fix or "no suggestion available",
+                                )
+                    except Exception as exc:
+                        logger.warning("[InfrastructureAgent] Static validation error: %s", exc)
+
                 logger.info(
                     "[InfrastructureAgent] Structured pipeline succeeded — "
                     "blueprint=%s sections=%d fallbacks=%d",
@@ -366,6 +430,12 @@ Approved artifacts to generate (Docker artifacts only):
         response["topology_summary"] = mapped_context.get("topology_summary")
         if compose_topology is not None:
             response["compose_topology"] = mapped_context.get("compose_topology")
+
+        # Repository build context — expose for UI debug panel and corrector
+        if repo_build_ctx is not None:
+            response["repository_build_context"] = repo_build_ctx.to_dict()
+        if build_artifact_ctx is not None:
+            response["build_artifact_context"] = build_artifact_ctx.to_dict()
 
         return response
 

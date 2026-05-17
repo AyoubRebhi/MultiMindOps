@@ -27,10 +27,12 @@ from .docker_registry import docker_login, generate_image_tag
 from .docker_streamer import LogStreamManager, classify_log_line, log_stream_manager
 from .execution_models import (
     DockerBuildResult,
+    ExecutionEvent,
     ExecutionLogEntry,
     ExecutionStatus,
     LogLevel,
 )
+from .execution_state_service import record_execution_event
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,8 @@ class DockerExecutor:
         registry_password: str = "",
         push_on_success: bool = False,
         streamer: LogStreamManager | None = None,
+        build_strategy: dict | None = None,
+        finish_stream: bool = True,
     ) -> None:
         self.task_id = task_id
         self.artifacts = artifacts
@@ -81,6 +85,9 @@ class DockerExecutor:
         self.push_on_success = push_on_success
         self._streamer = streamer or log_stream_manager
         self._workspace: str | None = None
+        # Build strategy metadata (from RepositoryBuildContext)
+        self._build_strategy: dict = build_strategy or {}
+        self._finish_stream = finish_stream
         # Tracking for structured failure diagnostics
         self._docker_command: str | None = None
         self._last_error_line: str | None = None
@@ -102,6 +109,15 @@ class DockerExecutor:
         )
 
         try:
+            await self._emit_event(
+                "build_started",
+                message=f"Docker build started: {self.image_tag}",
+                status="running",
+                phase="building",
+            )
+            # ── Build strategy trace (Phase 6) ────────────────────────────────
+            await self._emit_build_strategy_trace()
+
             # ── PART 5: Pre-build validation ──────────────────────────────────
             validation_error = await self._validate_docker_environment()
             if validation_error:
@@ -109,6 +125,12 @@ class DockerExecutor:
                 result.exit_code = 1
                 result.error = validation_error
                 result.failure_reason = "Docker environment validation failed"
+                await self._emit_event(
+                    "execution_failed",
+                    message=validation_error,
+                    status="failed",
+                    phase="failed",
+                )
                 await self._emit(LogLevel.ERROR, validation_error)
                 return result
 
@@ -119,6 +141,12 @@ class DockerExecutor:
 
             if exit_code == 0:
                 result.status = ExecutionStatus.SUCCESS
+                await self._emit_event(
+                    "build_success",
+                    message=f"Build succeeded: {self.image_tag}",
+                    status="success",
+                    phase="success",
+                )
                 await self._emit(LogLevel.SUCCESS, f"Build succeeded: {self.image_tag}")
 
                 if self.push_on_success and self.registry_username:
@@ -139,6 +167,17 @@ class DockerExecutor:
                 if self._last_error_line:
                     parts.append(self._last_error_line)
                 result.failure_reason = " | ".join(parts) if parts else result.error
+                await self._emit_event(
+                    "build_failed",
+                    message=result.failure_reason or result.error,
+                    status="failed",
+                    phase="analyzing_failure",
+                    metadata={
+                        "exit_code": exit_code,
+                        "failed_step": result.failed_step,
+                        "last_error_line": result.last_error_line,
+                    },
+                )
                 await self._emit(LogLevel.ERROR, result.error)
 
         except asyncio.TimeoutError:
@@ -147,6 +186,12 @@ class DockerExecutor:
             result.failure_reason = "Build timeout"
             result.docker_command = self._docker_command
             result.last_error_line = self._last_error_line
+            await self._emit_event(
+                "execution_failed",
+                message=result.error,
+                status="failed",
+                phase="failed",
+            )
             await self._emit(LogLevel.ERROR, result.error)
 
         except FileNotFoundError as exc:
@@ -154,6 +199,12 @@ class DockerExecutor:
             result.exit_code = 1
             result.error = str(exc)
             result.failure_reason = f"Missing file: {exc}"
+            await self._emit_event(
+                "execution_failed",
+                message=result.failure_reason,
+                status="failed",
+                phase="failed",
+            )
             await self._emit(LogLevel.ERROR, f"File not found: {exc}")
 
         except Exception as exc:
@@ -162,13 +213,20 @@ class DockerExecutor:
             result.failure_reason = f"Executor error: {exc}"
             result.docker_command = self._docker_command
             result.last_error_line = self._last_error_line
+            await self._emit_event(
+                "execution_failed",
+                message=result.failure_reason,
+                status="failed",
+                phase="failed",
+            )
             await self._emit(LogLevel.ERROR, f"Executor error: {exc}")
             logger.exception("[DockerExecutor] error for task %s", self.task_id)
 
         finally:
             result.finished_at = datetime.now(timezone.utc).isoformat()
             result.logs = self._streamer.get(self.task_id).logs if self._streamer.get(self.task_id) else []
-            await self._streamer.finish(self.task_id)
+            if self._finish_stream:
+                await self._streamer.finish(self.task_id)
             self._cleanup_workspace()
             logger.info(
                 "[DockerExecutor] Build finished for task %s: status=%s exit_code=%s failure_reason=%s",
@@ -199,6 +257,28 @@ class DockerExecutor:
         return exit_code == 0
 
     # ── Private helpers ────────────────────────────────────────────────────────
+
+    async def _emit_build_strategy_trace(self) -> None:
+        """
+        Emit explicit build strategy information to the log stream so operators
+        always know EXACTLY what is being executed and from which context.
+        """
+        strategy = self._build_strategy.get("strategy", "docker_build_temp_workspace")
+        ctx      = self._build_strategy.get("context_path", self._workspace or "temp_workspace")
+        df_path  = self._build_strategy.get("dockerfile_path", "Dockerfile")
+
+        logger.info(
+            "[BuildExecutor] strategy=%s context=%s dockerfile=%s image=%s",
+            strategy, ctx, df_path, self.image_tag,
+        )
+        await self._emit(LogLevel.INFO, "─" * 60)
+        await self._emit(LogLevel.INFO, "[BuildExecutor] Build strategy trace:")
+        await self._emit(LogLevel.INFO, f"  strategy:   {strategy}")
+        await self._emit(LogLevel.INFO, f"  context:    {ctx}")
+        await self._emit(LogLevel.INFO, f"  dockerfile: {df_path}")
+        await self._emit(LogLevel.INFO, f"  image tag:  {self.image_tag}")
+        await self._emit(LogLevel.INFO, f"  workspace:  {self._workspace or 'not yet created'}")
+        await self._emit(LogLevel.INFO, "─" * 60)
 
     async def _write_artifacts(self) -> None:
         """Write Dockerfile and companion files into the isolated workspace."""
@@ -268,7 +348,7 @@ class DockerExecutor:
                 if line:
                     last_stdout = line
                     self._track_step(line)
-                    await self._streamer.publish(self.task_id, line)
+                    await self._publish_log_line(line)
                     line_count += 1
                     logger.debug("[DockerExecutor] stdout line #%d: %.60s", line_count, line)
             logger.info("[DockerExecutor] stdout drain complete: %d lines", line_count)
@@ -283,7 +363,7 @@ class DockerExecutor:
                 if line:
                     last_stderr = line
                     self._last_error_line = line
-                    await self._streamer.publish(self.task_id, line)
+                    await self._publish_log_line(line)
                     line_count += 1
                     logger.debug("[DockerExecutor] stderr line #%d: %.60s", line_count, line)
             logger.info("[DockerExecutor] stderr drain complete: %d lines", line_count)
@@ -374,6 +454,43 @@ class DockerExecutor:
         entry = ExecutionLogEntry(level=level, message=message)
         stream = self._streamer.get_or_create(self.task_id)
         await stream.publish(entry)
+        self._record_log_event(entry)
+
+    async def _publish_log_line(self, line: str) -> None:
+        entry = await self._streamer.publish(self.task_id, line)
+        self._record_log_event(entry)
+
+    def _record_log_event(self, entry: ExecutionLogEntry) -> None:
+        record_execution_event(
+            self.task_id,
+            ExecutionEvent(
+                type="build_log",
+                timestamp=entry.timestamp,
+                level=entry.level,
+                message=entry.message,
+                phase="building",
+            ),
+        )
+
+    async def _emit_event(
+        self,
+        event_type: str,
+        *,
+        message: str | None = None,
+        status: str | None = None,
+        phase: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        from .execution_state_service import emit_execution_event
+
+        await emit_execution_event(
+            self.task_id,
+            event_type,
+            message=message,
+            status=status,
+            phase=phase,
+            metadata=metadata or {},
+        )
 
     def _cleanup_workspace(self) -> None:
         if self._workspace and os.path.exists(self._workspace):
