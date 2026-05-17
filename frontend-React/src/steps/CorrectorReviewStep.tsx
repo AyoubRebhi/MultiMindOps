@@ -98,6 +98,11 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
   const [reanalyzeError, setReanalyzeError] = useState<string>()
   const [hasUnsavedArtifacts, setHasUnsavedArtifacts] = useState(false)
   const [artifactRefresh, setArtifactRefresh] = useState(0)
+  // When a user saves edits, the cached corrector analysis (root cause, patch
+  // targets, diagnosis text) may reference Dockerfile lines that no longer
+  // exist. Marking the snapshot stale prevents the UI from showing outdated
+  // patch targets — and we proactively refetch so the panel re-renders.
+  const [snapshotStale, setSnapshotStale] = useState(false)
 
   const pollingRef   = useRef<ReturnType<typeof setInterval> | null>(null)
   const isMountedRef = useRef(true)
@@ -232,12 +237,30 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
         ? { ...prev, current_phase: 'corrector_analysis_running' }
         : prev,
       )
+      setSnapshotStale(false)
     } catch (e) {
       setReanalyzeError((e as Error).message)
     } finally {
       setIsReanalyzing(false)
     }
   }, [taskId])
+
+  // Invalidate the corrector snapshot whenever the user saves new artifact
+  // content. We mark it stale immediately so cached `analysis.fixes[*].patch`
+  // targets stop being treated as authoritative, then refetch so the panel
+  // re-renders with whatever the server still has on file.
+  const handleArtifactsSaved = useCallback(async () => {
+    if (!taskId) return
+    setSnapshotStale(true)
+    try {
+      const data = await getCorrectorAnalysis(taskId)
+      if (!isMountedRef.current) return
+      setLocalData(data)
+      setCorrectorData(data)
+    } catch {
+      /* ignore — staleness banner still informs the user */
+    }
+  }, [taskId, setCorrectorData])
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -327,6 +350,26 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
         {/* Exhausted banner */}
         {!isFetching && execFailed && <ExhaustedBanner />}
 
+        {/* Stale snapshot banner — shown when user edited artifacts after the
+            last corrector analysis. The cached fix targets may reference
+            removed lines. */}
+        {snapshotStale && !analysisRunning && (
+          <div className={cn(
+            'flex items-start gap-3 px-4 py-3 rounded-xl',
+            'bg-amber-500/8 border border-amber-500/25',
+          )}>
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-200/90 leading-relaxed">
+              <p className="font-semibold mb-0.5">Diagnosis may be out of date</p>
+              <p>
+                You edited artifacts after the AI corrector ran. The fix targets
+                below were captured before your edit — click <span className="font-mono">Run Analysis Again</span>
+                {' '}to refresh the diagnosis against your current Dockerfile.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* ── SECTION 1: Failure Summary ─────────────────────────────────── */}
         {analysis && (
           <>
@@ -386,6 +429,7 @@ export function CorrectorReviewStep({ onRetryBuild, onBackToInfra, onStopWorkflo
               taskId={taskId}
               refreshToken={artifactRefresh}
               onDirtyChange={setHasUnsavedArtifacts}
+              onArtifactsSaved={handleArtifactsSaved}
             />
           </div>
         )}

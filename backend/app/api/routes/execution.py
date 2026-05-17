@@ -110,6 +110,117 @@ def _extract_docker_artifacts(workflow_state: dict) -> dict[str, str]:
     return result
 
 
+def _enforce_prebuild_validation_gate(
+    db: Session,
+    task,
+    state: dict,
+    artifacts: dict[str, str],
+) -> dict[str, Any] | None:
+    """
+    Run DockerBuildStaticValidator against the latest persisted Dockerfile.
+
+    Returns a dict response if the build is blocked (caller should return it
+    directly), or None when the build may proceed.
+
+    A blocked build:
+      • does NOT start any Docker work
+      • sets current_phase = "human_review_required"
+      • persists the validation result at infrastructure.infrastructure_generation.static_validation
+      • surfaces the issues + suggested fixes to the frontend
+    """
+    dockerfile = artifacts.get("dockerfile") or ""
+    if not dockerfile:
+        return None
+
+    infra_state = state.get("infrastructure") or {}
+    agent_context = state.get("agent_context") or {}
+    known_files: list[str] = (
+        (infra_state.get("known_files") or [])
+        or (agent_context.get("infrastructure_context") or {}).get("known_files")
+        or []
+    )
+    if not known_files:
+        # No repository file list available — skip the gate gracefully.
+        return None
+
+    build_strategy = (infra_state.get("build_artifact_context") or {}).get("strategy") or {}
+    build_context = (
+        build_strategy.get("context_path")
+        or (infra_state.get("repository_build_context") or {}).get("docker", {}).get("context_path")
+        or "."
+    )
+
+    try:
+        from backend.app.services.artifact_generation.validators.docker_static_validator import (
+            DockerBuildStaticValidator,
+        )
+        validator = DockerBuildStaticValidator()
+        result = validator.validate(
+            dockerfile_content=dockerfile,
+            build_context=build_context,
+            known_files=known_files,
+        )
+    except Exception as exc:
+        logger.warning("[PrebuildGate] Static validation crashed — letting build proceed: %s", exc)
+        return None
+
+    if result.valid:
+        logger.info(
+            "[PrebuildGate] Static validation passed — proceeding with build (task=%s)",
+            task.id,
+        )
+        return None
+
+    # ── Block the build ───────────────────────────────────────────────────────
+    issues_payload = result.to_dict()
+    issue_count = issues_payload.get("issue_count", 0)
+    logger.warning(
+        "[PrebuildGate] Static validation BLOCKED build for task=%s with %d issue(s)",
+        task.id, issue_count,
+    )
+
+    # Persist the validation snapshot + transition to human review
+    infra_store = state.setdefault("infrastructure", {})
+    infra_gen = infra_store.setdefault("infrastructure_generation", {})
+    infra_gen["static_validation"] = issues_payload
+    infra_gen["static_validation_blocked"] = True
+    state["current_phase"] = "human_review_required"
+
+    # Record an execution event so the frontend's SSE/event log shows the block
+    execution = state.setdefault("execution", {})
+    history = execution.setdefault("history", [])
+    history.append({
+        "type": "build_blocked_static_validation",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "phase": "human_review_required",
+        "status": "blocked",
+        "message": (
+            f"Pre-build static validation blocked Docker build: "
+            f"{issue_count} COPY/build-context issue(s) detected. "
+            "Fix the artifacts and click Retry."
+        ),
+        "metadata": {"issues": issues_payload.get("issues", [])[:5]},
+    })
+
+    TaskService.save_workflow_state(db, task, state)
+
+    return {
+        "status": "blocked",
+        "logs": [],
+        "image_tag": None,
+        "execution_phase": "prebuild_validation",
+        "ws_url": f"/ws/execution/{task.id}",
+        "task_id": str(task.id),
+        "blocked": True,
+        "current_phase": "human_review_required",
+        "static_validation": issues_payload,
+        "message": (
+            "Build refused: pre-build static validation found "
+            f"{issue_count} unresolved COPY/build-context issue(s)."
+        ),
+    }
+
+
 def _save_execution_state(db: Session, task, result: DockerBuildResult, is_retry: bool = False) -> None:
     """Persist execution state into workflow_state.execution.docker."""
     task_obj = TaskService.get_task(db, str(task.id))
@@ -256,6 +367,17 @@ async def start_docker_build(
             status_code=422,
             detail="No Dockerfile found in task artifacts. Run the Docker phase first.",
         )
+
+    # ── Pre-build static validation gate ──────────────────────────────────────
+    # Re-run COPY-path validation against the LATEST (possibly user-edited)
+    # Dockerfile + known_files. If structural issues remain, we refuse to start
+    # the build and route the task back to human review instead of burning a
+    # retry on a build we already know will fail.
+    gate_failure = _enforce_prebuild_validation_gate(
+        db=db, task=task, state=state, artifacts=artifacts,
+    )
+    if gate_failure is not None:
+        return gate_failure
 
     # Audit: log which artifact versions will be used for this build
     artifact_meta = (state.get("infrastructure") or {}).get("artifacts") or state.get("artifacts") or {}

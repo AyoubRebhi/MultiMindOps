@@ -71,6 +71,13 @@ class WorkflowPhaseResponse(BaseModel):
     architecture_decision: dict[str, Any] | None = None
     # Infrastructure context grounding — topology metadata from the Docker phase
     topology_summary: dict[str, Any] | None = None
+    # Repository build context (BuildStrategyDetector output) — exposed to the
+    # frontend BuildContextPanel and used by retry-build to honour COPY paths.
+    repository_build_context: dict[str, Any] | None = None
+    build_artifact_context: dict[str, Any] | None = None
+    # Pre-build static COPY validation result — used by the pre-build gate to
+    # block builds with detectable COPY/build-context errors.
+    static_validation: dict[str, Any] | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -94,16 +101,40 @@ def _extract_artifacts(state: dict) -> dict[str, str]:
 
 
 def _phase_response(task_id: str, state: dict, message: str = "") -> dict:
+    # InfrastructureAgent.run() output is stored at state["infra"] by the
+    # orchestrator. state["infrastructure"] is the artifact-service editable
+    # store. We read context fields from BOTH so older tasks keep working.
+    infra_agent = state.get("infra") or {}
+    infra_store = state.get("infrastructure") or {}
+    infra_gen = (
+        infra_agent.get("infrastructure_generation")
+        or state.get("infrastructure_generation")
+        or infra_store.get("infrastructure_generation")
+        or {}
+    )
     return {
-        "task_id":               task_id,
-        "current_phase":         state.get("current_phase", "unknown"),
-        "status":                state.get("status", "in_progress"),
-        "artifacts":             _extract_artifacts(state),
-        "terraform_outputs":     state.get("terraform_outputs") or {},
-        "logs":                  state.get("logs", []),
-        "message":               message,
-        "architecture_decision": state.get("architecture_decision"),
-        "topology_summary":      state.get("topology_summary"),
+        "task_id":                  task_id,
+        "current_phase":            state.get("current_phase", "unknown"),
+        "status":                   state.get("status", "in_progress"),
+        "artifacts":                _extract_artifacts(state),
+        "terraform_outputs":        state.get("terraform_outputs") or {},
+        "logs":                     state.get("logs", []),
+        "message":                  message,
+        "architecture_decision":    state.get("architecture_decision"),
+        "topology_summary":         (
+            state.get("topology_summary")
+            or infra_agent.get("topology_summary")
+            or infra_store.get("topology_summary")
+        ),
+        "repository_build_context": (
+            infra_agent.get("repository_build_context")
+            or infra_store.get("repository_build_context")
+        ),
+        "build_artifact_context": (
+            infra_agent.get("build_artifact_context")
+            or infra_store.get("build_artifact_context")
+        ),
+        "static_validation": infra_gen.get("static_validation"),
     }
 
 
@@ -319,6 +350,28 @@ async def run_docker(task_id: str, db: Session = Depends(get_db)):
         # separately from the immutable generated content.
         generated = dict((state.get("infra") or {}).get("artifacts") or {})
         state = ArtifactService.initialize_from_state(state, generated)
+
+        # Mirror BuildStrategyDetector outputs + static validation into the
+        # canonical infrastructure store so execution.py and the corrector
+        # can resolve them from a single, persisted location.
+        infra_agent_response = state.get("infra") or {}
+        infra_store = state.setdefault("infrastructure", {})
+        for key in (
+            "repository_build_context",
+            "build_artifact_context",
+            "topology_summary",
+            "infrastructure_generation",
+        ):
+            value = infra_agent_response.get(key)
+            if value is not None:
+                infra_store[key] = value
+
+        # Persist known_files so the pre-build static-validation gate can
+        # re-validate the (possibly user-edited) Dockerfile on retry.
+        agent_ctx = (state.get("agent_context") or {}).get("infrastructure_context") or {}
+        known_files = agent_ctx.get("known_files")
+        if known_files:
+            infra_store["known_files"] = list(known_files)
 
         TaskService.save_workflow_state(db, task, state)
         TaskService.update_task_status(db, task, "in_progress")

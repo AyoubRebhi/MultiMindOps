@@ -75,10 +75,11 @@ function DiffBlock({ before, after }: { before: string; after: string }) {
 interface Props {
   taskId: string
   onDirtyChange?: (dirty: boolean) => void
+  onArtifactsSaved?: () => void
   refreshToken?: number
 }
 
-export function EditableArtifactTabs({ taskId, onDirtyChange, refreshToken = 0 }: Props) {
+export function EditableArtifactTabs({ taskId, onDirtyChange, onArtifactsSaved, refreshToken = 0 }: Props) {
   const [data, setData] = useState<GetArtifactsResponse>()
   const [drafts, setDrafts] = useState<Partial<Record<ArtifactKey, string>>>({})
   const [active, setActive] = useState<ArtifactKey>('dockerfile')
@@ -132,6 +133,7 @@ export function EditableArtifactTabs({ taskId, onDirtyChange, refreshToken = 0 }
       const result = await patchArtifacts(taskId, changed)
       setMessage(`Saved version ${result.versions[active] ?? Object.values(result.versions)[0]}.`)
       await load()
+      onArtifactsSaved?.()
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -147,6 +149,7 @@ export function EditableArtifactTabs({ taskId, onDirtyChange, refreshToken = 0 }
       await resetArtifact(taskId, active)
       setMessage(`${displayName(active)} reset to original.`)
       await load()
+      onArtifactsSaved?.()
     } catch (e) {
       setError((e as Error).message)
     } finally {

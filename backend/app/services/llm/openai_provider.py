@@ -64,6 +64,7 @@ GPT5_UNSUPPORTED_PARAMS: frozenset[str] = frozenset({
     "max_tokens",
     "max_completion_tokens",
     # Sampling / generation params not used in this provider's GPT-5 path
+    "temperature",
     "top_p",
     "frequency_penalty",
     "presence_penalty",
@@ -152,12 +153,16 @@ def build_gpt5_responses_payload(
                  logit_bias, best_of, n, max_tokens, max_completion_tokens,
                  functions, function_call
     """
+    # GPT-5 Responses API does NOT accept temperature, top_p, or any sampling
+    # param. The signature still takes `temperature` for backwards-compat but it
+    # is intentionally dropped from the wire payload (and stripped by
+    # sanitize_gpt5_payload as defense-in-depth).
+    _ = temperature  # intentionally unused
     payload: dict[str, Any] = {
         "model": model,
         "input": [{"role": "user", "content": prompt}],
         "max_output_tokens": max_tokens,
         "reasoning": {"effort": "low"},
-        "temperature": temperature,
         "parallel_tool_calls": False,
         "store": False,
         "stream": False,

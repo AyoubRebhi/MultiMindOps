@@ -26,7 +26,9 @@
       "Bash(Sort-Object)",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\ayoub\\\\OneDrive\\\\Bureau\\\\Stage pfe Esprit\\\\code\\\\devsecops-ai-platform\" -Force)",
       "Bash(Select-Object Name, FullName)",
-      "Bash(Head -30)"
+      "Bash(Head -30)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(r'backend/app/services/llm/token_strategy.py', encoding='utf-8'\\).read\\(\\)\\); print\\('token_strategy.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(r'backend/app/services/llm/openai_provider.py', encoding='utf-8'\\).read\\(\\)\\); print\\('openai_provider.py OK'\\)\")"
     ]
   }
 }

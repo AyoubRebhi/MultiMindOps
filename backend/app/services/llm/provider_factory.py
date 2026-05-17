@@ -50,6 +50,12 @@ AGENT_PROVIDER_MAP: Dict[str, str] = {
 
 logger = logging.getLogger(__name__)
 
+# One-shot truncation retry: max_output_tokens is multiplied by this factor on
+# the second attempt, capped at _MAX_RETRY_TOKENS. There is exactly ONE retry —
+# no recursion, no escalation beyond the cap.
+_TRUNCATION_RETRY_MULTIPLIER = 1.75
+_MAX_RETRY_TOKENS = 16_000
+
 
 class ProviderFactory:
     """
@@ -146,13 +152,6 @@ class ProviderFactory:
     @property
     def model(self) -> str:
         """Returns the active model name — mirrors LLMService.model."""
-        max_tokens, temperature, _response_format, telemetry = self._resolve_call_options(
-            system_prompt,
-            user_prompt,
-            temperature,
-            max_tokens,
-            None,
-        )
         if self._primary is not None:
             return self._primary.model_name
         return self._fallback.model_name
@@ -363,7 +362,9 @@ class ProviderFactory:
 
         if self._primary is not None:
             current_max = max_tokens
-            for _attempt in range(1):  # single request: no token escalation retry
+            # Exactly ONE retry on truncation: 1.75x budget capped at 16 000.
+            # After the retry, fall through to Groq — no recursion.
+            for _attempt in range(2):
                 try:
                     result = self._primary.generate_sync(
                         prompt=user_prompt,
@@ -418,13 +419,17 @@ class ProviderFactory:
                     return LLMService._safe_json_loads(result.content)
 
                 except TruncatedResponseError as exc:
-                    if False and _attempt == 0:
-                        current_max = min(max_tokens * 2, _MAX_RETRY_TOKENS)
+                    if _attempt == 0:
+                        current_max = min(
+                            int(max_tokens * _TRUNCATION_RETRY_MULTIPLIER),
+                            _MAX_RETRY_TOKENS,
+                        )
                         logger.warning(
                             "[ProviderFactory] Response truncated "
                             "(finish_reason=%s output_tokens=%s) — "
-                            "retrying with max_tokens=%d",
-                            exc.finish_reason, exc.tokens_used, current_max,
+                            "retrying ONCE with max_tokens=%d (cap=%d)",
+                            exc.finish_reason, exc.tokens_used,
+                            current_max, _MAX_RETRY_TOKENS,
                         )
                         continue
                     # Second attempt also truncated — fall through to Groq
