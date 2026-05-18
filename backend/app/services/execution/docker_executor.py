@@ -75,6 +75,9 @@ class DockerExecutor:
         streamer: LogStreamManager | None = None,
         build_strategy: dict | None = None,
         finish_stream: bool = True,
+        repo_source_path: str | None = None,
+        retry_iteration: int = 1,
+        execution_session_id: str | None = None,
     ) -> None:
         self.task_id = task_id
         self.artifacts = artifacts
@@ -88,6 +91,17 @@ class DockerExecutor:
         # Build strategy metadata (from RepositoryBuildContext)
         self._build_strategy: dict = build_strategy or {}
         self._finish_stream = finish_stream
+        # Path on disk where the analyzed repository lives. When provided, its
+        # contents are mirrored into the temp build context so COPY paths
+        # referencing repo files resolve correctly.
+        self._repo_source_path: str | None = repo_source_path
+        # Retry session metadata — surfaces in every emitted event so the
+        # frontend can segment logs per retry attempt.
+        self._retry_iteration: int = max(1, int(retry_iteration or 1))
+        self._execution_session_id: str = (
+            execution_session_id
+            or f"{task_id[:8]}-r{self._retry_iteration}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+        )
         # Tracking for structured failure diagnostics
         self._docker_command: str | None = None
         self._last_error_line: str | None = None
@@ -268,22 +282,73 @@ class DockerExecutor:
         df_path  = self._build_strategy.get("dockerfile_path", "Dockerfile")
 
         logger.info(
-            "[BuildExecutor] strategy=%s context=%s dockerfile=%s image=%s",
+            "[BuildContext] session=%s retry=%d strategy=%s context=%s dockerfile=%s image=%s",
+            self._execution_session_id, self._retry_iteration,
             strategy, ctx, df_path, self.image_tag,
         )
         await self._emit(LogLevel.INFO, "─" * 60)
-        await self._emit(LogLevel.INFO, "[BuildExecutor] Build strategy trace:")
-        await self._emit(LogLevel.INFO, f"  strategy:   {strategy}")
-        await self._emit(LogLevel.INFO, f"  context:    {ctx}")
-        await self._emit(LogLevel.INFO, f"  dockerfile: {df_path}")
-        await self._emit(LogLevel.INFO, f"  image tag:  {self.image_tag}")
-        await self._emit(LogLevel.INFO, f"  workspace:  {self._workspace or 'not yet created'}")
+        await self._emit(LogLevel.INFO, "[BuildContext] Build strategy trace:")
+        await self._emit(LogLevel.INFO, f"  session_id:    {self._execution_session_id}")
+        await self._emit(LogLevel.INFO, f"  retry_iteration: {self._retry_iteration}")
+        await self._emit(LogLevel.INFO, f"  strategy:      {strategy}")
+        await self._emit(LogLevel.INFO, f"  repo_root:     {self._repo_source_path or '(not provided)'}")
+        await self._emit(LogLevel.INFO, f"  temp_context:  {self._workspace or 'not yet created'}")
+        await self._emit(LogLevel.INFO, f"  dockerfile:    {df_path}")
+        await self._emit(LogLevel.INFO, f"  build_context: {ctx}")
+        await self._emit(LogLevel.INFO, f"  image tag:     {self.image_tag}")
         await self._emit(LogLevel.INFO, "─" * 60)
 
     async def _write_artifacts(self) -> None:
-        """Write Dockerfile and companion files into the isolated workspace."""
+        """
+        Stage the build context.
+
+        Order matters:
+          1. Mirror the analyzed repository tree into the temp workspace so
+             every COPY src referenced by the Dockerfile resolves against a
+             real file. Without this, monorepo COPY paths like
+             ``COPY backend/app/requirements.txt`` fail with "file not found
+             in build context" — the temp workspace would only contain the
+             Dockerfile.
+          2. Overlay generated/user-edited artifacts (Dockerfile,
+             .dockerignore, docker-compose, .env.example) so they win over
+             any in-repo copies.
+          3. Hard-validate that every COPY source physically exists inside
+             the final workspace. If any are missing, abort the build with
+             a clear error BEFORE invoking docker.
+        """
         ws = Path(self._workspace)  # type: ignore[arg-type]
 
+        # ── 1. Mirror repo into the workspace (when available) ────────────────
+        mirrored_count = 0
+        if self._repo_source_path:
+            src_root = Path(self._repo_source_path)
+            if src_root.is_dir():
+                try:
+                    mirrored_count = await asyncio.to_thread(
+                        self._mirror_repo_tree, src_root, ws,
+                    )
+                    await self._emit(
+                        LogLevel.INFO,
+                        f"[BuildContext] mirrored {mirrored_count} repo file(s) "
+                        f"from {src_root} into {ws}",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[DockerExecutor] Repo mirror failed (continuing with "
+                        "artifacts-only context): %s", exc,
+                    )
+                    await self._emit(
+                        LogLevel.WARNING,
+                        f"[BuildContext] repo mirror failed — "
+                        "COPY paths referencing repo files may fail: " + str(exc),
+                    )
+            else:
+                logger.warning(
+                    "[DockerExecutor] repo_source_path does not exist: %s",
+                    self._repo_source_path,
+                )
+
+        # ── 2. Overlay artifacts (always win) ─────────────────────────────────
         dockerfile_written = False
         for key, content in self.artifacts.items():
             filename = _ARTIFACT_FILENAMES.get(key)
@@ -303,6 +368,104 @@ class DockerExecutor:
             raise FileNotFoundError("No Dockerfile artifact found. Cannot build image.")
 
         await self._emit(LogLevel.INFO, f"Workspace prepared: {self._workspace}")
+
+        # ── 3. Hard validation: every COPY source must exist in workspace ─────
+        missing = self._collect_missing_copy_sources(ws, self.artifacts.get("dockerfile") or "")
+        if missing:
+            details = "\n".join(
+                f"    COPY {m['src']} → not found at {m['expected_abs']}"
+                for m in missing
+            )
+            raise FileNotFoundError(
+                "Pre-execution COPY check failed: "
+                f"{len(missing)} source(s) are missing from the build context.\n"
+                f"{details}\n"
+                f"build_context={ws} repo_mirrored={mirrored_count} files"
+            )
+
+    @staticmethod
+    def _mirror_repo_tree(src_root: Path, dest_root: Path) -> int:
+        """
+        Copy the repository tree into the build context. Skips .git, large
+        build outputs, and node_modules to keep the workspace lean. Returns
+        the number of files copied.
+        """
+        skip_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__",
+                     ".pytest_cache", ".mypy_cache", "dist", "build",
+                     "target", ".gradle", ".idea", ".vscode"}
+        copied = 0
+        for path in src_root.rglob("*"):
+            rel = path.relative_to(src_root)
+            parts = set(rel.parts)
+            if parts & skip_dirs:
+                continue
+            dest = dest_root / rel
+            if path.is_dir():
+                dest.mkdir(parents=True, exist_ok=True)
+            elif path.is_file():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(path, dest)
+                    copied += 1
+                except (OSError, shutil.SameFileError):
+                    continue
+        return copied
+
+    def _collect_missing_copy_sources(
+        self,
+        workspace: Path,
+        dockerfile: str,
+    ) -> list[dict[str, str]]:
+        """
+        Parse COPY/ADD instructions and check each source against the workspace.
+
+        Returns a list of {src, expected_abs} dicts for sources that do not
+        resolve to a file or directory inside the workspace. Globs are
+        considered satisfied if any matching path exists. ``--from=<stage>``
+        copies are skipped (their sources come from earlier build stages).
+        """
+        import re as _re
+        import glob as _glob
+
+        missing: list[dict[str, str]] = []
+        ws_resolved = workspace.resolve()
+        # Match: COPY [flags] src [src...] dst   /   ADD [flags] src [src...] dst
+        copy_re = _re.compile(r"(?im)^\s*(COPY|ADD)\s+(.*)$")
+        for m in copy_re.finditer(dockerfile or ""):
+            tail = m.group(2).strip()
+            # Strip flags like --from=, --chown=, --chmod=
+            tokens = [t for t in tail.split() if t]
+            tokens = [t for t in tokens if not t.startswith("--")]
+            # If --from=<stage> was in flags, skip this copy entirely.
+            if "--from=" in tail:
+                continue
+            if len(tokens) < 2:
+                continue
+            srcs = tokens[:-1]
+            for src in srcs:
+                # JSON exec form COPY ["src","dst"] — strip brackets/quotes
+                clean = src.strip().strip(',').strip('"').strip("'").lstrip("[").rstrip("]")
+                if not clean or clean in (".", "./"):
+                    continue
+                # Compute absolute path inside workspace
+                abs_path = (workspace / clean).resolve()
+                # Reject path traversal
+                if not str(abs_path).startswith(str(ws_resolved)):
+                    missing.append({"src": clean, "expected_abs": str(abs_path)})
+                    continue
+                # Direct existence check
+                if abs_path.exists():
+                    continue
+                # Glob check
+                matches = _glob.glob(str(abs_path), recursive=True)
+                if matches:
+                    continue
+                # Try as relative pattern from workspace (handles **)
+                glob_matches = list(workspace.glob(clean))
+                if glob_matches:
+                    continue
+                missing.append({"src": clean, "expected_abs": str(abs_path)})
+        return missing
 
     async def _run_docker_build(self) -> int:
         """Run `docker build -t <tag> <workspace>` and stream every output line."""
@@ -483,13 +646,18 @@ class DockerExecutor:
     ) -> None:
         from .execution_state_service import emit_execution_event
 
+        meta = dict(metadata or {})
+        meta.setdefault("retry_iteration", self._retry_iteration)
+        meta.setdefault("execution_session_id", self._execution_session_id)
+
         await emit_execution_event(
             self.task_id,
             event_type,
             message=message,
             status=status,
             phase=phase,
-            metadata=metadata or {},
+            iteration=self._retry_iteration,
+            metadata=meta,
         )
 
     def _cleanup_workspace(self) -> None:

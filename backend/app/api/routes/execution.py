@@ -117,16 +117,18 @@ def _enforce_prebuild_validation_gate(
     artifacts: dict[str, str],
 ) -> dict[str, Any] | None:
     """
-    Run DockerBuildStaticValidator against the latest persisted Dockerfile.
+    Multi-layer pre-build validation gate.
 
-    Returns a dict response if the build is blocked (caller should return it
-    directly), or None when the build may proceed.
+    Layers (first failure short-circuits):
+      A. Unresolved template placeholders ({{ ... }}, {% ... %}, ${{ ... }}, <%= ... %>)
+         in ANY artifact — including docker-compose, dockerignore.
+      B. RuntimeSemanticValidator errors on the Dockerfile — distro mismatch,
+         exec form, healthcheck dependency, undefined build stage.
+      C. DockerBuildStaticValidator — COPY-source resolution against known_files.
 
-    A blocked build:
-      • does NOT start any Docker work
-      • sets current_phase = "human_review_required"
-      • persists the validation result at infrastructure.infrastructure_generation.static_validation
-      • surfaces the issues + suggested fixes to the frontend
+    Returns a 200 JSON response when the build is blocked (with the relevant
+    validation payload + ``failure_kind`` indicating which layer fired), or
+    None when the build may proceed.
     """
     dockerfile = artifacts.get("dockerfile") or ""
     if not dockerfile:
@@ -139,8 +141,69 @@ def _enforce_prebuild_validation_gate(
         or (agent_context.get("infrastructure_context") or {}).get("known_files")
         or []
     )
+
+    # ── Layer A: unresolved templates (always runs) ───────────────────────────
+    try:
+        from backend.app.services.artifact_generation.validators.template_artifact_validator import (
+            TemplateArtifactValidator,
+        )
+        template_result = TemplateArtifactValidator().validate(artifacts)
+    except Exception as exc:
+        logger.warning("[PrebuildGate] Template validation crashed: %s", exc)
+        template_result = None
+
+    if template_result is not None and not template_result.valid:
+        payload = template_result.to_dict()
+        return _block_build(
+            db=db,
+            task=task,
+            state=state,
+            failure_kind="template_validation",
+            event_type="build_blocked_template_validation",
+            payload_key="template_validation",
+            payload=payload,
+            message=(
+                "Pre-build template validation blocked Docker build: "
+                f"{payload.get('issue_count', 0)} unresolved template "
+                "placeholder(s) found in artifacts."
+            ),
+        )
+
+    # ── Layer B: RuntimeSemanticValidator (always runs) ───────────────────────
+    try:
+        from backend.app.services.artifact_generation.validators.runtime_semantic_validator import (
+            RuntimeSemanticValidator,
+        )
+        runtime_result = RuntimeSemanticValidator().validate(dockerfile)
+    except Exception as exc:
+        logger.warning("[PrebuildGate] Runtime validation crashed: %s", exc)
+        runtime_result = None
+
+    if runtime_result is not None and not runtime_result.valid:
+        payload = runtime_result.to_dict()
+        # Highlight the most actionable error first
+        error_count = len([i for i in payload.get("issues", []) if i.get("severity") == "error"])
+        return _block_build(
+            db=db,
+            task=task,
+            state=state,
+            failure_kind="runtime_validation",
+            event_type="build_blocked_runtime_validation",
+            payload_key="runtime_validation",
+            payload=payload,
+            message=(
+                "Pre-build runtime validation blocked Docker build: "
+                f"{error_count} fatal Dockerfile issue(s) detected "
+                "(distro mismatch / exec form / healthcheck / stage / template)."
+            ),
+        )
+
+    # ── Layer C: COPY source resolution (requires known_files) ────────────────
     if not known_files:
-        # No repository file list available — skip the gate gracefully.
+        logger.info(
+            "[PrebuildGate] No known_files available — skipping static COPY validation (task=%s)",
+            task.id,
+        )
         return None
 
     build_strategy = (infra_state.get("build_artifact_context") or {}).get("strategy") or {}
@@ -154,52 +217,77 @@ def _enforce_prebuild_validation_gate(
         from backend.app.services.artifact_generation.validators.docker_static_validator import (
             DockerBuildStaticValidator,
         )
-        validator = DockerBuildStaticValidator()
-        result = validator.validate(
+        result = DockerBuildStaticValidator().validate(
             dockerfile_content=dockerfile,
             build_context=build_context,
             known_files=known_files,
         )
     except Exception as exc:
-        logger.warning("[PrebuildGate] Static validation crashed — letting build proceed: %s", exc)
+        logger.warning("[PrebuildGate] Static validation crashed: %s", exc)
         return None
 
     if result.valid:
         logger.info(
-            "[PrebuildGate] Static validation passed — proceeding with build (task=%s)",
+            "[PrebuildGate] All validation layers passed — proceeding with build (task=%s)",
             task.id,
         )
         return None
 
-    # ── Block the build ───────────────────────────────────────────────────────
     issues_payload = result.to_dict()
-    issue_count = issues_payload.get("issue_count", 0)
-    logger.warning(
-        "[PrebuildGate] Static validation BLOCKED build for task=%s with %d issue(s)",
-        task.id, issue_count,
+    return _block_build(
+        db=db,
+        task=task,
+        state=state,
+        failure_kind="static_validation",
+        event_type="build_blocked_static_validation",
+        payload_key="static_validation",
+        payload=issues_payload,
+        message=(
+            "Pre-build static validation blocked Docker build: "
+            f"{issues_payload.get('issue_count', 0)} unresolved "
+            "COPY/build-context issue(s) detected."
+        ),
     )
 
-    # Persist the validation snapshot + transition to human review
+
+def _block_build(
+    *,
+    db: Session,
+    task,
+    state: dict,
+    failure_kind: str,
+    event_type: str,
+    payload_key: str,
+    payload: dict[str, Any],
+    message: str,
+) -> dict[str, Any]:
+    """Persist a blocked-build state + return the API response body."""
+    issue_count = payload.get("issue_count", len(payload.get("issues") or []))
+    logger.warning(
+        "[PrebuildGate] %s BLOCKED build for task=%s with %d issue(s)",
+        failure_kind, task.id, issue_count,
+    )
+
     infra_store = state.setdefault("infrastructure", {})
     infra_gen = infra_store.setdefault("infrastructure_generation", {})
-    infra_gen["static_validation"] = issues_payload
-    infra_gen["static_validation_blocked"] = True
+    infra_gen[payload_key] = payload
+    infra_gen["validation_blocked"] = True
+    infra_gen["validation_blocked_kind"] = failure_kind
     state["current_phase"] = "human_review_required"
 
-    # Record an execution event so the frontend's SSE/event log shows the block
     execution = state.setdefault("execution", {})
     history = execution.setdefault("history", [])
     history.append({
-        "type": "build_blocked_static_validation",
+        "type": event_type,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "phase": "human_review_required",
         "status": "blocked",
-        "message": (
-            f"Pre-build static validation blocked Docker build: "
-            f"{issue_count} COPY/build-context issue(s) detected. "
-            "Fix the artifacts and click Retry."
-        ),
-        "metadata": {"issues": issues_payload.get("issues", [])[:5]},
+        "message": message,
+        "metadata": {
+            "failure_kind": failure_kind,
+            "issue_count": issue_count,
+            "issues": (payload.get("issues") or [])[:5],
+        },
     })
 
     TaskService.save_workflow_state(db, task, state)
@@ -213,11 +301,9 @@ def _enforce_prebuild_validation_gate(
         "task_id": str(task.id),
         "blocked": True,
         "current_phase": "human_review_required",
-        "static_validation": issues_payload,
-        "message": (
-            "Build refused: pre-build static validation found "
-            f"{issue_count} unresolved COPY/build-context issue(s)."
-        ),
+        "failure_kind": failure_kind,
+        payload_key: payload,
+        "message": message,
     }
 
 
@@ -269,25 +355,43 @@ async def _run_build_background(
     is_retry: bool = False,
     build_number: int = 1,
     build_strategy: dict | None = None,
+    repo_source_path: str | None = None,
+    execution_session_id: str | None = None,
 ) -> None:
     """Coroutine that runs the full build lifecycle and persists results."""
-    logger.info("[Execution] Build background task started: task=%s build_number=%d", task_id, build_number)
+    session_id = (
+        execution_session_id
+        or f"{task_id[:8]}-r{build_number}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+    )
+    logger.info(
+        "[Execution] Build background task started: task=%s build_number=%d session=%s",
+        task_id, build_number, session_id,
+    )
+
+    # ── Reset the stream's session metadata for this retry iteration ──────────
+    # Subscribers connected after this point will replay history but new events
+    # will be tagged with the new session_id + retry_iteration.
+    stream = log_stream_manager.get_or_create(task_id)
+    stream.set_session(retry_iteration=build_number, execution_session_id=session_id)
 
     if is_retry:
         await emit_execution_event(
             task_id,
-            "retry_iteration",
-            message=f"Retry iteration {build_number}/3 started",
+            "retry_started",
+            message=f"Retry #{build_number}/3 started — streaming fresh execution",
             iteration=build_number,
             max_iterations=3,
             phase="retrying",
             status="running",
+            metadata={
+                "retry_iteration": build_number,
+                "execution_session_id": session_id,
+            },
         )
         separator_entry = ExecutionLogEntry(
             level=LogLevel.INFO,
-            message=f"========== RETRY BUILD #{build_number} ==========",
+            message=f"========== RETRY BUILD #{build_number} (session={session_id}) ==========",
         )
-        stream = log_stream_manager.get_or_create(task_id)
         await stream.publish(separator_entry)
 
     executor = DockerExecutor(
@@ -300,6 +404,9 @@ async def _run_build_background(
         push_on_success=settings.DOCKER_PUSH_ON_SUCCESS,
         build_strategy=build_strategy or {},
         finish_stream=False,
+        repo_source_path=repo_source_path,
+        retry_iteration=build_number,
+        execution_session_id=session_id,
     )
 
     result = await executor.build_image()
@@ -315,6 +422,25 @@ async def _run_build_background(
     logger.info(
         "[Execution] Stream completed: task=%s status=%s exit_code=%s",
         task_id, result.status, result.exit_code,
+    )
+
+    # ── Emit retry_completed / retry_failed terminal event ────────────────────
+    terminal_event = "retry_completed" if result.status == ExecutionStatus.SUCCESS else "retry_failed"
+    await emit_execution_event(
+        task_id,
+        terminal_event,
+        message=(
+            f"Retry #{build_number} {'succeeded' if result.status == ExecutionStatus.SUCCESS else 'failed'}"
+        ),
+        iteration=build_number,
+        max_iterations=3,
+        phase=("success" if result.status == ExecutionStatus.SUCCESS else "analyzing_failure"),
+        status=("success" if result.status == ExecutionStatus.SUCCESS else "failed"),
+        metadata={
+            "retry_iteration": build_number,
+            "execution_session_id": session_id,
+            "exit_code": result.exit_code,
+        },
     )
 
     # ── Corrector hook: trigger analysis on every build failure ───────────────
@@ -426,11 +552,25 @@ async def start_docker_build(
     })
     TaskService.save_workflow_state(db, task, state)
 
-    # Extract build strategy for executor tracing
+    # Extract build strategy + cloned repo path for executor tracing.
     infra_state = state.get("infrastructure") or {}
     _build_strategy: dict = (
         (infra_state.get("build_artifact_context") or {}).get("strategy")
         or {}
+    )
+    # Repository on disk — CodebaseAnalysisAgent stores it at codebase_analysis.repo_path.
+    # The executor mirrors this into the temp build context so COPY paths resolve.
+    repo_source_path = (
+        infra_state.get("repo_source_path")
+        or (state.get("codebase_analysis") or {}).get("repo_path")
+        or (state.get("agent_context") or {}).get("repo_path")
+    )
+
+    # Generate a fresh execution session id so the frontend can reset its
+    # terminal segment when it sees this new id.
+    execution_session_id = (
+        f"{task_id[:8]}-r{build_number}-"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
     )
 
     asyncio.create_task(
@@ -439,11 +579,16 @@ async def start_docker_build(
             is_retry=is_retry,
             build_number=build_number,
             build_strategy=_build_strategy,
+            repo_source_path=repo_source_path,
+            execution_session_id=execution_session_id,
         ),
         name=f"docker_build_{task_id[:8]}",
     )
 
-    logger.info("[Execution] Docker build started: task=%s image=%s build_number=%d", task_id, image_tag, build_number)
+    logger.info(
+        "[Execution] Docker build started: task=%s image=%s build_number=%d session=%s repo=%s",
+        task_id, image_tag, build_number, execution_session_id, repo_source_path,
+    )
 
     return {
         "status": "running",
@@ -452,6 +597,9 @@ async def start_docker_build(
         "execution_phase": "docker_build",
         "ws_url": f"/ws/execution/{task_id}",
         "task_id": task_id,
+        "build_number": build_number,
+        "retry_iteration": build_number,
+        "execution_session_id": execution_session_id,
     }
 
 
@@ -609,7 +757,9 @@ async def ws_execution_logs(websocket: WebSocket, task_id: str):
                 if closed.is_set():
                     break
                 logger.debug("[WS] Sending persisted log %d/%d", i + 1, len(persisted_logs))
-                await _send({**entry, "type": "log"})
+                # Mark every replayed entry so the frontend can render it in
+                # the history pane rather than the live retry terminal.
+                await _send({**entry, "type": "log", "is_replay": True})
 
             if not closed.is_set():
                 logger.info("[WS] Sending complete event: status=%s", final_status)
@@ -617,6 +767,7 @@ async def ws_execution_logs(websocket: WebSocket, task_id: str):
                     "type": "complete",
                     "status": final_status,
                     "exit_code": docker_exec.get("exit_code"),
+                    "is_replay": True,
                 })
 
             # Keep alive briefly for the client to receive done message
@@ -627,13 +778,15 @@ async def ws_execution_logs(websocket: WebSocket, task_id: str):
             return
 
         # ── Case 2: Build running or not yet started ──────────────────────────
-        # Send any persisted logs first (previous retry segments)
+        # Send any persisted logs first (previous retry segments), all marked
+        # as replay so the frontend keeps them in history and doesn't mix them
+        # with live output of the current retry.
         if persisted_logs:
             logger.info("[WS] Sending %d persisted logs before live stream", len(persisted_logs))
             for entry in persisted_logs:
                 if closed.is_set():
                     break
-                await _send({**entry, "type": "log"})
+                await _send({**entry, "type": "log", "is_replay": True})
 
         # Wait up to 5 seconds for the stream to be created by the executor
         stream = None

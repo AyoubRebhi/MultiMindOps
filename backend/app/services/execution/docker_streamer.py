@@ -38,23 +38,58 @@ class TaskLogStream:
         self._events: list[ExecutionEvent] = []
         self._condition: asyncio.Condition = asyncio.Condition()
         self._done: bool = False
+        # Retry-session metadata stamped onto every emitted log / event so
+        # subscribers can route output per retry attempt.
+        self._retry_iteration: int | None = None
+        self._execution_session_id: str | None = None
+
+    def set_session(self, retry_iteration: int, execution_session_id: str) -> None:
+        """Stamp every subsequent log/event with this session metadata."""
+        self._retry_iteration = retry_iteration
+        self._execution_session_id = execution_session_id
+        logger.info(
+            "[LogStream] Session set: retry=%d session=%s",
+            retry_iteration, execution_session_id,
+        )
+
+    @property
+    def retry_iteration(self) -> int | None:
+        return self._retry_iteration
+
+    @property
+    def execution_session_id(self) -> str | None:
+        return self._execution_session_id
 
     async def publish(self, entry: ExecutionLogEntry) -> None:
+        # Stamp session metadata if not already present
+        if entry.retry_iteration is None and self._retry_iteration is not None:
+            entry.retry_iteration = self._retry_iteration
+        if entry.execution_session_id is None and self._execution_session_id is not None:
+            entry.execution_session_id = self._execution_session_id
+
         event = ExecutionEvent(
             type="build_log",
             timestamp=entry.timestamp,
             level=entry.level,
             message=entry.message,
             phase="building",
+            retry_iteration=entry.retry_iteration,
+            execution_session_id=entry.execution_session_id,
+            is_replay=entry.is_replay,
         )
         async with self._condition:
             self._logs.append(entry)
             self._events.append(event)
             self._condition.notify_all()
-        logger.debug("[LogStream] Appended log entry: level=%s msg=%.60s total=%d",
-                     entry.level.value, entry.message, len(self._logs))
+        logger.debug("[LogStream] Appended log entry: level=%s session=%s msg=%.60s total=%d",
+                     entry.level.value, self._execution_session_id, entry.message, len(self._logs))
 
     async def publish_event(self, event: ExecutionEvent) -> None:
+        # Stamp session metadata if not already set on the event
+        if event.retry_iteration is None and self._retry_iteration is not None:
+            event.retry_iteration = self._retry_iteration
+        if event.execution_session_id is None and self._execution_session_id is not None:
+            event.execution_session_id = self._execution_session_id
         async with self._condition:
             self._events.append(event)
             self._condition.notify_all()

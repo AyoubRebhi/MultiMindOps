@@ -219,6 +219,15 @@ _INSTALL_WGET_RE = re.compile(r"\bwget\b", re.IGNORECASE)
 _FROM_RE = re.compile(r"(?im)^FROM\s+(\S+?)(?:\s+AS\s+\S+)?$")
 # COPY --from=<stage>
 _COPY_FROM_RE = re.compile(r"(?im)^COPY\s+--from=(\S+)", re.IGNORECASE)
+# Unresolved Jinja / template placeholders. Order matters: ${{ before {{ so the
+# GitHub Actions form is recognised distinctly. ERB tags are matched too.
+_UNRESOLVED_TEMPLATE_RES: list[tuple[str, "re.Pattern[str]"]] = [
+    ("github_actions_expression", re.compile(r"\$\{\{\s*([^{}\n]+?)\s*\}\}")),
+    ("erb_expression",            re.compile(r"<%=\s*([^<>\n]+?)\s*%>")),
+    ("erb_control",               re.compile(r"<%\s*([^<>\n]+?)\s*%>")),
+    ("jinja_control",             re.compile(r"\{%\s*([^{}\n]+?)\s*%\}")),
+    ("jinja_expression",          re.compile(r"\{\{\s*([^{}\n]+?)\s*\}\}")),
+]
 
 
 class RuntimeSemanticValidator:
@@ -247,6 +256,12 @@ class RuntimeSemanticValidator:
 
         issues: List[RuntimeIssue] = []
         deprecated_images: List[str] = []
+
+        # ── Rule: unresolved template variables (highest priority) ────────────
+        # Any {{ var }} / {% ... %} / ${{ ... }} / <% ... %> token reaching this
+        # point means artifact rendering was incomplete. Treat as a hard error
+        # so the pre-build gate refuses to start a build.
+        self._check_unresolved_templates(content, issues)
 
         # ── Parse FROM statements and build stage registry ────────────────────
         from_images = _FROM_RE.findall(content)
@@ -352,6 +367,40 @@ class RuntimeSemanticValidator:
         )
 
     # ── Private rule implementations ──────────────────────────────────────────
+
+    def _check_unresolved_templates(
+        self,
+        content: str,
+        issues: List[RuntimeIssue],
+    ) -> None:
+        """Reject any artifact still containing template placeholders."""
+        seen: set = set()
+        for line_no, raw_line in enumerate(content.splitlines(), start=1):
+            line = raw_line.rstrip()
+            for pattern_name, regex in _UNRESOLVED_TEMPLATE_RES:
+                for m in regex.finditer(line):
+                    token = m.group(0)
+                    variable = m.group(1).strip()
+                    key = (token, line_no)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    issues.append(RuntimeIssue(
+                        rule="unresolved_template_variable",
+                        severity="error",
+                        message=(
+                            f"Unresolved template variable '{token}' detected in "
+                            f"Dockerfile (line {line_no}). Artifact rendering "
+                            "failed before execution."
+                        ),
+                        suggestion=(
+                            f"Variable '{variable}' was not substituted by the "
+                            f"section generator (pattern={pattern_name}). Rerun "
+                            "the Docker phase or edit the Dockerfile to remove "
+                            "the placeholder."
+                        ),
+                        line_hint=line,
+                    ))
 
     def _check_distro_commands(
         self,

@@ -16,6 +16,19 @@ interface WsMessage {
   type?: 'log' | 'complete' | 'done' | 'error' | 'pong' | 'info'
   status?: string
   exit_code?: number | null
+  is_replay?: boolean
+  retry_iteration?: number
+  execution_session_id?: string
+  metadata?: { retry_iteration?: number; execution_session_id?: string }
+}
+
+export interface RetryTimelineEntry {
+  retry_iteration: number
+  execution_session_id?: string
+  state: 'building' | 'success' | 'failed' | 'analyzing' | 'patch_generated'
+  started_at: string
+  finished_at?: string
+  message?: string
 }
 
 interface FailureDiagnostics {
@@ -36,7 +49,8 @@ interface Props {
 export function DockerBuildStep({ onContinue, onBack, isPhaseLoading }: Props) {
   const { taskId, currentPhase, mergePhaseResponse } = useWorkflowStore()
 
-  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [logs, setLogs] = useState<LogEntry[]>([])           // live logs for current retry only
+  const [replayLogs, setReplayLogs] = useState<LogEntry[]>([]) // logs from previous segments
   const [status, setStatus] = useState<ExecutionStatus>('pending')
   const [imageTag, setImageTag] = useState<string>()
   const [error, setError] = useState<string>()
@@ -45,6 +59,9 @@ export function DockerBuildStep({ onContinue, onBack, isPhaseLoading }: Props) {
   const [buildNumber, setBuildNumber] = useState(1)
   const [durationSeconds, setDurationSeconds] = useState<number | null>(null)
   const [failureDiagnostics, setFailureDiagnostics] = useState<FailureDiagnostics | null>(null)
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>(undefined)
+  const [retryTimeline, setRetryTimeline] = useState<RetryTimelineEntry[]>([])
+  const [isLive, setIsLive] = useState(false)
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const buildStartedRef    = useRef(false)
@@ -214,7 +231,23 @@ export function DockerBuildStep({ onContinue, onBack, isPhaseLoading }: Props) {
       // ── Build complete ────────────────────────────────────────────────────
       if (msg.type === 'complete' || msg.type === 'done') {
         const finalStatus: ExecutionStatus = msg.status === 'success' ? 'success' : 'failed'
-        if (isMountedRef.current) setStatus(finalStatus)
+        if (isMountedRef.current) {
+          setStatus(finalStatus)
+          setIsLive(false)
+          if (activeSessionId) {
+            setRetryTimeline((prev) =>
+              prev.map((e) =>
+                e.execution_session_id === activeSessionId
+                  ? {
+                      ...e,
+                      state: finalStatus === 'success' ? 'success' : 'failed',
+                      finished_at: msg.timestamp ?? new Date().toISOString(),
+                    }
+                  : e,
+              ),
+            )
+          }
+        }
         buildInProgressRef.current = false
         console.log('[DockerBuild] Build completed:', finalStatus, '| exit_code:', msg.exit_code)
         mergePhaseResponse({
@@ -260,6 +293,50 @@ export function DockerBuildStep({ onContinue, onBack, isPhaseLoading }: Props) {
         return
       }
 
+      // ── Retry session lifecycle events (build_started / retry_started /
+      //    retry_completed / retry_failed / build_blocked_*) ────────────────
+      // These arrive as type=log here because the WS emits all events
+      // serialised through the log channel. We disambiguate by message text
+      // and by session_id transition.
+      const sessionId =
+        msg.execution_session_id ??
+        msg.metadata?.execution_session_id ??
+        undefined
+      const iteration =
+        msg.retry_iteration ?? msg.metadata?.retry_iteration ?? undefined
+
+      // Session transition → reset live buffer, move old logs to replay
+      if (
+        sessionId &&
+        !msg.is_replay &&
+        sessionId !== activeSessionId &&
+        isMountedRef.current
+      ) {
+        console.log('[WS] New session detected:', sessionId, '(was:', activeSessionId, ')')
+        setActiveSessionId(sessionId)
+        setReplayLogs((prev) => [...prev, ...logs])
+        setLogs([])
+        setIsLive(true)
+        if (iteration !== undefined) {
+          setRetryTimeline((prev) => {
+            // append or upsert entry
+            const existing = prev.findIndex((e) => e.execution_session_id === sessionId)
+            const next: RetryTimelineEntry = {
+              retry_iteration: iteration,
+              execution_session_id: sessionId,
+              state: 'building',
+              started_at: msg.timestamp ?? new Date().toISOString(),
+            }
+            if (existing >= 0) {
+              const copy = [...prev]
+              copy[existing] = { ...copy[existing], ...next }
+              return copy
+            }
+            return [...prev, next]
+          })
+        }
+      }
+
       // ── Log line ──────────────────────────────────────────────────────────
       if (msg.type === 'log' || (!msg.type && msg.message)) {
         if (!msg.message) {
@@ -271,20 +348,17 @@ export function DockerBuildStep({ onContinue, onBack, isPhaseLoading }: Props) {
           level:     (msg.level ?? 'DEFAULT') as LogEntry['level'],
           message:   msg.message,
         }
-        console.log('[LOG APPEND]', incomingLog)
+        const replay = !!msg.is_replay
 
-        setLogs((prev) => {
+        const targetSetter = replay ? setReplayLogs : setLogs
+        targetSetter((prev) => {
           const isDuplicate = prev.some(
             (e) => e.timestamp === incomingLog.timestamp && e.message === incomingLog.message
           )
-          if (isDuplicate) {
-            console.log('[LOG APPEND] duplicate — skipped')
-            return prev
-          }
-          const next = [...prev, incomingLog]
-          console.log('[LOG COUNT]', next.length)
-          return next
+          if (isDuplicate) return prev
+          return [...prev, incomingLog]
         })
+        if (!replay) setIsLive(true)
       } else {
         console.warn('[WS] Unrecognised message type:', msg.type, msg)
       }
@@ -343,7 +417,11 @@ export function DockerBuildStep({ onContinue, onBack, isPhaseLoading }: Props) {
     setError(undefined)
     setWsParseError(undefined)
     setStatus('running')
+    // Move any existing live logs to the replay history before starting fresh.
+    setReplayLogs((prev) => [...prev, ...logs])
     setLogs([])
+    setActiveSessionId(undefined)  // will be set by first session-tagged event
+    setIsLive(true)
     setDurationSeconds(null)
     setFailureDiagnostics(null)
 
@@ -515,7 +593,74 @@ export function DockerBuildStep({ onContinue, onBack, isPhaseLoading }: Props) {
         </div>
       )}
 
-      {/* Live build logs */}
+      {/* Retry timeline */}
+      {retryTimeline.length > 0 && (
+        <div className={cn(
+          'rounded-xl border border-slate-200 dark:border-white/[0.06]',
+          'bg-white dark:bg-surface-900 px-4 py-3',
+        )}>
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 mb-2">
+            Retry Timeline
+          </p>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+            {retryTimeline.map((entry, idx) => {
+              const dot =
+                entry.state === 'success' ? '🟢' :
+                entry.state === 'failed'  ? '🔴' :
+                entry.state === 'building' ? '🟡' : '⚪'
+              const isActive = entry.execution_session_id === activeSessionId
+              return (
+                <div key={entry.execution_session_id ?? idx} className="flex items-center gap-1.5">
+                  <span>{dot}</span>
+                  <span className={cn(
+                    'px-2 py-0.5 rounded-md border',
+                    isActive
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                      : 'border-slate-200 dark:border-white/[0.06] text-slate-600 dark:text-slate-400',
+                  )}>
+                    Retry #{entry.retry_iteration} · {entry.state}
+                  </span>
+                  {idx < retryTimeline.length - 1 && <span className="text-slate-500">→</span>}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Live banner */}
+      {isLive && status === 'running' && (
+        <div className={cn(
+          'flex items-center gap-2 px-4 py-2 rounded-lg',
+          'bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs font-medium',
+        )}>
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          Streaming live retry execution…
+          {activeSessionId && <span className="ml-auto font-mono text-emerald-400/60">session: {activeSessionId}</span>}
+        </div>
+      )}
+
+      {/* Previous retry replay (collapsible) */}
+      {replayLogs.length > 0 && (
+        <details className="rounded-xl border border-slate-200 dark:border-white/[0.06] bg-white dark:bg-surface-900">
+          <summary className="cursor-pointer select-none px-4 py-3 text-xs font-semibold uppercase tracking-widest text-slate-500 flex items-center gap-2">
+            🟡 Previous Retry Logs (replay) · {replayLogs.length} entries
+          </summary>
+          <div className="border-t border-slate-200 dark:border-white/[0.06]">
+            <BuildLogsPanel
+              logs={replayLogs}
+              status={'pending'}
+              imageTag={undefined}
+              retries={0}
+              buildNumber={0}
+              durationSeconds={null}
+              autoScroll={false}
+            />
+          </div>
+        </details>
+      )}
+
+      {/* Live build logs — current retry only */}
       <div className="relative">
         <BuildLogsPanel
           logs={logs}

@@ -27,14 +27,26 @@ class ExecutionLogEntry(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     level: LogLevel = LogLevel.DEFAULT
     message: str
+    # Retry session metadata — populated when the log is published through a
+    # TaskLogStream that carries session context. Frontend uses these fields
+    # to segment terminal output per retry attempt.
+    retry_iteration: int | None = None
+    execution_session_id: str | None = None
+    is_replay: bool = False
 
     def to_dict(self) -> dict:
-        return {
+        payload: dict[str, Any] = {
             "type": "log",
             "timestamp": self.timestamp,
             "level": self.level.value,
             "message": self.message,
+            "is_replay": self.is_replay,
         }
+        if self.retry_iteration is not None:
+            payload["retry_iteration"] = self.retry_iteration
+        if self.execution_session_id is not None:
+            payload["execution_session_id"] = self.execution_session_id
+        return payload
 
 
 class ExecutionEvent(BaseModel):
@@ -50,6 +62,11 @@ class ExecutionEvent(BaseModel):
     max_iterations: int | None = None
     patch: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Retry session metadata mirrored at the top level so the frontend doesn't
+    # have to dig through metadata for routing.
+    retry_iteration: int | None = None
+    execution_session_id: str | None = None
+    is_replay: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -63,6 +80,9 @@ class ExecutionEvent(BaseModel):
             "max_iterations": self.max_iterations,
             "patch": self.patch,
             "metadata": self.metadata,
+            "retry_iteration": self.retry_iteration,
+            "execution_session_id": self.execution_session_id,
+            "is_replay": self.is_replay,
         }
         return {key: value for key, value in payload.items() if value is not None}
 

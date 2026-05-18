@@ -295,6 +295,15 @@ class ArtifactService:
 
     @staticmethod
     def apply_ai_patches(db: Session, task) -> dict[str, dict]:
+        """
+        Promote AI patch previews into current_content.
+
+        Lifecycle parity with manual edit + save:
+          • increments version per affected artifact
+          • clears ai_patched_content so the preview can't be re-applied
+          • marks corrector analysis as superseded so the UI invalidates its
+            cached snapshot before the retry kicks off
+        """
         state = dict(TaskService.load_workflow_state(db, task) or {})
         artifacts_store = _canonical_store(state)
         updates = {
@@ -302,7 +311,31 @@ class ArtifactService:
             for key, entry in artifacts_store.items()
             if isinstance(entry, dict) and entry.get("ai_patched_content")
         }
-        return ArtifactService.save_many_artifacts(db, task, updates, modified_by="corrector_ai")
+        saved = ArtifactService.save_many_artifacts(
+            db, task, updates, modified_by="corrector_ai",
+        )
+
+        # Reload state, clear the AI preview blobs, and mark corrector snapshot
+        # as superseded. Caller (apply_ai_patch route) then triggers the build
+        # via start_docker_build — same path as a manual edit + retry.
+        state = dict(TaskService.load_workflow_state(db, task) or {})
+        artifacts_store = _canonical_store(state)
+        for key in saved:
+            entry = artifacts_store.get(key) or {}
+            entry["ai_patched_content"] = None
+            entry["ai_patch_applied_at"] = _now()
+        corrector = (state.get("execution") or {}).get("corrector") or {}
+        if corrector:
+            corrector["analysis_superseded"] = True
+            corrector["analysis_superseded_at"] = _now()
+            state.setdefault("execution", {})["corrector"] = corrector
+        state["artifacts"] = artifacts_store
+        TaskService.save_workflow_state(db, task, state)
+        logger.info(
+            "[ArtifactService] AI patches applied + analysis marked superseded task=%s keys=%s",
+            task.id, list(saved),
+        )
+        return saved
 
 
 class ArtifactStateResolver:
