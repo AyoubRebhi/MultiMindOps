@@ -205,10 +205,16 @@ class InfrastructureAgent(EnhancedBaseAgent):
                         or mapped_context.get("build_context", ".")
                     )
                     try:
+                        framework_hint = (
+                            ((mapped_context.get("main_service") or {}).get("framework"))
+                            or (structured_result.generation_metadata or {}).get("framework")
+                            or ""
+                        )
                         static_val = self._static_validator.validate(
                             dockerfile_content=structured_dockerfile,
                             build_context=build_ctx_path,
                             known_files=known_files,
+                            framework=framework_hint,
                         )
                         infrastructure_generation = infrastructure_generation or {}
                         infrastructure_generation["static_validation"] = static_val.to_dict()

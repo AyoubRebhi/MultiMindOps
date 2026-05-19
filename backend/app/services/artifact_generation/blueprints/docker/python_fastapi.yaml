@@ -60,14 +60,38 @@ sections:
 
   - id: security_user
     required: false
-    description: Create dedicated non-root application user and group
+    description: |
+      Create dedicated non-root application user and group.
+      The -m flag is REQUIRED — it creates /home/appuser, which is needed for
+      the COPY --from=builder /root/.local /home/appuser/.local stage to land
+      in a real directory the runtime user can read.
     static: true
     template: |
-      RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+      RUN groupadd -r appgroup && useradd -r -m -g appgroup appuser
     rag_tags:
       - non-root-user
       - least-privilege
       - security-hardening
+      - home-dir-required
+
+  - id: runtime_packages
+    required: true
+    description: |
+      Install runtime OS packages needed for HEALTHCHECK and basic diagnostics.
+      python:*-slim does NOT ship curl/nc/wget, so any HEALTHCHECK that depends
+      on them must install them first. Runs as root before USER switch.
+    static: true
+    template: |
+      RUN apt-get update && apt-get install -y --no-install-recommends \
+              curl \
+          && rm -rf /var/lib/apt/lists/*
+    rag_tags:
+      - runtime-packages
+      - healthcheck-deps
+      - curl-install
+    security_rules:
+      - clean_apt_lists
+      - no_install_recommends
 
   - id: workdir
     required: true
@@ -81,17 +105,17 @@ sections:
 
   - id: copy_dependencies
     required: true
-    description: Copy pip user-installed packages from builder stage
+    description: Copy pip user-installed packages from builder stage with non-root ownership
     static: true
     template: |
-      COPY --from=builder /root/.local /home/appuser/.local
+      COPY --chown=appuser:appgroup --from=builder /root/.local /home/appuser/.local
 
   - id: copy_source
     required: true
-    description: Copy application source code into runtime image
+    description: Copy application source code into runtime image with non-root ownership
     static: true
     template: |
-      COPY . .
+      COPY --chown=appuser:appgroup . .
 
   - id: environment
     required: true
@@ -109,6 +133,25 @@ sections:
       - port
     validation_hints:
       - port_must_be_numeric
+
+  - id: runtime_dirs
+    required: true
+    description: |
+      Pre-create runtime-writable application directories and align ownership BEFORE
+      switching to USER appuser. Python/FastAPI apps frequently mkdir paths like
+      'workspace/repos' at runtime; without this step those mkdir calls fail with
+      PermissionError because /app is owned by root.
+    static: true
+    template: |
+      RUN mkdir -p /app/workspace/repos && \
+          chown -R appuser:appgroup /app
+    security_rules:
+      - runtime_writable_dirs
+      - ownership_alignment
+    rag_tags:
+      - runtime-permissions
+      - non-root-user
+      - writable-directories
 
   - id: user
     required: false

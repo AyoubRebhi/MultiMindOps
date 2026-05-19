@@ -1,4 +1,5 @@
 import base64
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -7,7 +8,9 @@ from backend.app.services.repository.github_service import GitHubService
 
 class GitHubServiceTests(unittest.TestCase):
     def setUp(self):
-        self.service = GitHubService()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.service = GitHubService(workspace_dir=self._tmp.name)
 
     @patch("backend.app.services.repository.github_service.requests.get")
     def test_get_repository_file_content_success(self, mock_get):

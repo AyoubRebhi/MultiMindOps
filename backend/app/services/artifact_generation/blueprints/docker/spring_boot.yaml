@@ -102,13 +102,14 @@ sections:
 
   - id: copy_jar
     required: true
-    description: Copy compiled JAR from builder stage
+    description: Copy compiled JAR from builder stage with non-root ownership
     template: |
-      COPY --from=builder /build/{{ jar_path }} app.jar
+      COPY --chown=appuser:appgroup --from=builder /build/{{ jar_path }} app.jar
     required_variables:
       - jar_path
     rag_tags:
       - multi-stage-copy-jar
+      - non-root-ownership
 
   - id: expose
     required: true
@@ -119,6 +120,24 @@ sections:
       - port
     validation_hints:
       - port_must_be_numeric
+
+  - id: runtime_dirs
+    required: true
+    description: |
+      Pre-create runtime-writable application directories and align ownership BEFORE
+      switching to USER appuser. The JVM and Spring Boot frequently write to /tmp
+      and /app/logs (e.g. heap dumps, file appenders) — those writes fail when /app
+      is owned by root and the process runs as appuser.
+    static: true
+    template: |
+      RUN mkdir -p /app/logs /app/tmp && \
+          chown -R appuser:appgroup /app
+    security_rules:
+      - runtime_writable_dirs
+      - ownership_alignment
+    rag_tags:
+      - runtime-permissions
+      - non-root-user
 
   - id: user
     required: false

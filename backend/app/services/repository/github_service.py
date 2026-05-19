@@ -1,21 +1,98 @@
 import base64
+import logging
 import os
 import shutil
 import subprocess
 import uuid
-from typing import Any
+from typing import Any, Optional
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
 
+logger = logging.getLogger(__name__)
+
+# Default workspace directory inside the container. Overridable via WORKSPACE_DIR
+# so the same code works in: (a) the production container (/app/workspace/repos),
+# (b) local dev (./workspace/repos), and (c) tests (any tmp path).
+DEFAULT_WORKSPACE_DIR = "/app/workspace/repos"
+
+
+def resolve_workspace_dir(explicit: Optional[str] = None) -> Path:
+    """
+    Resolve the runtime workspace directory.
+
+    Precedence:
+      1. explicit argument (constructor parameter)
+      2. WORKSPACE_DIR environment variable
+      3. DEFAULT_WORKSPACE_DIR (/app/workspace/repos)
+    """
+    raw = explicit or os.getenv("WORKSPACE_DIR") or DEFAULT_WORKSPACE_DIR
+    return Path(raw).expanduser()
+
 
 class GitHubService:
     MAX_VIEWABLE_FILE_BYTES = 200 * 1024
 
-    def __init__(self, workspace_dir: str = "workspace/repos") -> None:
-        self.workspace_dir = Path(workspace_dir)
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, workspace_dir: Optional[str] = None) -> None:
+        self.workspace_dir = resolve_workspace_dir(workspace_dir)
+        logger.info(
+            "[RuntimeInit] WORKSPACE_DIR=%s (source=%s)",
+            self.workspace_dir,
+            (
+                "constructor" if workspace_dir
+                else "env" if os.getenv("WORKSPACE_DIR")
+                else "default"
+            ),
+        )
+        logger.info("[RuntimeInit] Ensuring runtime repository workspace exists")
+        try:
+            self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            self._emit_permission_diagnostics(self.workspace_dir, exc)
+            raise
+        logger.info("[RuntimeInit] Workspace permissions OK at %s", self.workspace_dir)
+
+    @staticmethod
+    def _emit_permission_diagnostics(target: Path, exc: PermissionError) -> None:
+        """
+        Emit forensic ownership/permission diagnostics so production logs
+        explain WHY the mkdir failed (UID/GID/path/parent owner), not just THAT.
+        """
+        try:
+            uid = os.getuid()  # type: ignore[attr-defined]
+            gid = os.getgid()  # type: ignore[attr-defined]
+        except AttributeError:
+            # Windows dev — os.getuid/getgid don't exist
+            uid = gid = -1
+
+        # Walk up until we find an existing ancestor so we can report its perms
+        existing = target
+        while not existing.exists() and existing.parent != existing:
+            existing = existing.parent
+
+        try:
+            st = existing.stat()
+            ancestor_uid = getattr(st, "st_uid", -1)
+            ancestor_gid = getattr(st, "st_gid", -1)
+            ancestor_mode = oct(getattr(st, "st_mode", 0) & 0o777)
+        except OSError:
+            ancestor_uid = ancestor_gid = -1
+            ancestor_mode = "unknown"
+
+        logger.error(
+            "[RuntimeInit] PermissionError creating workspace: %s\n"
+            "  resolved_path:     %s\n"
+            "  process_uid/gid:   %s/%s\n"
+            "  first_existing:    %s\n"
+            "  ancestor_uid/gid:  %s/%s\n"
+            "  ancestor_mode:     %s\n"
+            "  fix:               ensure the container runs 'mkdir -p %s && "
+            "chown -R appuser:appgroup /app' BEFORE the USER appuser directive, "
+            "or set WORKSPACE_DIR to a path the runtime user owns.",
+            exc, target, uid, gid, existing,
+            ancestor_uid, ancestor_gid, ancestor_mode, target,
+        )
 
     def clone_repository(
         self,

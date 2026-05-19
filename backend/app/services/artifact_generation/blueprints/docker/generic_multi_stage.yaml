@@ -41,21 +41,50 @@ sections:
       - layer-caching
       - dependency-management
 
+  - id: security_user_create
+    required: false
+    description: |
+      Create the non-root user/group BEFORE copying the source so that
+      COPY --chown can resolve the user, and so that the runtime-dirs
+      step can chown the workdir to it.
+    template: |
+      RUN {{ create_user_command }}
+    required_variables:
+      - create_user_command
+    rag_tags:
+      - non-root-user
+      - security-hardening
+
   - id: source_code
     required: true
-    description: Copy application source code
+    description: Copy application source code with non-root ownership
     static: true
     template: |
-      COPY . .
+      COPY --chown={{ app_user }}:{{ app_group }} . .
+
+  - id: runtime_dirs
+    required: false
+    description: |
+      Pre-create runtime-writable application directories and align ownership BEFORE
+      switching to USER. Required so non-root processes can mkdir/write inside the
+      WORKDIR at runtime.
+    template: |
+      RUN mkdir -p {{ workdir }}/logs {{ workdir }}/tmp && \
+          chown -R {{ app_user }}:{{ app_group }} {{ workdir }}
+    required_variables:
+      - workdir
+      - app_user
+      - app_group
+    rag_tags:
+      - runtime-permissions
+      - non-root-user
 
   - id: security
     required: false
-    description: Security hardening — non-root user
+    description: Drop privileges to the non-root user created above
     template: |
-      RUN {{ create_user_command }}
       USER {{ app_user }}
     required_variables:
-      - create_user_command
       - app_user
     rag_tags:
       - non-root-user

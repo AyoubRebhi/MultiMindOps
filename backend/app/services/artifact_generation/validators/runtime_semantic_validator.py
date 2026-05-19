@@ -419,8 +419,9 @@ class RuntimeSemanticValidator:
                         "This command does not exist on Debian/Ubuntu systems."
                     ),
                     suggestion=(
-                        "Replace with Debian equivalents:\n"
-                        "  RUN groupadd -r appgroup && useradd -r -g appgroup appuser"
+                        "Replace with Debian equivalents (the -m flag is required so "
+                        "/home/appuser exists at runtime):\n"
+                        "  RUN groupadd -r appgroup && useradd -r -m -g appgroup appuser"
                     ),
                     line_hint=cmd,
                 ))
@@ -436,8 +437,9 @@ class RuntimeSemanticValidator:
                         "Alpine uses 'addgroup'/'adduser' instead."
                     ),
                     suggestion=(
-                        "Replace with Alpine equivalents:\n"
-                        "  RUN addgroup -S appgroup && adduser -S appuser -G appgroup"
+                        "Replace with Alpine equivalents (-h sets the user's home so "
+                        "/home/appuser is reachable at runtime):\n"
+                        "  RUN addgroup -S appgroup && adduser -S -h /home/appuser -G appgroup appuser"
                     ),
                     line_hint=cmd,
                 ))

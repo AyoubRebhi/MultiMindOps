@@ -1,5 +1,6 @@
 import io
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 
@@ -11,8 +12,58 @@ from backend.app.api.router import api_router
 from backend.app.core.config import settings
 from backend.app.database.base import Base
 from backend.app.database.session import engine
+from backend.app.services.repository.github_service import resolve_workspace_dir
 
 logger = logging.getLogger(__name__)
+
+
+def validate_runtime_workspace() -> None:
+    """
+    Validate that the runtime workspace directory exists and is writable BEFORE
+    serving any request. Failure to mkdir/write here is the production bug class
+    that surfaces as `PermissionError: [Errno 13] Permission denied: 'workspace'`
+    on the first repository clone — we want it logged at startup with full
+    UID/GID/path diagnostics, not at 02:00 in a user-facing trace.
+    """
+    target = resolve_workspace_dir()
+    logger.info("[RuntimeInit] WORKSPACE_DIR=%s", target)
+    logger.info("[RuntimeInit] Ensuring runtime repository workspace exists")
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        probe = target / ".write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except PermissionError as exc:
+        try:
+            uid = os.getuid()    # type: ignore[attr-defined]
+            gid = os.getgid()    # type: ignore[attr-defined]
+        except AttributeError:
+            uid = gid = -1
+        existing = target
+        while not existing.exists() and existing.parent != existing:
+            existing = existing.parent
+        try:
+            st = existing.stat()
+            ancestor_uid = getattr(st, "st_uid", -1)
+            ancestor_gid = getattr(st, "st_gid", -1)
+            ancestor_mode = oct(getattr(st, "st_mode", 0) & 0o777)
+        except OSError:
+            ancestor_uid = ancestor_gid = -1
+            ancestor_mode = "unknown"
+        logger.error(
+            "[RuntimeInit] Workspace permissions FAILED: %s\n"
+            "  resolved_path:    %s\n"
+            "  process_uid/gid:  %s/%s\n"
+            "  first_existing:   %s\n"
+            "  ancestor_uid/gid: %s/%s\n"
+            "  ancestor_mode:    %s\n"
+            "  fix: the Dockerfile must run `mkdir -p %s && chown -R "
+            "appuser:appgroup /app` BEFORE the USER appuser directive.",
+            exc, target, uid, gid, existing,
+            ancestor_uid, ancestor_gid, ancestor_mode, target,
+        )
+        raise
+    logger.info("[RuntimeInit] Workspace permissions OK")
 
 
 def setup_utf8_encoding() -> None:
@@ -57,6 +108,10 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Validate runtime filesystem before serving requests so PermissionError
+        # surfaces with structured diagnostics at startup, not on first request.
+        validate_runtime_workspace()
+
         rows = []
         for route in app.routes:
             methods = ",".join(sorted(getattr(route, "methods", None) or []))

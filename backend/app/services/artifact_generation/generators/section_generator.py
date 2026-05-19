@@ -55,14 +55,35 @@ Task: fill variable values for the blueprint sections listed below.
    Node:       node:20-alpine
    Always pin a specific tag — never use :latest
 
-3. DISTRO-AWARE USER CREATION
-   eclipse-temurin:*-jre (no alpine suffix) → Debian → use:
-     "groupadd -r appgroup && useradd -r -g appgroup appuser"
-   eclipse-temurin:*-alpine OR alpine:* → Alpine → use:
-     "addgroup -S appgroup && adduser -S appuser -G appgroup"
-   python:*-slim → Debian → use:
-     "groupadd -r appgroup && useradd -r -g appgroup appuser"
+3. DISTRO-AWARE USER CREATION (always with home directory)
+   The -m / -h flags are MANDATORY — they create /home/appuser, which is required
+   by COPY --from=builder /root/.local /home/appuser/.local and by any runtime
+   that resolves $HOME (pip user installs, JVM caches, npm caches).
+     eclipse-temurin:*-jre (no alpine suffix) → Debian → use:
+       "groupadd -r appgroup && useradd -r -m -g appgroup appuser"
+     eclipse-temurin:*-alpine OR alpine:* → Alpine → use:
+       "addgroup -S appgroup && adduser -S -h /home/appuser -G appgroup appuser"
+     python:*-slim → Debian → use:
+       "groupadd -r appgroup && useradd -r -m -g appgroup appuser"
    NEVER mix Alpine commands with Debian images or vice-versa.
+   NEVER omit -m (Debian) or -h /home/appuser (Alpine) — runtime PermissionError
+   on /home/appuser is the symptom when these are missing.
+
+3a. COPY OWNERSHIP (every COPY must set --chown when target runs as non-root)
+   The runtime user is appuser:appgroup. Every COPY instruction in the runtime
+   stage MUST include --chown=appuser:appgroup, otherwise /app and its files
+   stay root-owned and the application — running as appuser — gets
+   PermissionError: [Errno 13] when it tries to mkdir/write at runtime.
+     CORRECT:   COPY --chown=appuser:appgroup . .
+     CORRECT:   COPY --chown=appuser:appgroup --from=builder /root/.local /home/appuser/.local
+     WRONG:     COPY . .                         ← root-owned files break appuser
+
+3b. RUNTIME WRITABLE DIRECTORIES (pre-create before USER switch)
+   If the application writes to /app/workspace, /app/logs, /app/tmp at runtime,
+   those paths MUST be mkdir'd and chown'd to appuser BEFORE the USER directive.
+   Generated Python/FastAPI Dockerfiles must include a pre-USER step equivalent to:
+     RUN mkdir -p /app/workspace/repos && chown -R appuser:appgroup /app
+   Without this, mkdir('workspace/repos') at runtime fails with PermissionError.
 
 4. EXEC FORM — double quotes ONLY
    CMD and ENTRYPOINT variables must be valid JSON arrays with DOUBLE QUOTES:
@@ -78,12 +99,17 @@ Task: fill variable values for the blueprint sections listed below.
      WRONG:     ["mvn", "clean", "package"]   ← RUN does NOT support exec form
 
 6. HEALTHCHECK DEPENDENCIES
-   If healthcheck_cmd uses "curl": the image must have curl installed.
-   If the runtime image does NOT include curl by default, set healthcheck_cmd to:
-     Debian: "curl -f http://localhost:{port}/actuator/health || exit 1"  (after apt install curl)
-     Alpine: "wget -q --spider http://localhost:{port}/actuator/health || exit 1"
-   For Spring Boot without actuator: use a TCP check instead:
-     "echo 'GET / HTTP/1.0' | nc localhost {port} || exit 1"
+   The Python/FastAPI blueprint installs curl in its runtime_packages section,
+   so curl is ALWAYS available — prefer curl over nc/wget/netcat for Python images.
+   NEVER use 'nc' / 'netcat' — it is NOT installed in python:*-slim and the
+   probe will fail at runtime.
+   Default probe targets:
+     FastAPI:      "curl -f http://localhost:{port}/docs || exit 1"
+     Flask/Django: "curl -f http://localhost:{port}/health || exit 1"
+     Spring Boot:  "curl -f http://localhost:{port}/actuator/health || exit 1"
+     Node (Alpine): "wget -q --spider http://localhost:{port}/ || exit 1"
+   For Alpine images without curl, use:
+     "wget -q --spider http://localhost:{port}/<path> || exit 1"
 
 7. SPRING BOOT SPECIFICS
    jar_path: use "target/*.jar" (Maven) or "build/libs/*.jar" (Gradle)
@@ -146,6 +172,29 @@ class ArtifactSectionGenerator:
             framework,
             language,
         )
+
+        section_ids = {s.id for s in blueprint.sections}
+        has_user_drop = any(
+            s.id in ("user", "security") and not s.required is False
+            for s in blueprint.sections
+        )
+        if "security_user" in section_ids or "security_user_create" in section_ids:
+            logger.info(
+                "[DockerfileSecurity] Enabling non-root runtime ownership model (blueprint=%s)",
+                blueprint.blueprint_id,
+            )
+        if any(
+            "--chown" in (s.template or "")
+            for s in blueprint.sections
+            if s.id.startswith("copy_") or s.id == "source_code"
+        ):
+            logger.info(
+                "[DockerfileSecurity] Applying COPY --chown directives for non-root file ownership"
+            )
+        if "runtime_dirs" in section_ids:
+            logger.info(
+                "[DockerfileSecurity] Pre-creating writable runtime directories before USER switch"
+            )
 
         results: Dict[str, SectionGenerationResult] = {}
 
@@ -477,16 +526,23 @@ def _deterministic_fallbacks(
         # ── Network ──────────────────────────────────────────────────────────
         "port": port,
         # ── Security ─────────────────────────────────────────────────────────
-        # Default to Debian-style (eclipse-temurin JRE is Debian-based)
+        # Default to Debian-style (eclipse-temurin JRE is Debian-based).
+        # -m / -h is REQUIRED — creates /home/appuser, needed at runtime for
+        # pip --user installs and to avoid PermissionError on $HOME.
         "create_user_command": _create_user_command(language, runtime),
         "app_user": "appuser",
+        "app_group": "appgroup",
         # ── Startup ──────────────────────────────────────────────────────────
         "startup_command": _startup_command(language, framework, main_service, port),
         # ── Health check ─────────────────────────────────────────────────────
+        # python:*-slim does NOT include curl by default. The Python/FastAPI
+        # blueprint pre-installs curl in the runtime_packages section, so
+        # curl-based probes work. FastAPI ships /docs out of the box, so it
+        # makes a reliable default probe target.
         "healthcheck_interval": "30s",
-        "healthcheck_timeout": "10s",
+        "healthcheck_timeout": "5s",
         "healthcheck_retries": "3",
-        "healthcheck_cmd": f"curl -f http://localhost:{port}/health || exit 1",
+        "healthcheck_cmd": _default_healthcheck_cmd(language, framework, port),
     }
 
     return {k: all_vars[k] for k in section.all_variables if k in all_vars}
@@ -601,6 +657,29 @@ def _install_cmd_for_file(language: str, req_file: str) -> str:
     return f"pip install --no-cache-dir -r {filename}"
 
 
+def _default_healthcheck_cmd(language: str, framework: str, port: str) -> str:
+    """
+    Return a HEALTHCHECK CMD string appropriate for the framework + base image.
+
+    FastAPI: curl -f /docs (always present, no auth required)
+    Flask/Django: curl -f /health (apps typically expose /health)
+    Node: wget -q --spider / (alpine has wget by default)
+    Spring Boot: curl -f /actuator/health
+    Other: curl -f /
+    """
+    fw = (framework or "").lower()
+    lang = (language or "").lower()
+    if lang == "python" and any(f in fw for f in ("fastapi", "uvicorn", "starlette")):
+        return f"curl -f http://localhost:{port}/docs || exit 1"
+    if lang == "python":
+        return f"curl -f http://localhost:{port}/health || exit 1"
+    if lang in ("javascript", "typescript"):
+        return f"wget -q --spider http://localhost:{port}/ || exit 1"
+    if lang in ("java", "kotlin"):
+        return f"curl -f http://localhost:{port}/actuator/health || exit 1"
+    return f"curl -f http://localhost:{port}/ || exit 1"
+
+
 def _default_port(framework: str) -> int:
     ports = {
         "fastapi": 8000, "flask": 5000, "django": 8000,
@@ -655,12 +734,19 @@ def _create_user_command(language: str, runtime: Dict[str, Any]) -> str:
     """
     Return the correct user+group creation command for the runtime image's distro.
 
-    eclipse-temurin (no alpine suffix) → Debian → groupadd/useradd
-    node:*-alpine, eclipse-temurin:*-alpine, python:*-alpine → Alpine → addgroup/adduser
-    python:*-slim → Debian → groupadd/useradd (default for python)
+    The home-directory flag is REQUIRED:
+      Debian: -m creates /home/appuser
+      Alpine: -h /home/appuser sets the user's home explicitly
+
+    Without it, COPY --from=builder /root/.local /home/appuser/.local lands
+    somewhere unreachable and any runtime $HOME lookup fails with PermissionError.
+
+    eclipse-temurin (no alpine suffix) → Debian → groupadd/useradd -m
+    node:*-alpine, eclipse-temurin:*-alpine, python:*-alpine → Alpine → addgroup/adduser -h
+    python:*-slim → Debian → groupadd/useradd -m (default for python)
     """
     runtime_img = _runtime_image(language, runtime).lower()
     if "alpine" in runtime_img:
-        return "addgroup -S appgroup && adduser -S appuser -G appgroup"
+        return "addgroup -S appgroup && adduser -S -h /home/appuser -G appgroup appuser"
     # Debian / slim / temurin non-alpine
-    return "groupadd -r appgroup && useradd -r -g appgroup appuser"
+    return "groupadd -r appgroup && useradd -r -m -g appgroup appuser"

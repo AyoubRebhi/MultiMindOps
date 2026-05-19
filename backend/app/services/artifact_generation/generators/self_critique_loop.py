@@ -60,6 +60,13 @@ ONLY flag issues that will cause a BUILD FAILURE or RUNTIME FAILURE:
   7. COPY --from=<stage> referencing an undefined AS alias
   8. RUN with JSON exec form (RUN only supports shell form)
   9. HEALTHCHECK --interval with wrong format (must be like 30s, not 30)
+ 10. useradd missing -m (Debian) or adduser missing -h /home/<user> (Alpine) —
+     the home directory must exist; otherwise PermissionError on $HOME at runtime
+ 11. COPY . . (or any runtime-stage COPY) without --chown=<user>:<group> when
+     the Dockerfile drops to a non-root USER — root-owned /app breaks
+     runtime mkdir/write with PermissionError: [Errno 13]
+ 12. USER <non-root> directive without a preceding "mkdir -p .../<writable> && chown -R"
+     for runtime-writable paths the framework needs (workspace, logs, tmp)
 
 Return ONLY this JSON — no text, no markdown, no code fences:
 {

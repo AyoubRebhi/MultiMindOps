@@ -58,10 +58,12 @@ sections:
 
   - id: security_user
     required: false
-    description: Create non-root user for Alpine-based images
+    description: |
+      Create non-root user for Alpine-based images. The -h /home/appuser flag
+      ensures a writable home directory exists for runtime caches.
     static: true
     template: |
-      RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+      RUN addgroup -S appgroup && adduser -S -h /home/appuser -G appgroup appuser
 
   - id: workdir
     required: true
@@ -73,17 +75,17 @@ sections:
 
   - id: copy_dependencies
     required: true
-    description: Copy installed node_modules from builder stage
+    description: Copy installed node_modules from builder stage with non-root ownership
     static: true
     template: |
-      COPY --from=builder /build/node_modules ./node_modules
+      COPY --chown=appuser:appgroup --from=builder /build/node_modules ./node_modules
 
   - id: copy_source
     required: true
-    description: Copy application source code
+    description: Copy application source code with non-root ownership
     static: true
     template: |
-      COPY . .
+      COPY --chown=appuser:appgroup . .
 
   - id: expose
     required: true
@@ -94,6 +96,24 @@ sections:
       - port
     validation_hints:
       - port_must_be_numeric
+
+  - id: runtime_dirs
+    required: true
+    description: |
+      Pre-create runtime-writable application directories and align ownership BEFORE
+      switching to USER appuser. Node apps commonly write to ./logs and ./tmp at
+      runtime — those mkdir calls fail when /app is root-owned and the process runs
+      as appuser.
+    static: true
+    template: |
+      RUN mkdir -p /app/logs /app/tmp && \
+          chown -R appuser:appgroup /app
+    security_rules:
+      - runtime_writable_dirs
+      - ownership_alignment
+    rag_tags:
+      - runtime-permissions
+      - non-root-user
 
   - id: user
     required: false

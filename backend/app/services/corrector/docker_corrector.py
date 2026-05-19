@@ -97,16 +97,45 @@ _DEFAULT_FIXES: Dict[FailureType, List[Dict[str, Any]]] = {
 
     FailureType.PERMISSION_FAILURE: [
         {
-            "title": "Add chmod to make scripts executable",
-            "explanation": "Add an explicit `chmod` step before the failing command.",
-            "patch": "RUN chmod +x /app/entrypoint.sh",
+            "title": "Use COPY --chown and pre-create writable runtime directories",
+            "explanation": (
+                "PermissionError on a path like 'workspace/repos' at runtime almost always "
+                "means /app is root-owned but the process runs as appuser. COPY without "
+                "--chown lands as root, and USER appuser cannot mkdir under /app. "
+                "Fix by setting ownership on every COPY in the runtime stage AND "
+                "pre-creating writable directories with chown before the USER switch."
+            ),
+            "patch": (
+                "RUN groupadd -r appgroup && useradd -r -m -g appgroup appuser\n"
+                "WORKDIR /app\n"
+                "COPY --chown=appuser:appgroup --from=builder /root/.local /home/appuser/.local\n"
+                "COPY --chown=appuser:appgroup . .\n"
+                "RUN mkdir -p /app/workspace/repos && \\\n"
+                "    chown -R appuser:appgroup /app\n"
+                "USER appuser"
+            ),
+            "severity": RemediationSeverity.CRITICAL,
+            "applies_to": "Dockerfile",
+        },
+        {
+            "title": "Add -m to useradd so /home/appuser exists",
+            "explanation": (
+                "When useradd is invoked without -m, /home/appuser is never created and "
+                "subsequent COPY --from=builder /root/.local /home/appuser/.local lands in "
+                "a path the runtime user cannot access. Add -m (Debian) or -h /home/appuser "
+                "(Alpine) so the home directory is created at the same time as the user."
+            ),
+            "patch": (
+                "# Debian: RUN groupadd -r appgroup && useradd -r -m -g appgroup appuser\n"
+                "# Alpine: RUN addgroup -S appgroup && adduser -S -h /home/appuser -G appgroup appuser"
+            ),
             "severity": RemediationSeverity.HIGH,
             "applies_to": "Dockerfile",
         },
         {
-            "title": "Fix ownership with chown",
-            "explanation": "Ensure target directory contents are owned by the process user.",
-            "patch": "RUN chown -R appuser:appuser /app",
+            "title": "Add chmod to make scripts executable",
+            "explanation": "Add an explicit `chmod` step before the failing command.",
+            "patch": "RUN chmod +x /app/entrypoint.sh",
             "severity": RemediationSeverity.HIGH,
             "applies_to": "Dockerfile",
         },
@@ -115,7 +144,7 @@ _DEFAULT_FIXES: Dict[FailureType, List[Dict[str, Any]]] = {
             "explanation": "Package managers require root — install before USER directive.",
             "patch": (
                 "RUN pip install --no-cache-dir -r requirements.txt\n"
-                "RUN useradd -m -r appuser\n"
+                "RUN groupadd -r appgroup && useradd -r -m -g appgroup appuser\n"
                 "USER appuser"
             ),
             "severity": RemediationSeverity.MEDIUM,
@@ -225,9 +254,9 @@ _DEFAULT_FIXES: Dict[FailureType, List[Dict[str, Any]]] = {
             ),
             "patch": (
                 "# Debian (eclipse-temurin:17-jre, python:3.11-slim, node:20-slim):\n"
-                "RUN groupadd -r appgroup && useradd -r -g appgroup appuser\n\n"
+                "RUN groupadd -r appgroup && useradd -r -m -g appgroup appuser\n\n"
                 "# Alpine (alpine:3.19, node:20-alpine, eclipse-temurin:17-jre-alpine):\n"
-                "RUN addgroup -S appgroup && adduser -S appuser -G appgroup"
+                "RUN addgroup -S appgroup && adduser -S -h /home/appuser -G appgroup appuser"
             ),
             "severity": RemediationSeverity.CRITICAL,
             "applies_to": "Dockerfile",
@@ -445,7 +474,7 @@ Return ONLY a valid JSON object — no text, no markdown, no code fences:
     ],
     "force_variables": {
       "runtime_image": "eclipse-temurin:17-jre",
-      "create_user_command": "groupadd -r appgroup && useradd -r -g appgroup appuser"
+      "create_user_command": "groupadd -r appgroup && useradd -r -m -g appgroup appuser"
     },
     "section_hints": {
       "security_user": "Use Debian groupadd/useradd — runtime image is eclipse-temurin (Debian)",

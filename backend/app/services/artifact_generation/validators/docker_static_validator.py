@@ -46,6 +46,8 @@ class ValidationIssue:
     message: str                     # Human-readable diagnosis
     suggested_fix: Optional[str] = None     # Corrected COPY instruction (if computable)
     actual_repo_path: Optional[str] = None  # Where the file actually lives in the repo
+    rule: str = "copy_path_mismatch"        # Validation rule identifier
+    severity: str = "high"                  # "critical" | "high" | "medium" | "low"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -55,6 +57,8 @@ class ValidationIssue:
             "message": self.message,
             "suggested_fix": self.suggested_fix,
             "actual_repo_path": self.actual_repo_path,
+            "rule": self.rule,
+            "severity": self.severity,
         }
 
 
@@ -95,6 +99,7 @@ class DockerBuildStaticValidator:
         dockerfile_content: str,
         build_context: str,
         known_files: Optional[List[str]] = None,
+        framework: Optional[str] = None,
     ) -> StaticValidationResult:
         """
         Validate all COPY instructions in the Dockerfile against the build context.
@@ -103,12 +108,21 @@ class DockerBuildStaticValidator:
             dockerfile_content: Raw Dockerfile text.
             build_context:      Build context root relative to repo root (e.g. "." or "backend/app").
             known_files:        Repo-relative file paths from codebase analysis.
-                                Without this, only structural checks are done.
+                                Without this, COPY-path validation is skipped — but
+                                runtime-permission validation still runs.
+            framework:          Optional framework hint (e.g. "fastapi", "flask") used
+                                to tune the runtime-writable-directory warning.
 
         Returns:
             StaticValidationResult with issues and suggested fixes.
         """
         result = StaticValidationResult()
+
+        # Runtime-permission validation runs regardless of known_files — it is
+        # purely a Dockerfile-content check and catches the production bug class
+        # where non-root containers cannot mkdir/write at runtime.
+        self._validate_runtime_permissions(dockerfile_content, framework, result)
+
         if not known_files:
             result.warnings.append(
                 "known_files not provided — COPY path validation skipped (metadata mode only)"
@@ -261,6 +275,117 @@ class DockerBuildStaticValidator:
             f"The file does not appear in the repository at all — "
             f"check the file name or add it to the project."
         )
+
+    # ── Runtime-permission validation ─────────────────────────────────────────
+
+    def _validate_runtime_permissions(
+        self,
+        dockerfile: str,
+        framework: Optional[str],
+        result: StaticValidationResult,
+    ) -> None:
+        """
+        Catch the runtime-permission bug class that surfaces as
+        `PermissionError: [Errno 13] Permission denied: 'workspace'` in production:
+
+          A) USER <non-root>  +  COPY . . (no --chown)
+             → /app stays root-owned, runtime process cannot write → HIGH severity
+          B) USER <non-root>  +  Python/FastAPI framework  +  no pre-USER mkdir of
+             runtime-writable dirs (workspace/logs/tmp) → MEDIUM severity warning
+        """
+        if not dockerfile or not dockerfile.strip():
+            return
+
+        lines = dockerfile.splitlines()
+
+        # Find the LAST USER directive — if it switches to a non-root user, the
+        # ownership rule applies to every COPY in the runtime stage.
+        user_line: Optional[str] = None
+        user_index: int = -1
+        for idx, raw in enumerate(lines):
+            stripped = raw.strip()
+            if re.match(r"(?i)^USER\s+", stripped):
+                user_line = stripped
+                user_index = idx
+
+        if user_line is None:
+            return  # Runs as root — neither check applies
+
+        user_target = re.sub(r"(?i)^USER\s+", "", user_line).strip().split()[0]
+        if user_target.lower() in ("root", "0", "0:0"):
+            return  # Explicitly running as root — permission checks don't apply
+
+        # ── Identify the runtime stage (after the LAST FROM) ──────────────────
+        last_from_idx = -1
+        for idx, raw in enumerate(lines):
+            if re.match(r"(?i)^FROM\s+", raw.strip()):
+                last_from_idx = idx
+        runtime_stage = lines[last_from_idx + 1:] if last_from_idx >= 0 else lines
+
+        # ── Rule A: COPY without --chown when USER is non-root ────────────────
+        for raw in runtime_stage:
+            stripped = raw.strip()
+            if not re.match(r"(?i)^COPY\b", stripped):
+                continue
+            # Skip multistage-only COPYs that bring in build artifacts to a path
+            # outside the workdir — those are fine if the runtime user later
+            # chowns or only reads them. Still, --chown is the safe default.
+            if "--chown=" in stripped.lower():
+                continue
+            # COPY --from=builder /root/.local /home/appuser/.local — still
+            # needs --chown when target runs as non-root.
+            result.issues.append(ValidationIssue(
+                copy_instruction=stripped,
+                source_path="<runtime-stage COPY>",
+                build_context="(runtime permission)",
+                rule="copy_without_chown_under_nonroot_user",
+                severity="high",
+                message=(
+                    f"Dockerfile drops to non-root USER '{user_target}' but a COPY in "
+                    f"the runtime stage does not set --chown. /app and its files will "
+                    f"stay root-owned, and the runtime process will hit "
+                    f"PermissionError: [Errno 13] when it tries to mkdir/write at runtime."
+                ),
+                suggested_fix=self._copy_chown_fix(stripped, user_target),
+            ))
+            result.valid = False
+
+        # ── Rule B: non-root user + Python framework + no writable-dir mkdir ──
+        fw = (framework or "").lower()
+        framework_needs_writable = any(
+            token in fw for token in ("fastapi", "flask", "django", "starlette", "uvicorn", "python")
+        )
+        if not framework_needs_writable:
+            return
+
+        pre_user_lines = lines[:user_index] if user_index >= 0 else lines
+        pre_user_blob = "\n".join(pre_user_lines)
+
+        # A "writable runtime dir" preparation is any pre-USER RUN that does
+        # mkdir -p <path> + chown ... <path> (or to the WORKDIR ancestor).
+        has_mkdir = bool(re.search(r"(?im)^RUN\s+.*mkdir\s+-p\s+\S+", pre_user_blob))
+        has_chown = bool(re.search(r"(?im)\bchown\s+-R\s+\S+\s+\S+", pre_user_blob))
+
+        if has_mkdir and has_chown:
+            return
+
+        result.warnings.append(
+            "Container runs as non-root user but runtime-writable application "
+            "directories are not pre-created. Add mkdir/chown before USER switch. "
+            "Suggested: 'RUN mkdir -p /app/workspace/repos && chown -R "
+            f"{user_target}:{user_target.replace('user', 'group')} /app' before "
+            "the USER directive."
+        )
+
+    def _copy_chown_fix(self, copy_line: str, user_target: str) -> str:
+        """Insert --chown=user:group immediately after the COPY token."""
+        group = user_target.replace("user", "group") or "appgroup"
+        chown_flag = f"--chown={user_target}:{group}"
+        # Split into ['COPY', <rest>] and re-insert the flag
+        m = re.match(r"(?i)^(COPY)\b\s+(.*)$", copy_line.strip())
+        if not m:
+            return f"{chown_flag} {copy_line}"
+        return f"COPY {chown_flag} {m.group(2)}"
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
