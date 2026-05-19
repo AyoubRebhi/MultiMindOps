@@ -204,10 +204,21 @@ class OrchestratorAgent(BaseAgent):
             agent_context = dict(agent_context)
             agent_context["application_profile"] = application_profile
 
+        # CRITICAL: propagate the cloned-repo on-disk path. DockerExecutor
+        # mirrors this directory into the temp build context so COPY paths
+        # like ``COPY requirements-backend.txt .`` resolve. Dropping this key
+        # at the orchestrator boundary was the root cause of repo_mirrored=0.
+        repo_path = analysis.get("repo_path")
+        if repo_path:
+            logger.info("[RepoTrace] repo_path propagated: %s (orchestrator → state)", repo_path)
+        else:
+            logger.warning("[RepoTrace] repo_path is None from codebase_analysis output — Docker build will need to re-clone")
+
         return {
             **state,
             "repository_security": security_result,
             "repository_analysis": repository_analysis,
+            "repo_path": repo_path,
             "repo_summary": analysis.get("repo_summary"),
             "file_tree": analysis.get("file_tree"),
             "important_files": analysis.get("important_files"),

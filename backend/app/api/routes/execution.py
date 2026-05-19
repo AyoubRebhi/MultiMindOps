@@ -110,6 +110,115 @@ def _extract_docker_artifacts(workflow_state: dict) -> dict[str, str]:
     return result
 
 
+def _autocorrect_build_strategy(
+    *,
+    strategy: dict,
+    dockerfile: str,
+    repo_source_path: str | None,
+    known_files: list[str],
+    task_id: str,
+) -> dict:
+    """
+    Reconcile the persisted build strategy with the actual Dockerfile.
+
+    Why this exists
+    ---------------
+    BuildStrategyDetector ran at generation time using known_files. If the
+    detector found ``backend/`` as a top-level dir it tagged the strategy
+    ``backend_context`` with ``context_path=backend/app``. But the Dockerfile
+    we are ABOUT TO EXECUTE may COPY repo-root files (e.g.
+    ``COPY requirements-backend.txt .``). When that file lives at the repo
+    root, the build context MUST be the repo root, not ``backend/app``.
+
+    Decision
+    --------
+    If the Dockerfile's COPY sources all resolve at the REPO ROOT (vs. inside
+    the strategy's context_path subdir), override the strategy to
+    ``repo_root_context``. Log the override so operators can trace it.
+    """
+    import os as _os
+    import re as _re
+
+    if not strategy:
+        strategy = {}
+    context_path = (strategy.get("context_path") or ".").strip()
+    if context_path in ("", "."):
+        # Already repo root — nothing to correct.
+        return strategy
+
+    if not dockerfile:
+        return strategy
+
+    # Parse COPY sources (skip COPY --from=stage).
+    copy_re = _re.compile(r"(?im)^\s*COPY\s+(.*)$")
+    copy_sources: list[str] = []
+    for m in copy_re.finditer(dockerfile):
+        tail = m.group(1).strip()
+        if "--from=" in tail:
+            continue
+        tokens = [t for t in tail.split() if t and not t.startswith("--")]
+        if len(tokens) < 2:
+            continue
+        for src in tokens[:-1]:
+            clean = src.strip().strip(',').strip('"').strip("'").lstrip("[").rstrip("]")
+            if clean and clean not in (".", "./"):
+                copy_sources.append(clean)
+
+    if not copy_sources:
+        return strategy
+
+    prefix = context_path.rstrip("/") + "/"
+    # Source is "repo-root-relative" when (a) it has no path separator and is
+    # not under the strategy's prefix, or (b) it is at the repo root according
+    # to known_files / on-disk repo, or (c) it begins with a subdir other than
+    # the strategy prefix.
+    root_relative_count = 0
+    prefix_relative_count = 0
+    for src in copy_sources:
+        if src.startswith(prefix):
+            prefix_relative_count += 1
+            continue
+        # Bare name (no slash) — almost certainly root-relative
+        if "/" not in src and "\\" not in src:
+            root_relative_count += 1
+            continue
+        # If known_files lists this exact path at repo root, it's root-relative.
+        if src in known_files:
+            root_relative_count += 1
+            continue
+        # On-disk repo check (definitive when available)
+        if repo_source_path:
+            candidate = _os.path.join(repo_source_path, src)
+            if _os.path.exists(candidate):
+                root_relative_count += 1
+                continue
+
+    if root_relative_count == 0:
+        return strategy
+
+    # Even one root-relative COPY means the persisted strategy is incorrect.
+    logger.warning(
+        "[BuildContext] strategy override for task=%s: persisted=%s context=%s "
+        "but %d/%d COPY source(s) resolve at repo root — forcing repo_root_context",
+        task_id, strategy.get("strategy"), context_path,
+        root_relative_count, len(copy_sources),
+    )
+    return {
+        "strategy": "repo_root_context",
+        "context_path": ".",
+        "dockerfile_path": "Dockerfile",
+        "recommended_copy_prefix": None,
+        "_autocorrected_from": {
+            "strategy": strategy.get("strategy"),
+            "context_path": strategy.get("context_path"),
+            "reason": (
+                f"{root_relative_count}/{len(copy_sources)} COPY source(s) "
+                "are repo-root-relative; persisted strategy targeted subdir."
+            ),
+        },
+    }
+
+
 def _enforce_prebuild_validation_gate(
     db: Session,
     task,
@@ -357,6 +466,9 @@ async def _run_build_background(
     build_strategy: dict | None = None,
     repo_source_path: str | None = None,
     execution_session_id: str | None = None,
+    repo_url: str | None = None,
+    repository_visibility: str = "public",
+    github_token: str | None = None,
 ) -> None:
     """Coroutine that runs the full build lifecycle and persists results."""
     session_id = (
@@ -407,6 +519,9 @@ async def _run_build_background(
         repo_source_path=repo_source_path,
         retry_iteration=build_number,
         execution_session_id=session_id,
+        repo_url=repo_url,
+        repository_visibility=repository_visibility,
+        github_token=github_token,
     )
 
     result = await executor.build_image()
@@ -558,12 +673,59 @@ async def start_docker_build(
         (infra_state.get("build_artifact_context") or {}).get("strategy")
         or {}
     )
-    # Repository on disk — CodebaseAnalysisAgent stores it at codebase_analysis.repo_path.
-    # The executor mirrors this into the temp build context so COPY paths resolve.
+    # Repository on disk — CodebaseAnalysisAgent stores it at analysis.repo_path,
+    # which the orchestrator now propagates into state.repo_path and the
+    # docker phase mirrors into state.infrastructure.repo_source_path.
     repo_source_path = (
         infra_state.get("repo_source_path")
+        or state.get("repo_path")
         or (state.get("codebase_analysis") or {}).get("repo_path")
         or (state.get("agent_context") or {}).get("repo_path")
+    )
+    logger.info("[RepoTrace] start_docker_build resolved repo_source_path=%s task=%s", repo_source_path, task_id)
+
+    # ── Re-clone fallback ─────────────────────────────────────────────────────
+    # If the persisted path is missing OR no longer exists on disk (OS may have
+    # garbage-collected the temp clone, or this task survived a server restart),
+    # re-clone from the original repo_url so the build phase is always
+    # self-sufficient. Failing here is preferable to a silent repo_mirrored=0.
+    import os as _os
+    if (not repo_source_path or not _os.path.isdir(repo_source_path)):
+        repo_url = state.get("repo_url") or state.get("repository_url")
+        if repo_url:
+            try:
+                from backend.app.services.repository.github_service import GitHubService
+                logger.warning(
+                    "[RepoTrace] repo_source_path missing or not on disk (%s) — "
+                    "re-cloning from %s for task=%s",
+                    repo_source_path, repo_url, task_id,
+                )
+                gh = GitHubService()
+                repo_source_path = gh.clone_repository(
+                    repo_url=repo_url,
+                    repository_visibility=state.get("repository_visibility", "public"),
+                    github_token=state.get("github_token"),
+                )
+                # Persist the fresh path so subsequent retries reuse it
+                state.setdefault("infrastructure", {})["repo_source_path"] = repo_source_path
+                state["repo_path"] = repo_source_path
+                TaskService.save_workflow_state(db, task, state)
+                logger.info("[RepoTrace] re-cloned repo to %s task=%s", repo_source_path, task_id)
+            except Exception as exc:
+                logger.error("[RepoTrace] Re-clone failed for task=%s: %s", task_id, exc)
+                repo_source_path = None
+
+    # ── Dockerfile-aware build-context auto-correction ────────────────────────
+    # If the persisted strategy says backend_context (sub-directory) but the
+    # actual Dockerfile uses repo-root-relative COPY paths AND the file exists
+    # at the repo root, the strategy is wrong. Force repo_root_context so the
+    # mirror covers the whole repo and docker build sees the right context.
+    _build_strategy = _autocorrect_build_strategy(
+        strategy=_build_strategy,
+        dockerfile=artifacts.get("dockerfile") or "",
+        repo_source_path=repo_source_path,
+        known_files=infra_state.get("known_files") or [],
+        task_id=task_id,
     )
 
     # Generate a fresh execution session id so the frontend can reset its
@@ -573,6 +735,12 @@ async def start_docker_build(
         f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
     )
 
+    # Pull repo_url + visibility/token from state so the executor's
+    # _ensure_repo_available step can re-clone as a last resort.
+    state_repo_url = state.get("repo_url") or state.get("repository_url")
+    state_visibility = state.get("repository_visibility") or "public"
+    state_token = state.get("github_token")
+
     asyncio.create_task(
         _run_build_background(
             task_id, artifacts, image_tag,
@@ -581,6 +749,9 @@ async def start_docker_build(
             build_strategy=_build_strategy,
             repo_source_path=repo_source_path,
             execution_session_id=execution_session_id,
+            repo_url=state_repo_url,
+            repository_visibility=state_visibility,
+            github_token=state_token,
         ),
         name=f"docker_build_{task_id[:8]}",
     )

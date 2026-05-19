@@ -225,6 +225,103 @@ class BuildStrategyDetector:
         )
         return repo_ctx
 
+    def reconcile_with_dockerfile(
+        self,
+        repo_ctx: RepositoryBuildContext,
+        dockerfile_content: str,
+        known_files: Optional[List[str]] = None,
+        repo_source_path: Optional[str] = None,
+    ) -> RepositoryBuildContext:
+        """
+        Second-pass reconciliation: if the actual Dockerfile uses
+        repo-root-relative COPY sources (e.g. ``COPY requirements-backend.txt .``),
+        force the build strategy to ``repo_root_context`` regardless of what
+        ``_select_strategy`` originally inferred from known_files alone.
+
+        This is the only safe authoritative decision once the Dockerfile is
+        finalized — the COPY sources tell us exactly what the build context
+        must contain.
+        """
+        if not dockerfile_content or not repo_ctx.docker:
+            return repo_ctx
+
+        current_strategy = repo_ctx.docker.strategy
+        current_ctx = (repo_ctx.docker.context_path or ".").strip("/").lstrip("./")
+        if current_strategy == STRATEGY_REPO_ROOT and current_ctx in ("", "."):
+            return repo_ctx  # already at repo root
+
+        sources = self._extract_copy_sources(dockerfile_content)
+        if not sources:
+            return repo_ctx
+
+        prefix = current_ctx + "/" if current_ctx else ""
+        root_relative = 0
+        for src in sources:
+            if prefix and src.startswith(prefix):
+                continue
+            # Bare filename (no slash) is unambiguously repo-root-relative.
+            if "/" not in src and "\\" not in src:
+                root_relative += 1
+                continue
+            # Path doesn't sit under the strategy's context — check if it
+            # exists at the repo root via known_files or on-disk repo.
+            normalized = src.lstrip("./")
+            if known_files and normalized in {f.lstrip("./") for f in known_files}:
+                root_relative += 1
+                continue
+            if repo_source_path:
+                import os as _os
+                if _os.path.exists(_os.path.join(repo_source_path, normalized)):
+                    root_relative += 1
+                    continue
+
+        if root_relative == 0:
+            return repo_ctx
+
+        logger.warning(
+            "[BuildStrategyDetector] reconcile_with_dockerfile: %d/%d COPY "
+            "source(s) are repo-root-relative — overriding strategy=%s "
+            "context=%s → repo_root_context",
+            root_relative, len(sources), current_strategy, current_ctx or ".",
+        )
+        new_strategy = BuildStrategy(
+            strategy=STRATEGY_REPO_ROOT,
+            context_path=".",
+            dockerfile_path="Dockerfile",
+            recommended_copy_prefix=repo_ctx.backend_root,
+        )
+        return RepositoryBuildContext(
+            repo_root=repo_ctx.repo_root,
+            backend_root=repo_ctx.backend_root,
+            frontend_root=repo_ctx.frontend_root,
+            dependency_files=repo_ctx.dependency_files,
+            docker=new_strategy,
+        )
+
+    @staticmethod
+    def _extract_copy_sources(dockerfile: str) -> List[str]:
+        """
+        Parse every COPY/ADD instruction and return source paths.
+
+        Skips ``--from=<stage>`` copies and bare ``.``/``./`` sources.
+        """
+        import re as _re
+        copy_re = _re.compile(r"(?im)^\s*(COPY|ADD)\s+(.*)$")
+        sources: List[str] = []
+        for m in copy_re.finditer(dockerfile or ""):
+            tail = m.group(2).strip()
+            if "--from=" in tail:
+                continue
+            tokens = [t for t in tail.split() if t and not t.startswith("--")]
+            if len(tokens) < 2:
+                continue
+            for src in tokens[:-1]:
+                clean = src.strip().strip(',').strip('"').strip("'").lstrip("[").rstrip("]")
+                if not clean or clean in (".", "./"):
+                    continue
+                sources.append(clean)
+        return sources
+
     def build_artifact_context(
         self,
         repo_ctx: RepositoryBuildContext,
@@ -348,6 +445,35 @@ class BuildStrategyDetector:
         compose_topology: Optional[Any],
         mapped_context: Dict[str, Any],
     ) -> BuildStrategy:
+        # ── 0. ROOT-LEVEL DEPENDENCY OVERRIDE (highest priority) ──────────────
+        # If a dependency manifest (requirements.txt, package.json, …) OR a
+        # Dockerfile sits at the repo ROOT, the build context MUST be the
+        # repo root, regardless of any explicit mapper hint. This guards
+        # against the common case where the mapper points at "backend/app"
+        # because it found a deeper service entrypoint, but the actual
+        # build artifacts live at the repository root.
+        if known_files:
+            root_files = {
+                f.lstrip("./") for f in known_files
+                if "/" not in f.lstrip("./") and "\\" not in f.lstrip("./")
+            }
+            root_dep_names = (_PYTHON_DEP_NAMES | _NODE_DEP_NAMES | _JAVA_DEP_NAMES)
+            has_root_dep = any(name.lower() in {f.lower() for f in root_files} for name in root_dep_names)
+            has_root_dockerfile = any(f.lower() == "dockerfile" for f in root_files)
+            if has_root_dep or has_root_dockerfile:
+                logger.info(
+                    "[BuildStrategyDetector] Repo-root dependency or Dockerfile "
+                    "detected (has_root_dep=%s has_root_dockerfile=%s) — forcing "
+                    "STRATEGY_REPO_ROOT regardless of mapper hint.",
+                    has_root_dep, has_root_dockerfile,
+                )
+                return BuildStrategy(
+                    strategy=STRATEGY_REPO_ROOT,
+                    context_path=".",
+                    dockerfile_path="Dockerfile",
+                    recommended_copy_prefix=None,
+                )
+
         # ── 1. Compose-driven: honour compose build context when explicit ──────
         if compose_topology and hasattr(compose_topology, "services"):
             for svc in compose_topology.services:

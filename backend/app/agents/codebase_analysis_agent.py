@@ -165,6 +165,13 @@ class CodebaseAnalysisAgent(BaseAgent):
             ) or latest_analysis
 
             analysis_output = dict(reused_record.get("analysis_output") or {})
+            # CRITICAL: the cached analysis_output contains the repo_path from
+            # the original clone, which has long since been garbage-collected.
+            # Override with the freshly-cloned path so downstream consumers
+            # (orchestrator → workflow.py → DockerExecutor) get a live on-disk
+            # path to mirror into the build context.
+            if current_repo_path:
+                analysis_output["repo_path"] = current_repo_path
             analysis_output["repository_analysis"] = {
                 "cache_status": "reused",
                 "decision": cache_decision_summary,

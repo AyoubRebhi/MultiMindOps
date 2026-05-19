@@ -373,6 +373,21 @@ async def run_docker(task_id: str, db: Session = Depends(get_db)):
         if known_files:
             infra_store["known_files"] = list(known_files)
 
+        # Persist the cloned-repo on-disk path so DockerExecutor can mirror
+        # the repository tree into the temp build context. Without this,
+        # COPY paths like "COPY requirements-backend.txt ." cannot resolve
+        # at build time (repo_mirrored=0 catastrophe).
+        repo_source_path = state.get("repo_path") or (state.get("agent_context") or {}).get("repo_path")
+        if repo_source_path:
+            infra_store["repo_source_path"] = repo_source_path
+            logger.info("[RepoTrace] repo_source_path persisted: %s (workflow.run_docker → infrastructure store) task=%s", repo_source_path, task_id)
+        else:
+            logger.warning(
+                "[RepoTrace] repo_source_path NOT persisted for task %s — "
+                "build phase will fall back to re-cloning from repo_url.",
+                task_id,
+            )
+
         TaskService.save_workflow_state(db, task, state)
         TaskService.update_task_status(db, task, "in_progress")
 

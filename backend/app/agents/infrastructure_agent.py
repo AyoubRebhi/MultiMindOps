@@ -394,6 +394,47 @@ Approved artifacts to generate (Docker artifacts only):
             if reason:
                 fallback_reasons["docker_compose"] = reason
 
+        # ── 7b. Dockerfile-aware build-strategy reconciliation ────────────────
+        # The detector ran at step 1c with only known_files. Now that the
+        # Dockerfile is final, re-check whether COPY sources are
+        # repo-root-relative. If they are, force STRATEGY_REPO_ROOT so the
+        # downstream executor mirrors the whole repo into the build context
+        # and the UI shows the correct strategy.
+        final_dockerfile = artifacts.get("dockerfile") or ""
+        if repo_build_ctx is not None and final_dockerfile:
+            try:
+                reconciled = self._strategy_detector.reconcile_with_dockerfile(
+                    repo_ctx=repo_build_ctx,
+                    dockerfile_content=final_dockerfile,
+                    known_files=known_files or None,
+                    repo_source_path=(infrastructure_context or {}).get("repo_path"),
+                )
+                if reconciled is not repo_build_ctx:
+                    repo_build_ctx = reconciled
+                    build_artifact_ctx = self._strategy_detector.build_artifact_context(
+                        repo_ctx=repo_build_ctx,
+                        mapped_context=mapped_context,
+                    )
+                    # Sync mapped_context so topology_summary + UI reflect reality.
+                    new_ctx_path = repo_build_ctx.docker.context_path  # "."
+                    mapped_context["build_context"] = new_ctx_path
+                    mapped_context["repository_build_context"] = repo_build_ctx.to_dict()
+                    mapped_context["build_artifact_context"] = build_artifact_ctx.to_dict()
+                    topo = mapped_context.get("topology_summary")
+                    if isinstance(topo, dict):
+                        topo["build_context"] = new_ctx_path
+                    logger.info(
+                        "[InfrastructureAgent] Dockerfile-aware reconciliation "
+                        "applied — strategy=%s context=%s",
+                        repo_build_ctx.docker.strategy,
+                        repo_build_ctx.docker.context_path,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[InfrastructureAgent] Dockerfile-aware reconciliation failed: %s",
+                    exc,
+                )
+
         # ── 8. Artifact-level validation ──────────────────────────────────────
         validation_results = self.validation.validate_artifacts(artifacts)
         validation_summary = self.validation.aggregate_validation(validation_results)

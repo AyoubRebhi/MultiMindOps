@@ -36,8 +36,8 @@ from .execution_state_service import record_execution_event
 
 logger = logging.getLogger(__name__)
 
-BUILD_TIMEOUT_SECONDS = 600  # 10 minutes
-PUSH_TIMEOUT_SECONDS = 300   # 5 minutes
+BUILD_TIMEOUT_SECONDS = 2400  # 40 minutes
+PUSH_TIMEOUT_SECONDS = 2400   # 40 minutes
 
 # Artifacts written to the temp workspace (key → filename)
 _ARTIFACT_FILENAMES: dict[str, str] = {
@@ -78,6 +78,9 @@ class DockerExecutor:
         repo_source_path: str | None = None,
         retry_iteration: int = 1,
         execution_session_id: str | None = None,
+        repo_url: str | None = None,
+        repository_visibility: str = "public",
+        github_token: str | None = None,
     ) -> None:
         self.task_id = task_id
         self.artifacts = artifacts
@@ -90,11 +93,32 @@ class DockerExecutor:
         self._workspace: str | None = None
         # Build strategy metadata (from RepositoryBuildContext)
         self._build_strategy: dict = build_strategy or {}
+        # Self-heal the persisted build strategy against the actual Dockerfile.
+        # When the persisted strategy says e.g. "backend/app" but the Dockerfile
+        # COPY sources are repo-root-relative (no slash), override to repo root.
+        # This protects builds whose strategy was persisted by an earlier code
+        # path that didn't include the autocorrect step.
+        self._build_strategy = self._self_heal_strategy(
+            self._build_strategy,
+            artifacts.get("dockerfile") or "",
+        )
         self._finish_stream = finish_stream
         # Path on disk where the analyzed repository lives. When provided, its
         # contents are mirrored into the temp build context so COPY paths
         # referencing repo files resolve correctly.
         self._repo_source_path: str | None = repo_source_path
+        # Last-resort clone source — when repo_source_path is missing or stale,
+        # the executor re-clones from this URL so a single missing piece of
+        # workflow state can never leave the build context empty.
+        self._repo_url: str | None = repo_url
+        self._repository_visibility: str = repository_visibility
+        self._github_token: str | None = github_token
+        logger.info(
+            "[RepoTrace] repo_source_path received by executor: %s repo_url=%s task=%s",
+            repo_source_path or "(not provided)",
+            repo_url or "(not provided)",
+            task_id,
+        )
         # Retry session metadata — surfaces in every emitted event so the
         # frontend can segment logs per retry attempt.
         self._retry_iteration: int = max(1, int(retry_iteration or 1))
@@ -106,6 +130,11 @@ class DockerExecutor:
         self._docker_command: str | None = None
         self._last_error_line: str | None = None
         self._failed_step: str | None = None
+        # COPY introspection state — populated by _extract_copy_sources +
+        # _resolve_final_build_context. Used by the build-context diagnostic
+        # block and the pre-execution COPY check.
+        self._copy_sources: list[str] = []
+        self._resolved_build_context_path: Path | None = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -298,6 +327,80 @@ class DockerExecutor:
         await self._emit(LogLevel.INFO, f"  image tag:     {self.image_tag}")
         await self._emit(LogLevel.INFO, "─" * 60)
 
+    async def _ensure_repo_available(self) -> None:
+        """
+        Guarantee ``self._repo_source_path`` points to an on-disk directory.
+
+        Resolution order:
+          1. If the provided path exists and is a directory → keep it.
+          2. Otherwise, if a repo_url is available, clone it now.
+          3. Otherwise, leave it None — the downstream COPY assertion in
+             _write_artifacts will fail the build with a clear error.
+
+        This method is idempotent and runs at most one clone per build.
+        """
+        if self._repo_source_path:
+            path = Path(self._repo_source_path)
+            if path.is_dir():
+                logger.info(
+                    "[RepoTrace] _ensure_repo_available: existing path OK %s task=%s",
+                    self._repo_source_path, self.task_id,
+                )
+                return
+            logger.warning(
+                "[RepoTrace] _ensure_repo_available: persisted path missing on disk: %s — will re-clone",
+                self._repo_source_path,
+            )
+            await self._emit(
+                LogLevel.WARNING,
+                f"[RepoTrace] persisted repo_source_path missing on disk: "
+                f"{self._repo_source_path} — re-cloning",
+            )
+
+        if not self._repo_url:
+            logger.warning(
+                "[RepoTrace] _ensure_repo_available: no repo_url available — "
+                "cannot re-clone. task=%s", self.task_id,
+            )
+            await self._emit(
+                LogLevel.WARNING,
+                "[RepoTrace] no repo_url available to re-clone the repository. "
+                "Build context will be empty unless artifacts are self-contained.",
+            )
+            return
+
+        try:
+            from backend.app.services.repository.github_service import GitHubService
+            await self._emit(
+                LogLevel.INFO,
+                f"[RepoTrace] cloning repository from {self._repo_url} …",
+            )
+            gh = GitHubService()
+            cloned = await asyncio.to_thread(
+                gh.clone_repository,
+                self._repo_url,
+                self._repository_visibility,
+                self._github_token,
+            )
+            self._repo_source_path = cloned
+            logger.info(
+                "[RepoTrace] _ensure_repo_available: cloned %s → %s task=%s",
+                self._repo_url, cloned, self.task_id,
+            )
+            await self._emit(
+                LogLevel.SUCCESS,
+                f"[RepoTrace] repository cloned to {cloned}",
+            )
+        except Exception as exc:
+            logger.error(
+                "[RepoTrace] _ensure_repo_available: clone failed task=%s url=%s err=%s",
+                self.task_id, self._repo_url, exc,
+            )
+            await self._emit(
+                LogLevel.ERROR,
+                f"[RepoTrace] clone failed: {exc}. Downstream COPY check will block the build.",
+            )
+
     async def _write_artifacts(self) -> None:
         """
         Stage the build context.
@@ -318,35 +421,105 @@ class DockerExecutor:
         """
         ws = Path(self._workspace)  # type: ignore[arg-type]
 
+        # ── 0. Ensure a repo path exists on disk before the mirror step ───────
+        # When repo_source_path is missing or stale (temp clone garbage-collected,
+        # server restart, task created before previous-round fixes shipped, etc.)
+        # we re-clone from repo_url. This is the LAST line of defense before
+        # build context creation — it guarantees we never reach the COPY check
+        # with an empty workspace and "(not provided)" in the trace.
+        await self._ensure_repo_available()
+
         # ── 1. Mirror repo into the workspace (when available) ────────────────
         mirrored_count = 0
         if self._repo_source_path:
             src_root = Path(self._repo_source_path)
+            await self._emit(
+                LogLevel.INFO,
+                f"[Mirror] copying repository tree from {src_root} → {ws}",
+            )
             if src_root.is_dir():
                 try:
                     mirrored_count = await asyncio.to_thread(
                         self._mirror_repo_tree, src_root, ws,
                     )
+                    logger.info(
+                        "[Mirror] task=%s session=%s repo_root=%s temp=%s files=%d",
+                        self.task_id, self._execution_session_id,
+                        src_root, ws, mirrored_count,
+                    )
                     await self._emit(
                         LogLevel.INFO,
-                        f"[BuildContext] mirrored {mirrored_count} repo file(s) "
+                        f"[Mirror] completed: {mirrored_count} file(s) copied "
                         f"from {src_root} into {ws}",
                     )
                 except Exception as exc:
                     logger.warning(
-                        "[DockerExecutor] Repo mirror failed (continuing with "
-                        "artifacts-only context): %s", exc,
+                        "[DockerExecutor] Repo mirror failed: %s", exc,
                     )
                     await self._emit(
-                        LogLevel.WARNING,
-                        f"[BuildContext] repo mirror failed — "
-                        "COPY paths referencing repo files may fail: " + str(exc),
+                        LogLevel.ERROR,
+                        f"[Mirror] FAILED — COPY paths referencing repo files "
+                        f"will not resolve: {exc}",
                     )
             else:
                 logger.warning(
-                    "[DockerExecutor] repo_source_path does not exist: %s",
+                    "[DockerExecutor] repo_source_path does not exist on disk: %s",
                     self._repo_source_path,
                 )
+                await self._emit(
+                    LogLevel.ERROR,
+                    f"[Mirror] FAILED — repo_source_path does not exist: "
+                    f"{self._repo_source_path}",
+                )
+        else:
+            # No repo path provided — this is almost always a misconfiguration.
+            # Log loudly so operators see it immediately. The hard COPY check
+            # below will then block the build with a precise error message.
+            logger.warning(
+                "[DockerExecutor] No repo_source_path supplied — build context "
+                "will contain ONLY the generated artifacts. Any COPY of a repo "
+                "file will fail. task=%s",
+                self.task_id,
+            )
+            await self._emit(
+                LogLevel.WARNING,
+                "[Mirror] SKIPPED — repo_source_path not provided. Only "
+                "generated artifacts will be in the build context.",
+            )
+
+        # ── 1b. Hard assertion: mirror must succeed when repo files are needed ─
+        dockerfile_content = self.artifacts.get("dockerfile") or ""
+        self._copy_sources = self._extract_copy_sources(dockerfile_content)
+        needs_repo_files = bool(self._copy_sources)
+
+        if needs_repo_files and self._repo_source_path:
+            # repo path was supplied — assert the mirror succeeded
+            assert Path(self._repo_source_path).is_dir(), (
+                f"[BuildContext] repo_source_path is not a directory: "
+                f"{self._repo_source_path}"
+            )
+            if mirrored_count == 0:
+                snapshot = self._snapshot_workspace(ws)
+                await self._emit(LogLevel.ERROR, "─" * 60)
+                await self._emit(LogLevel.ERROR, "[BuildContext] MIRROR FAILED — 0 files copied")
+                for line in snapshot:
+                    await self._emit(LogLevel.ERROR, f"  {line}")
+                await self._emit(LogLevel.ERROR, "─" * 60)
+                raise RuntimeError(
+                    "Repository mirror failed — build context incomplete. "
+                    f"repo_source_path={self._repo_source_path} "
+                    f"workspace={ws} mirrored=0 files. "
+                    "Dockerfile references repo files that cannot be resolved."
+                )
+
+        if needs_repo_files and not self._repo_source_path:
+            # Dockerfile references repo files but no path was supplied at all.
+            # This is the catastrophic case the user reported: repo_root=(not provided).
+            raise RuntimeError(
+                "Build context is incomplete: Dockerfile contains COPY of "
+                f"{len(self._copy_sources)} repo path(s) but no repo_source_path "
+                "was supplied to the executor. Cannot proceed."
+            )
 
         # ── 2. Overlay artifacts (always win) ─────────────────────────────────
         dockerfile_written = False
@@ -367,20 +540,63 @@ class DockerExecutor:
         if not dockerfile_written:
             raise FileNotFoundError("No Dockerfile artifact found. Cannot build image.")
 
+        # ── 2b. Resolve the final build context against the (now mirrored) ws ─
+        self._resolve_final_build_context(ws, dockerfile_content)
+
+        # ── 2c. Emit the comprehensive [BuildContext] diagnostic block ────────
+        snapshot = self._snapshot_workspace(ws)
+        existing_root = [n for n in snapshot if not n.startswith("  ")][:20]
+        await self._emit(LogLevel.INFO, "═" * 60)
+        await self._emit(LogLevel.INFO, "[BuildContext]")
+        await self._emit(LogLevel.INFO, f"  repo_source_path     = {self._repo_source_path or '(not provided)'}")
+        await self._emit(LogLevel.INFO, f"  workspace            = {ws}")
+        await self._emit(LogLevel.INFO, f"  mirrored_files       = {mirrored_count}")
+        await self._emit(LogLevel.INFO, f"  dockerfile_path      = {ws / 'Dockerfile'}")
+        await self._emit(LogLevel.INFO, f"  build_context        = {self._resolved_build_context_path}")
+        await self._emit(LogLevel.INFO, f"  existing_root_files  = {existing_root}")
+        await self._emit(LogLevel.INFO, "═" * 60)
         await self._emit(LogLevel.INFO, f"Workspace prepared: {self._workspace}")
 
-        # ── 3. Hard validation: every COPY source must exist in workspace ─────
-        missing = self._collect_missing_copy_sources(ws, self.artifacts.get("dockerfile") or "")
+        # ── 3. Per-source COPY check (visible in live logs) ───────────────────
+        for src in self._copy_sources:
+            resolved = (ws / src).resolve()
+            exists = resolved.exists()
+            await self._emit(
+                LogLevel.INFO if exists else LogLevel.ERROR,
+                f"[COPY CHECK] source={src} resolved_path={resolved} exists={str(exists).lower()}",
+            )
+
+        # ── 4. Hard validation: every COPY source must exist in workspace ────
+        missing = self._collect_missing_copy_sources(ws, dockerfile_content)
         if missing:
             details = "\n".join(
                 f"    COPY {m['src']} → not found at {m['expected_abs']}"
                 for m in missing
             )
+            workspace_snapshot = self._snapshot_workspace(ws)
+            diagnostic_lines = [
+                "─" * 60,
+                "[BuildContext] PRE-EXECUTION COPY CHECK FAILED",
+                f"  repo_source_path       = {self._repo_source_path or '(not provided)'}",
+                f"  resolved_build_context = {self._resolved_build_context_path or ws}",
+                f"  dockerfile_path        = {Path(ws) / 'Dockerfile'}",
+                f"  temp_workspace         = {ws}",
+                f"  mirrored_files_count   = {mirrored_count}",
+                f"  missing_sources        = {[m['src'] for m in missing]}",
+                "  workspace_contents:",
+            ]
+            for entry in workspace_snapshot:
+                diagnostic_lines.append(f"    - {entry}")
+            diagnostic_lines.append("─" * 60)
+            for line in diagnostic_lines:
+                await self._emit(LogLevel.ERROR, line)
             raise FileNotFoundError(
                 "Pre-execution COPY check failed: "
                 f"{len(missing)} source(s) are missing from the build context.\n"
                 f"{details}\n"
-                f"build_context={ws} repo_mirrored={mirrored_count} files"
+                f"build_context={ws} repo_mirrored={mirrored_count} files\n"
+                f"repo_source_path={self._repo_source_path or '(not provided)'}\n"
+                f"workspace_top_level={workspace_snapshot}"
             )
 
     @staticmethod
@@ -394,10 +610,12 @@ class DockerExecutor:
                      ".pytest_cache", ".mypy_cache", "dist", "build",
                      "target", ".gradle", ".idea", ".vscode"}
         copied = 0
+        skipped = 0
         for path in src_root.rglob("*"):
             rel = path.relative_to(src_root)
             parts = set(rel.parts)
             if parts & skip_dirs:
+                skipped += 1
                 continue
             dest = dest_root / rel
             if path.is_dir():
@@ -408,8 +626,162 @@ class DockerExecutor:
                     shutil.copy2(path, dest)
                     copied += 1
                 except (OSError, shutil.SameFileError):
+                    skipped += 1
                     continue
+        logger.info(
+            "[Mirror] tree copy %s → %s : copied=%d skipped=%d",
+            src_root, dest_root, copied, skipped,
+        )
         return copied
+
+    @staticmethod
+    def _self_heal_strategy(strategy: dict, dockerfile: str) -> dict:
+        """
+        Reconcile a persisted build strategy with the actual Dockerfile content.
+
+        If the strategy says ``context_path=backend/app`` but the Dockerfile has
+        ``COPY requirements-backend.txt .`` (bare filename → repo-root-relative),
+        override to ``repo_root_context``. The override is recorded in the
+        ``_self_healed_from`` field so operators can trace the change.
+
+        This mirrors the route-level _autocorrect_build_strategy helper but
+        runs INSIDE the executor so it cannot be bypassed by a stale state.
+        """
+        if not strategy or not dockerfile:
+            return strategy or {}
+        context_path = (strategy.get("context_path") or ".").strip()
+        if context_path in ("", "."):
+            return strategy  # already repo root
+
+        sources = DockerExecutor._extract_copy_sources(dockerfile)
+        if not sources:
+            return strategy
+
+        prefix = context_path.rstrip("/") + "/"
+        root_relative_count = 0
+        for src in sources:
+            if src.startswith(prefix):
+                continue
+            if "/" not in src and "\\" not in src:
+                root_relative_count += 1
+
+        if root_relative_count == 0:
+            return strategy
+
+        logger.warning(
+            "[BuildContext] executor self-heal: persisted strategy=%s context=%s "
+            "but %d/%d COPY source(s) are repo-root-relative — switching to "
+            "repo_root_context.",
+            strategy.get("strategy"), context_path,
+            root_relative_count, len(sources),
+        )
+        return {
+            "strategy": "repo_root_context",
+            "context_path": ".",
+            "dockerfile_path": "Dockerfile",
+            "recommended_copy_prefix": None,
+            "_self_healed_from": {
+                "strategy": strategy.get("strategy"),
+                "context_path": strategy.get("context_path"),
+                "reason": (
+                    f"{root_relative_count}/{len(sources)} COPY source(s) "
+                    "are repo-root-relative; persisted strategy targeted subdir."
+                ),
+            },
+        }
+
+    @staticmethod
+    def _snapshot_workspace(workspace: Path, max_entries: int = 30) -> list[str]:
+        """
+        Return a flat listing of the top-level files/dirs in the workspace
+        for inclusion in failure diagnostics. Trailing slash = directory.
+        """
+        try:
+            entries = []
+            for p in sorted(workspace.iterdir()):
+                entries.append(p.name + ("/" if p.is_dir() else ""))
+                if len(entries) >= max_entries:
+                    entries.append(f"… ({len(list(workspace.iterdir())) - max_entries} more)")
+                    break
+            return entries
+        except Exception as exc:
+            return [f"(snapshot failed: {exc})"]
+
+    @staticmethod
+    def _extract_copy_sources(dockerfile: str) -> list[str]:
+        """
+        Parse every COPY/ADD instruction in the Dockerfile and return the
+        list of source paths. Skips:
+          • ``--from=stage`` copies (sources come from prior build stages)
+          • bare ``.`` and ``./`` sources (whole-context copies)
+        Returns repo-relative paths verbatim — caller decides how to resolve.
+        """
+        import re as _re
+        copy_re = _re.compile(r"(?im)^\s*(COPY|ADD)\s+(.*)$")
+        sources: list[str] = []
+        for m in copy_re.finditer(dockerfile or ""):
+            tail = m.group(2).strip()
+            if "--from=" in tail:
+                continue
+            tokens = [t for t in tail.split() if t and not t.startswith("--")]
+            if len(tokens) < 2:
+                continue
+            for src in tokens[:-1]:
+                clean = src.strip().strip(',').strip('"').strip("'").lstrip("[").rstrip("]")
+                if not clean or clean in (".", "./"):
+                    continue
+                sources.append(clean)
+        return sources
+
+    def _resolve_final_build_context(
+        self,
+        repo_root: Path,
+        dockerfile: str,
+    ) -> Path:
+        """
+        Decide which directory will be used as ``docker build``'s context.
+
+        Rules (first match wins):
+          1. If any COPY source resolves at the repo root (bare filename OR
+             explicit root-level path that exists on disk), the build context
+             must be the repo root.
+          2. Otherwise stick with whatever context the build strategy named
+             (already mirrored into self._workspace).
+
+        Sets and returns ``self._resolved_build_context_path``.
+        """
+        repo_root = Path(repo_root).resolve()
+        sources = self._extract_copy_sources(dockerfile)
+        for src in sources:
+            # Bare filename (no slash) → always repo-root-relative.
+            if "/" not in src and "\\" not in src:
+                self._resolved_build_context_path = repo_root
+                logger.info(
+                    "[BuildContext] resolved context=repo_root (bare-name COPY %r → %s)",
+                    src, repo_root,
+                )
+                return repo_root
+            # Otherwise check on disk
+            candidate = (repo_root / src).resolve()
+            try:
+                candidate.relative_to(repo_root)
+            except ValueError:
+                continue
+            if candidate.exists():
+                self._resolved_build_context_path = repo_root
+                logger.info(
+                    "[BuildContext] resolved context=repo_root (COPY %r → %s exists)",
+                    src, candidate,
+                )
+                return repo_root
+
+        # No root-relative COPY → keep the configured strategy context.
+        ctx = Path(self._build_strategy.get("context_path") or repo_root)
+        if not ctx.is_absolute():
+            ctx = (repo_root / ctx).resolve()
+        self._resolved_build_context_path = ctx
+        logger.info("[BuildContext] resolved context=%s (no root-relative COPY)", ctx)
+        return ctx
 
     def _collect_missing_copy_sources(
         self,
@@ -468,17 +840,24 @@ class DockerExecutor:
         return missing
 
     async def _run_docker_build(self) -> int:
-        """Run `docker build -t <tag> <workspace>` and stream every output line."""
+        """Run `docker build -f <dockerfile> -t <tag> <context>` and stream output."""
+        dockerfile_path = str(Path(self._workspace) / "Dockerfile")  # type: ignore[arg-type]
         cmd = [
             "docker", "build",
             "--progress=plain",
+            "-f", dockerfile_path,
             "-t", self.image_tag,
             str(self._workspace),
         ]
         self._docker_command = " ".join(cmd)
-        logger.info("[DockerExecutor] Starting build for task %s", self.task_id)
-        logger.info("[DockerExecutor] Command: %s", self._docker_command)
-        await self._emit(LogLevel.INFO, f"Running: {self._docker_command}")
+        logger.info(
+            "[DockerExecutor] Starting build for task %s session=%s",
+            self.task_id, self._execution_session_id,
+        )
+        logger.info("[DockerExecutor] FULL COMMAND: %s", self._docker_command)
+        await self._emit(LogLevel.INFO, "─" * 60)
+        await self._emit(LogLevel.INFO, f"[DockerExecutor] $ {self._docker_command}")
+        await self._emit(LogLevel.INFO, "─" * 60)
         return await self._run_cmd(cmd, timeout=BUILD_TIMEOUT_SECONDS, phase_label="build")
 
     async def _run_cmd(
