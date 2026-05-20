@@ -1,0 +1,371 @@
+Architecture Audit — AI Cloud Infrastructure Platform (Pre-Terraform Phase)
+Auditor stance: Principal Cloud Architect / DevSecOps. Findings are grounded in the code I read; every issue cites file:line.
+
+1. Executive Summary
+You are architecturally close but operationally fragile. The agent decomposition (Planner → ArchitectureDecision → Cost → Multi-Plan → Docker/Terraform/K8s specialists) is correct and matches modern multi-agent practice. However, the data contracts between agents have drifted — three independent agents emit blueprints/plans with incompatible key names, and the TerraformAgent silently falls back to defaults instead of failing loudly. This is the most likely cause of the Terraform issue you flagged as "originating from the frontend": it does not originate in the frontend — it originates at the state-promotion seam in resume_with_selected_plan, which the frontend triggers.
+
+You also have a single-source-of-truth problem: artifacts live in state["infra"]["artifacts"], state["infrastructure"]["artifacts"], task.result.artifacts, task.result.infrastructure.artifacts, phaseArtifacts, and editedArtifacts — six locations with three merge orders. This is sustainable for Docker (one set of files), but will collapse once Terraform/K8s edits, drifts, and runtime-injected values (account IDs, region overrides, S3 backend keys) enter the mix.
+
+The Terraform generation strategy as written ("LLM free-form HCL with a JSON wrapper") is not production-grade. Your stated plan to move to template-based deterministic generation with LLM only filling placeholders is the correct decision, and this audit assumes you proceed with it.
+
+Top-3 risks before Terraform launch:
+
+Blueprint key drift between PlannerAgent and TerraformAgent — Terraform always uses defaults (P0).
+plan_id lookup mismatch in resume_with_selected_plan and downstream consumers — Multi-AZ is always False (P0).
+No state persistence/locking strategy for AWS — once terraform apply runs in a sandbox, concurrent task workflows will corrupt each other's state (P0).
+2. Critical Risks (P0/P1)
+R1 — [P0] Blueprint shape drift between PlannerAgent and TerraformAgent
+Where: terraform_agent.py:300-335 vs planner_agent.py:409-427.
+
+Root cause:
+TerraformAgent._extract_compute_config() reads:
+
+blueprint.get("instance_type")
+blueprint.get("min_nodes"), blueprint.get("max_nodes")
+blueprint.get("compute_type")
+blueprint.get("architecture_type")
+blueprint.get("aws_region")
+PlannerAgent._monolith_blueprint() produces:
+
+blueprint["compute"]["type"] (nested)
+blueprint["compute"]["instance_type"] (nested)
+blueprint["networking"]["multi_az"]
+blueprint["architecture_style"] (different key!)
+No aws_region, no min_nodes, no max_nodes anywhere.
+Impact: Every Terraform generation gets instance_type="t3.medium", min_nodes=2, max_nodes=5, region="us-east-1", multi_az=False regardless of the strategy the user selected. low_cost / balanced / high_performance produce identical Terraform output — the entire cost-profile differentiation is a UI illusion.
+
+Severity: CRITICAL — invalidates the whole architecture-decision phase as far as IaC is concerned.
+
+Fix:
+
+Introduce a typed Pydantic model InfrastructureBlueprint in backend/app/agents/state.py or a dedicated schemas/blueprint.py. Make it the only shape that crosses agent boundaries.
+Validate on entry in TerraformAgent.run() — raise BlueprintContractError instead of falling back. Silent defaults are how this drifted unnoticed.
+Add a contract test: tests/agents/test_blueprint_contract.py that constructs every strategy variant via ArchitectureDecisionAgent and asserts TerraformAgent receives non-default values.
+R2 — [P0] plan_id lookup mismatch
+Where: orchestrator_agent.py:1374-1376 vs terraform_agent.py:334.
+
+resume_with_selected_plan looks up plans by p.get("id") (matches ArchitectureDecisionAgent's enriched["id"]). It then promotes selected.get("plan") into state["plan"]. The promoted plan does not contain plan_id — that key is on the strategy wrapper.
+
+TerraformAgent._extract_compute_config() then evaluates "high_performance" in str(plan.get("plan_id") or "") to set multi_az. This is always falsy. Result: multi_az=False for every Terraform run, including the high_performance strategy.
+
+Fix: Inside resume_with_selected_plan, propagate the strategy ID into the plan:
+
+
+plan = dict(selected.get("plan") or {})
+plan["plan_id"] = selected_plan_id          # ← add
+plan["strategy_tier"] = selected_plan_id    # explicit, typed
+state["plan"] = plan
+state["selected_plan_id"] = selected_plan_id
+Then in TerraformAgent, read plan["strategy_tier"], not a substring search.
+
+R3 — [P0] No Terraform state backend strategy
+Where: terraform_agent.py:97-107 — backend.tf is generated but the agent has no idea what bucket/key/region to point it at; the LLM hallucinates them.
+
+Impact: When you start running terraform apply against AWS sandboxes:
+
+Two concurrent tasks pointed at the same S3 backend = state corruption.
+LLM-invented bucket names will not exist → init fails.
+No DynamoDB lock table → concurrent applies race.
+Fix (must land before any apply):
+
+Pre-provision a management account with an S3 backend bucket per environment and a DynamoDB lock table.
+Inject backend.tf deterministically (not via LLM) using task_id as the state key: key = "tasks/{task_id}/terraform.tfstate".
+Make backend.tf a fixed template that the LLM cannot touch.
+R4 — [P1] Six-location artifact storage
+Where: workflowApi.ts:432-484, workflowStore.ts:181-203, orchestrator_agent.py:452-462.
+
+Artifacts live in: task.infra.artifacts, task.result.infrastructure.artifacts, task.result.artifacts, phaseArtifacts, editedArtifacts, state["infrastructure"]["artifacts"]. Three frontend helpers merge them in three different orders. setTask() in workflowStore.ts:188-198 merges phaseArtifacts first then dbArtifacts (DB wins). getTerraformArtifacts() merges legacy → result.infrastructure → infra (infra wins).
+
+Impact: Once a user edits outputs.tf, refreshes, retries a build, and the backend regenerates outputs.tf because the corrector ran — which version wins is non-deterministic across hydration paths.
+
+Fix:
+
+Backend: single canonical store state["artifacts"] keyed by file path with a version and last_modified_by field (you already do this for Docker artifacts via ArtifactService — extend to all artifact types).
+Frontend: kill phaseArtifacts. Always hydrate from getArtifacts(taskId). The store should hold one source: artifacts: Record<filename, {content, version, source}>.
+R5 — [P1] Terraform agent returns "success" on partial JSON
+Where: terraform_agent.py:184-189 — response.setdefault("artifacts", {}) and str(artifacts.get(...) or "").
+
+If the LLM returns malformed JSON or omits keys, the agent does not raise. The ReAct loop adds three retries but the final response still proceeds even when artifacts are empty strings. Compare to terraform_agent.py:243-249 where the evaluator returns issues — but those issues are only inputs to ReAct; if ReAct exhausts its 3 iterations, the orchestrator gets garbage and routes on to Kubernetes regardless. orchestrator_agent.py:443-450 only catches Exception, not "evaluator still has issues."
+
+Fix: After ReAct loop exit, check evaluate_fn(response) one final time and raise TerraformGenerationError(unresolved_issues=[...]). The phase node should mark current_phase = "terraform_failed". Frontend already has PHASE_TO_STEP patterns for failure routing (corrector flow) — reuse the pattern.
+
+R6 — [P1] DSL contamination guard is YAML-string-matching
+Where: terraform_agent.py:268-275. Detects "DSL bleeding" with substring "apiVersion:". An HCL file legitimately containing the string "apiVersion:" inside a user_data script, an SSM parameter value, or a comment will be falsely rejected. Conversely, an LLM that emits kind: Job (not listed) passes.
+
+Fix: Use real HCL parsing (python-hcl2) and YAML parsing (yaml.safe_load) post-generation. Reject if any file parses successfully as YAML and contains apiVersion/kind. You already have an MCP HCL validator on terraform_agent.py:371-380 — wire its result into the evaluator return so ReAct retries on parse failure, not just substring failure.
+
+3. Architectural Weaknesses
+#	Weakness	Evidence
+W1	No formal contract objects between agents — everything is Dict[str, Any]	state.py:1-92
+W2	OrchestratorState is total=False with 30+ optional keys → impossible to reason about preconditions	state.py:4
+W3	Three separate "rerun a single phase" paths (run_*_phase_only) duplicate state-setup logic and are tested only via the happy path	orchestrator_agent.py:1758-1789
+W4	infrastructure_context is built by InfrastructureAgent (Docker) and consumed by TerraformAgent — i.e. Terraform depends on Docker phase even though it logically shouldn't	orchestrator_agent.py:434-442
+W5	OrchestratorAgent() is reconstructed on every API call — LLM clients, RAG services, hybrid RAG, MCP client all re-initialize each request (latency + connection churn)	workflow.py:248, repeated in every endpoint
+W6	LangGraph compiled graph is built but the per-phase endpoints bypass it entirely and call private node methods directly. Graph is dead code for the step-by-step flow.	orchestrator_agent.py:1762-1789 calls _infrastructure_node / _terraform_phase_node
+4. Terraform Readiness Assessment
+Verdict: Not production-ready. Pre-launch work required.
+
+Capability	Status	Notes
+HCL generation	⚠ Partial	Free-form LLM, no template system yet. Move to your planned template-based approach before sandbox runs.
+outputs.tf contract	✅	Four required outputs enforced and validated.
+Backend (S3) config	❌	LLM-invented, no real bucket, no locking.
+State isolation between tasks	❌	No keying strategy.
+terraform validate integration	❌	Only LLM ReAct + MCP HCL validation; no real terraform validate runs anywhere I can see.
+terraform fmt	❌	Not invoked.
+tfsec / checkov	❌	Not present.
+terraform plan artifact capture	❌	No phase exists.
+terraform apply execution	❌	No execution_agent integration visible for TF.
+destroy cleanup	❌	No phase.
+Cost ↔ Terraform feedback	❌	Cost estimation uses plan, not Terraform plan output. Real cost can diverge silently.
+Multi-AZ propagation	❌	See R2 — always false.
+Region propagation	❌	Always us-east-1 due to R1.
+5. Frontend/Backend Synchronization Risks
+This is the section you explicitly asked about. Here is what I found.
+
+S1 — Phase-name asymmetry
+WorkflowPage.tsx:40-62 defines PHASE_TO_STEP and STEP_TO_EXPECTED_PHASE. The frontend treats 'planning_complete' and 'architecture_decision_complete' as equivalent for the step mapping, but STEP_TO_EXPECTED_PHASE['ARCHITECTURE_DECISION'] = 'planning_complete' — i.e. one direction lossy. If the backend ever leaves the state at architecture_decision_complete after a refresh, "Confirm & Generate" passes the frontend guard (WorkflowPage.tsx:349-352) but a subsequent backend call may still 409 because run-docker only accepts planning_complete (workflow.py:339).
+
+Fix: Backend should normalize on select-plan such that architecture_decision_complete is mutated to planning_complete (it already does — orchestrator_agent.py:1407). But the frontend should not allow "Confirm & Generate" if selectedPlanId is unset — that guard is missing. Currently a user can click Confirm without selecting a plan if currentPhase happens to be planning_complete from a stale legacy task.
+
+S2 — selectedPlanId is never serialized into a backend gate
+workflowSelectPlan(taskId, planId) writes state["selected_plan_id"]. run-docker, run-terraform, etc. never re-validate that the plan ID stored matches the strategy whose blueprint is now in state["plan"]. If the user calls /select-plan twice with different IDs, only the last one wins, but state["plan"] and state["cost_estimation"] were already replaced from the first call's plan — actually, they're overwritten correctly on the second call (orchestrator_agent.py:1386-1394). So this is safe today. But:
+
+approved_artifacts is read from state.get("approved_artifacts") in _terraform_phase_node (orchestrator_agent.py:416-424) but never populated by select-plan in the new flow. The legacy /workflow/plan route explicitly sets state["approved_artifacts"] (workflow.py:314), but the new /architecture-decision route does not. The Terraform phase therefore falls into the third branch (not required_artifacts and not approved_artifacts) and runs anyway, which is the intended fallback — but it is load-bearing and undocumented.
+
+Fix: Make approved_artifacts an explicit invariant — set it in resume_with_selected_plan to selected["required_artifacts"].
+
+S3 — Hydration race on refresh
+WorkflowPage.tsx:257-299 on refresh fires three concurrent requests then merges. If workflowGetState returns phase terraform_completed but pollTask returns a stale task.result from before Terraform ran (because save_workflow_state writes faster than update_task_status propagates), the user lands on TERRAFORM step with empty artifacts. The two writes are not transactional from the frontend's perspective.
+
+Fix: Make workflowGetState the single source of truth on hydration. Drop the pollTask call from the restore path. pollTask is for the legacy single-shot flow.
+
+S4 — phaseArtifacts accumulates across phases, never garbage-collected
+workflowStore.ts:210-211 does { ...s.phaseArtifacts, ...resp.artifacts }. If the backend ever drops a key (e.g. corrector removes a Dockerfile, regenerates with new name), the old key persists in the frontend forever. Until the user resets.
+
+Fix: When phase transitions (e.g. current_phase changes), reset phaseArtifacts to the response's artifacts, not merge them.
+
+S5 — getTerraformArtifacts swallows missing data silently
+workflowApi.ts:446-456 returns {} if no terraform_* keys are found anywhere. TerraformStep then renders the "No Terraform files found" empty state (TerraformStep.tsx:129-143) which looks identical to "Terraform phase hasn't run yet" and "Terraform phase failed and returned empty artifacts". Three failure modes, one UI.
+
+Fix: Differentiate currentPhase === 'terraform_completed' && artifacts.empty (= generation failure, show error) from currentPhase < terraform_completed (= not run yet) from currentPhase === 'terraform_failed' (= explicit failure).
+
+6. Agent Communication Risks
+A1 — terraform_outputs contract is symbolic but K8s consumes it as if it were resolved
+terraform_agent.py:454-466 emits ${terraform_output:cluster_endpoint} strings. KubernetesAgent consumes them as if they were real values. They will be real only after terraform apply. Currently nothing resolves them. K8s manifests with literal ${terraform_output:...} strings will fail to apply.
+
+Fix: Add a terraform_output_resolver step between terraform apply and K8s manifest emission. Until apply is wired in, document this as known-broken — K8s manifests are templates, not deployable artifacts.
+
+A2 — infrastructure_context is implicitly the contract between Docker and Terraform
+TerraformAgent's _extract_compute_config (terraform_agent.py:300-335) pulls ports and database/cache hints out of infrastructure_context.services and infrastructure_context.infrastructure_dependencies. This context is built during the Docker phase, not the planning phase. Terraform inherits an undeclared dependency on Docker phase having run first.
+
+This is enforced today only by sequencing (docker → terraform). If a user re-runs terraform without re-running docker, the context might be stale or absent.
+
+Fix: Build infrastructure_context during repository analysis (or planning), not during Docker. Make it a peer of application_profile. Docker should consume it, not produce it.
+
+A3 — No structured agent error type
+Every agent raises bare Exception. Orchestrator catches Exception and stuffs the message into a log dict. Frontend cannot distinguish "LLM returned non-JSON" from "missing outputs.tf" from "AWS region invalid."
+
+Fix: Introduce AgentError(code, recoverable, payload) and route by code in the frontend (the corrector flow already proves this pattern works).
+
+7. Validation Pipeline Recommendations
+Current Terraform validation pipeline: MCP HCL validator + 1 substring-based DSL guard + ReAct evaluator that checks 4 output blocks exist. That's it.
+
+Recommended pipeline (deterministic, must pass before user sees Terraform):
+
+
+1. hcl2 parse              → reject if any file unparseable
+2. terraform fmt -check    → reject if formatting drift
+3. terraform init -backend=false  (no real backend yet)
+4. terraform validate      → reject if validate fails
+5. tfsec --no-color --format json   → store findings, block on CRITICAL
+6. checkov -d . --output json       → store findings, advisory
+7. terraform plan -out=tfplan       → store plan summary in state["terraform_plan"]
+8. infracost breakdown --path tfplan → reconcile with cost_estimation; flag drift >20%
+   → user-visible step before apply
+9. (user approval gate)
+10. terraform apply -auto-approve
+11. smoke tests
+12. terraform destroy (sandbox tier only)
+Steps 1-7 run inside the generation phase, before the user sees the editor. The ReAct loop should retry with the validation output as feedback. Steps 8-12 run after user approval.
+
+Containerize each step (hashicorp/terraform:1.9, aquasec/tfsec, bridgecrew/checkov, infracost/infracost) so they have no AWS credentials unless explicitly given (steps 10-12). Steps 1-8 never need AWS credentials.
+
+8. Recommended Terraform Architecture
+Given your decision to move to template-based generation, here is the structure:
+
+
+backend/app/services/terraform_generation/
+├── templates/
+│   ├── monolith/
+│   │   ├── low_cost/         # ECS Fargate, single AZ, single NAT, t3.small
+│   │   ├── balanced/         # ECS Fargate, multi-AZ, t3.medium, RDS Multi-AZ
+│   │   └── high_performance/ # ECS + auto-scaling, ALB, Aurora
+│   ├── microservices/
+│   │   ├── low_cost/         # EKS minimal, spot instances
+│   │   ├── balanced/         # EKS managed node group, on-demand
+│   │   └── high_performance/ # EKS + Karpenter, mixed instances
+│   └── serverless/
+│       ├── low_cost/         # Lambda + DynamoDB on-demand
+│       └── balanced/         # Lambda + API Gateway + Aurora Serverless v2
+├── modules/                  # Reusable HCL modules, NEVER LLM-touched
+│   ├── vpc/
+│   ├── eks-cluster/
+│   ├── ecs-service/
+│   ├── rds-postgres/
+│   ├── elasticache-redis/
+│   ├── alb/
+│   ├── ecr/
+│   └── iam-irsa/
+├── renderer.py               # Jinja2-based; template + variables → .tf
+├── variable_resolver.py      # blueprint + cost profile + app profile → variables dict
+├── validators/               # Run hcl2, tfsec, checkov before exposing to user
+└── backend_injector.py       # ALWAYS overwrites backend.tf — never LLM
+LLM role: Resolve ambiguous values only (e.g. "what IAM policy does this Python FastAPI app need to access S3?"), validate placeholder fills against the schema, write terraform.tfvars from the application profile. Never the structural HCL.
+
+Strict invariants:
+
+backend.tf is always machine-written.
+providers.tf is template + version-pinned.
+variables.tf is generated from a single schema file (Pydantic → HCL).
+Module sources are pinned to git tags / commit hashes.
+9. Recommended Agent Responsibilities
+Agent	Owns	Does NOT touch
+PlannerAgent	Application profile → InfrastructureBlueprint (typed)	HCL, YAML, Dockerfile
+ArchitectureDecisionAgent	Build 3 variants of blueprint + cost	Plan structure
+CostEstimationAgent	Pricing math from blueprint	Anything else
+InfrastructureAgent (rename → DockerAgent)	Dockerfile, .dockerignore, compose	TF, K8s
+TerraformAgent (rewrite)	Pick template, resolve variables, render	Free-form HCL emission
+TerraformValidatorAgent (NEW)	hcl2 parse, fmt, validate, tfsec, checkov	Generation
+TerraformPlannerAgent (NEW)	terraform plan execution, output capture	apply/destroy
+TerraformExecutorAgent (NEW, gated)	terraform apply / destroy in sandbox	Generation, validation
+KubernetesAgent	Manifests using resolved terraform outputs	TF
+DockerCorrectorAgent	Fix Docker failures only	TF/K8s
+TerraformCorrectorAgent (NEW)	Fix Terraform failures from validate/plan output	Docker
+CICDAgent	GHA workflows referencing artifacts	Generation
+10. Recommended State Management
+Backend (Terraform state)
+Management account: holds the central S3 bucket + DynamoDB lock table.
+State key: tasks/{task_id}/terraform.tfstate.
+One sandbox AWS account per concurrent execution, leased from a pool (AWS Organizations + AFT or a custom lease table). Never use a single shared sandbox.
+TTL on every workload: every resource tagged task_id, expires_at. A janitor Lambda (separate from your platform) destroys leaked resources nightly.
+Application state (OrchestratorState)
+Replace TypedDict(total=False) with typed Pydantic models per phase, gated by current_phase. E.g. PostPlanningState, PostDockerState, PostTerraformState. Each transition is a function PostPlanningState → PostDockerState with explicit preconditions.
+Persist state as JSONB with a schema_version. Migrate on read.
+Idempotency: each run_*_phase_only should be safe to call twice. Today, calling run_terraform_phase_only twice will regenerate Terraform and overwrite user edits silently.
+Frontend state
+Drop phaseArtifacts. Hydrate exclusively from getArtifacts.
+Persist selectedPlanId to sessionStorage alongside wf_task_id. On refresh, restore selection so the architecture-decision step doesn't appear "unselected" after refresh.
+11. Recommended Execution Flow
+
+[User] ── INPUT ─┐
+                 ▼
+        analyze_repository (cached, idempotent)
+                 │
+                 ▼
+     ArchitectureDecisionAgent ─ generates 3 strategies + cost
+                 │
+              [USER GATE 1: select strategy]
+                 │
+                 ▼
+            DockerAgent ── generates Dockerfile
+                 │
+              [USER GATE 2: review Dockerfile, edit]
+                 │
+                 ▼
+            DockerExecutor ── build image locally
+                 │
+              [if fail → DockerCorrectorAgent → USER GATE 2b]
+                 │ ok
+                 ▼
+       TerraformGenerator ── template + placeholders
+                 │
+       TerraformValidator ── hcl2 + fmt + validate + tfsec
+                 │ (auto-retry up to N with corrector)
+                 ▼
+              [USER GATE 3: review HCL, edit]
+                 │
+                 ▼
+       TerraformPlanner ── terraform plan → cost reconciliation
+                 │
+              [USER GATE 4: approve plan + reconciled cost]
+                 │
+                 ▼
+       TerraformExecutor ── apply in leased sandbox AWS account
+                 │ (background, WS log stream — same pattern as Docker build)
+                 ▼
+       OutputResolver ── resolve ${terraform_output:*} placeholders
+                 │
+                 ▼
+            KubernetesAgent ── manifests with resolved values
+                 │
+              [USER GATE 5: review K8s]
+                 │
+                 ▼
+            kubectl apply (against EKS endpoint from outputs)
+                 │
+                 ▼
+              SmokeTester ── HTTP probes against load_balancer_dns
+                 │
+              [USER GATE 6: keep or destroy]
+                 │
+                 ▼
+        TerraformDestroyer ── tf destroy in same workspace
+Five user gates, six in failure paths. Every gate is resumable. Every gate persists state under task_id.
+
+12. Scalability Assessment
+Bottleneck	Today	Mitigation
+OrchestratorAgent instantiation per request	LLM + RAG re-init each call	Singleton with FastAPI lifespan; warm pool
+RAG retrieval	Synchronous in agent run	Pre-warm at startup; cache by (arch_type, prompt_hash)
+Concurrent task pollers	3 sec polling × N tasks = N×20 req/min	Server-sent events; you already have WS for Docker — extend
+Single S3 backend	All tasks → one bucket	Already addressed in §10 with per-task keys + lock table
+AWS sandbox	None	Account pool; per-task lease
+LLM rate limits	GPT-5-mini + Groq fallback already exist	Verify both per-tenant, not per-process
+State JSONB row size	Grows per-phase; unbounded logs	Move logs to a separate task_logs table; cap at ~100KB per state row
+ReAct retries	3× per phase, sequential	Acceptable; do not parallelize across artifacts (LLM cost)
+13. Security Assessment
+Concern	Today	Risk
+AWS credentials in agent process	Not yet	When apply lands, do NOT put long-lived keys in env. Use STS AssumeRole per task with 1h expiry.
+LLM-injected secrets	Prompt explicitly forbids (terraform_agent.py:66-67)	Insufficient. Add a regex-based secret scanner on every generated file (TruffleHog patterns).
+User-edited HCL → apply	No diff review gate	Add: show terraform plan diff between AI-generated and user-edited.
+Backdoor IAM in generated HCL	LLM could emit * policies	tfsec catches this; block on findings.
+Sandbox blast radius	Undefined	SCPs at the org level: deny IAM user creation, deny route53 zone creation in shared zones, deny iam:PassRole *, etc.
+State file in S3	TBD	Encrypt with KMS; block public access; access via IAM only; versioning on.
+Cost runaway	No quota	Per-sandbox-account budget alarm at $50; auto-destroy at $100.
+Repo secrets ingestion	env_security_runtime exists	Verify it blocks before LLM ever sees the env content.
+MCP client	External tool calls	Validate MCP server is trusted; current code uses MCPClient.get_instance() (terraform_agent.py:374-377) — ensure no untrusted MCP servers can be added at runtime.
+14. Prioritized Refactoring Plan
+P0 — blocks Terraform phase launch (1-2 weeks):
+
+Fix R1 — typed InfrastructureBlueprint contract; raise on contract violation.
+Fix R2 — propagate plan_id / strategy_tier into state["plan"].
+Build out S3 backend + DynamoDB lock infra (R3). Deterministic backend.tf.
+Land template-based Terraform generation (§8). Retire free-form HCL.
+Real validation pipeline (§7 steps 1-7) integrated into the phase.
+P1 — blocks safe sandbox runs (2-3 weeks):
+6. Sandbox account pool + lease system + SCPs (§13).
+7. Single artifact source-of-truth on backend (R4); thin frontend hydration.
+8. Structured agent errors (A3); failure phase routing.
+9. Resolve ${terraform_output:*} post-apply (A1).
+10. terraform plan + infracost reconciliation gate.
+
+P2 — robustness (2-4 weeks):
+11. OrchestratorAgent singleton via FastAPI lifespan (W5).
+12. Replace OrchestratorState TypedDict with phased Pydantic models (W2).
+13. Drop phaseArtifacts; backend-driven hydration (S4).
+14. Differentiated empty/failure/loading UI states (S5).
+15. TerraformCorrectorAgent (mirror DockerCorrectorAgent).
+16. Smoke test harness.
+
+P3 — long-term maintainability:
+17. Actually use the compiled LangGraph or remove it (W6).
+18. Contract tests across every agent boundary.
+19. Per-tenant rate limit / quota tracking.
+
+15. Immediate Next Steps (this week)
+Add typed InfrastructureBlueprint Pydantic model in schemas/blueprint.py. Make both PlannerAgent and TerraformAgent depend on it. Add unit test that asserts multi_az, instance_type, min_nodes, aws_region survive the ArchitectureDecisionAgent → resume_with_selected_plan → TerraformAgent path for each of the 3 strategies. This single test will fail today and prove R1+R2.
+Add state["plan"]["strategy_tier"] = selected_plan_id in resume_with_selected_plan. One-line fix.
+Lock down backend.tf: stop letting the LLM generate it. Replace with a deterministic Jinja template that reads task_id from state. Even before the bucket exists, this unblocks template work.
+Build the management account + S3 + DynamoDB locks in a separate, manually-managed Terraform repo. This is "day-zero" infra that should not be platform-generated.
+Decide the sandbox-account strategy: AWS Organizations + AFT, or simpler — a pool of pre-created accounts with a Postgres lease table. Pick before any apply happens.
+Drop the terraform plan -out=tfplan artifact into a new state["terraform_plan"] field before exposing the apply gate. This is non-negotiable: the user must approve a plan, not raw HCL, before AWS gets touched.
+Bottom line: The architecture is fundamentally sound — the agent boundaries are sensible, the human-in-the-loop gates are in the right places, the corrector pattern proves you can do failure recovery well. But you have two undetected silent-default bugs that nullify the architecture-decision phase (R1, R2), and you have no AWS state-management story at all. Fix those four-five items in §15 before generating a single line of HCL against a real sandbox account.

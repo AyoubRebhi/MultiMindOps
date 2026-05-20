@@ -21,7 +21,9 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel, ValidationError
 
 from backend.app.agents.base_agent import BaseAgent
+from backend.app.agents.errors import BlueprintContractError
 from backend.app.agents.memory import AgentMemory
+from backend.app.schemas.blueprint import parse_blueprint
 from backend.app.services.core.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
@@ -354,6 +356,26 @@ class PlannerAgent(BaseAgent):
 
         # ── Optional LLM refinement ───────────────────────────────────────
         blueprint = self._refine_blueprint_with_llm(blueprint, profile)
+
+        # ── Inject aws_region so the contract is complete ────────────────
+        # Previously TerraformAgent silently defaulted this to "us-east-1"
+        # via .get(). Now it is part of the blueprint itself.
+        blueprint.setdefault("aws_region", "us-east-1")
+
+        # ── Strict contract validation (typed Pydantic) ──────────────────
+        # parse_blueprint raises BlueprintContractError on any drift —
+        # catches the historical "PlannerAgent emits compute.type but
+        # TerraformAgent reads compute_type" class of bug at the source.
+        try:
+            validated = parse_blueprint(blueprint)
+        except BlueprintContractError:
+            logger.exception(
+                "[PlannerAgent] Blueprint failed contract validation — "
+                "raising to caller (no silent fallback)."
+            )
+            raise
+        # Re-emit the dict so downstream legacy consumers keep working.
+        blueprint = validated.model_dump(mode="json", exclude_none=True)
 
         # ── Reasoning note explaining Terraform and Kubernetes choices ────
         terraform_reason = (

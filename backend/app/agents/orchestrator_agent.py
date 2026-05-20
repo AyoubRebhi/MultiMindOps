@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 from langgraph.graph import END, START, StateGraph
 
@@ -439,14 +440,44 @@ class OrchestratorAgent(BaseAgent):
                 plan=plan,
                 infrastructure_context=infrastructure_context,
                 approved_artifacts=state.get("approved_artifacts"),
+                task_id=state.get("task_id"),
             )
         except Exception as exc:
+            # Surface validation failures distinctly from generation failures
+            # so the frontend can route on `terraform_validation_failed` vs
+            # `terraform_failed`.
+            from backend.app.agents.errors import (
+                TerraformGenerationError,
+                TerraformValidationError,
+            )
             logs = list(state.get("logs", []))
-            logs.append({
-                "step": "terraform_error",
-                "message": f"Terraform generation failed: {str(exc)}. Check if the LLM returned valid JSON."
-            })
-            logger.error("[OrchestratorAgent] TerraformAgent failed (%s)", exc)
+            if isinstance(exc, TerraformValidationError):
+                logs.append({
+                    "step": "terraform_validation_error",
+                    "message": (
+                        f"Terraform failed validation pipeline: {exc.message} "
+                        f"(critical_security={exc.metadata.get('security_critical_count', 0)}, "
+                        f"errors={exc.metadata.get('error_count', 0)})"
+                    ),
+                })
+                state["current_phase"] = "terraform_validation_failed"  # type: ignore[index]
+                # Persist the structured failure payload so the UI can render
+                # per-validator findings without re-running the pipeline.
+                state["terraform_validation"] = exc.metadata  # type: ignore[index]
+            elif isinstance(exc, TerraformGenerationError):
+                logs.append({
+                    "step": "terraform_error",
+                    "message": f"Terraform generation failed: {exc.message}",
+                })
+                state["current_phase"] = "terraform_failed"  # type: ignore[index]
+            else:
+                logs.append({
+                    "step": "terraform_error",
+                    "message": f"Terraform generation failed: {str(exc)}",
+                })
+                state["current_phase"] = "terraform_failed"  # type: ignore[index]
+            logger.exception("[OrchestratorAgent] TerraformAgent failed")
+            state["logs"] = logs
             return state
 
         # Merge TerraformAgent artifacts into state["infra"]["artifacts"]
@@ -484,12 +515,38 @@ class OrchestratorAgent(BaseAgent):
         # Store structured contract so KubernetesAgent can consume it
         terraform_outputs = tf_result.get("terraform_outputs") or {}
 
-        return {
+        # Persist render + validation metadata for the UI / debugging.
+        tf_validation = tf_result.get("validation")
+        tf_metadata = tf_result.get("generation_metadata")
+        render_mode = tf_result.get("render_mode")
+        if render_mode:
+            logs.append({
+                "step": "terraform_render_mode",
+                "message": f"Terraform render mode: {render_mode}",
+            })
+        if tf_validation:
+            status = tf_validation.get("status", "unknown")
+            logs.append({
+                "step": "terraform_validation",
+                "message": (
+                    f"Terraform validation: {status} "
+                    f"(errors={sum(1 for i in tf_validation.get('issues', []) if i.get('severity') in ('error','critical'))}, "
+                    f"warnings={sum(1 for i in tf_validation.get('issues', []) if i.get('severity') == 'warning')}, "
+                    f"security={len(tf_validation.get('security_issues') or [])})"
+                ),
+            })
+
+        new_state: OrchestratorState = {
             **state,
             "infra": infra,
             "terraform_outputs": terraform_outputs,
             "logs": logs,
         }
+        if tf_validation is not None:
+            new_state["terraform_validation"] = tf_validation  # type: ignore[index]
+        if tf_metadata is not None:
+            new_state["terraform_generation_metadata"] = tf_metadata  # type: ignore[index]
+        return new_state
 
     def _kubernetes_phase_node(self, state: OrchestratorState) -> OrchestratorState:
         """Step 5 — Kubernetes YAML (deployment.yaml, service.yaml).
@@ -1376,14 +1433,34 @@ class OrchestratorAgent(BaseAgent):
             None,
         )
         if not selected:
+            from backend.app.agents.errors import PlanPropagationError
             available = [p.get("id") for p in plans]
-            raise ValueError(
-                f"Plan ID '{selected_plan_id}' not found. "
-                f"Available: {available}"
+            raise PlanPropagationError(
+                f"Plan ID '{selected_plan_id}' not found in architecture_decision.",
+                metadata={"selected_plan_id": selected_plan_id, "available": available},
             )
 
-        # Promote selected strategy's plan + cost into top-level state fields
-        state["plan"] = selected.get("plan") or {}
+        # Promote selected strategy's plan + cost into top-level state fields.
+        # CRITICAL: stamp strategy_tier / plan_id onto the promoted plan so
+        # TerraformAgent and KubernetesAgent can read it explicitly.
+        # Prior to this fix the strategy id lived only on the wrapper dict
+        # and was lost here, causing multi_az to always be False and every
+        # strategy to render identical Terraform.
+        promoted_plan = dict(selected.get("plan") or {})
+        promoted_plan["plan_id"] = selected_plan_id
+        promoted_plan["strategy_tier"] = selected_plan_id
+
+        # Propagate approved_artifacts from the strategy's required_artifacts
+        # so downstream phase nodes (which gate on this list) see a
+        # deterministic value instead of falling into the "neither list
+        # populated → run-everything" fallback branch.
+        promoted_required = list(selected.get("required_artifacts") or [])
+        if promoted_required:
+            promoted_plan.setdefault("required_artifacts", promoted_required)
+            promoted_plan["approved_artifacts"] = promoted_required
+            state["approved_artifacts"] = promoted_required
+
+        state["plan"] = promoted_plan
         state["cost_estimation"] = {
             "monthly_cost":         selected.get("monthly_cost", 0.0),
             "breakdown":            selected.get("cost_breakdown") or {},
@@ -1766,14 +1843,34 @@ class OrchestratorAgent(BaseAgent):
         state["logs"] = logs
         return state
 
-    def run_terraform_phase_only(self, prior_state: dict) -> dict:
-        """Run ONLY the TerraformAgent phase and return updated state."""
+    def run_terraform_phase_only(self, prior_state: dict, task_id: Optional[str] = None) -> dict:
+        """Run ONLY the TerraformAgent phase and return updated state.
+
+        ``task_id`` is forwarded so the deterministic backend.tf injector
+        can key state objects per-task.
+        """
         state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
-        logger.info("[OrchestratorAgent] run_terraform_phase_only — starting")
+        if task_id and "task_id" not in state:
+            state["task_id"] = task_id  # type: ignore[typeddict-unknown-key]
+        logger.info(
+            "[OrchestratorAgent] run_terraform_phase_only — starting (task_id=%s)",
+            state.get("task_id"),
+        )
         state = self._terraform_phase_node(state)
-        state["current_phase"] = "terraform_completed"
+
+        # The phase node sets `current_phase` to terraform_failed or
+        # terraform_validation_failed on error; respect it. Otherwise
+        # promote to terraform_completed.
+        phase = state.get("current_phase") or ""
+        if phase not in ("terraform_failed", "terraform_validation_failed"):
+            state["current_phase"] = "terraform_completed"
         logs = list(state.get("logs", []))
-        logs.append({"step": "phase_checkpoint", "message": "Terraform phase complete — awaiting user approval"})
+        if state["current_phase"] == "terraform_completed":
+            logs.append({"step": "phase_checkpoint", "message": "Terraform phase complete — awaiting user approval"})
+        elif state["current_phase"] == "terraform_validation_failed":
+            logs.append({"step": "phase_checkpoint", "message": "Terraform validation failed — pipeline blocked"})
+        else:
+            logs.append({"step": "phase_checkpoint", "message": "Terraform generation failed — pipeline blocked"})
         state["logs"] = logs
         return state
 

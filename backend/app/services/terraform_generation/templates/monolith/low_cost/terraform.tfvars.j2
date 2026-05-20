@@ -1,0 +1,11 @@
+project_name         = "{{ project_name }}"
+environment          = "{{ environment }}"
+aws_region           = "{{ aws_region }}"
+strategy_tier        = "{{ strategy_tier }}"
+
+vpc_cidr             = "{{ vpc_cidr }}"
+public_subnet_cidrs  = {{ public_subnet_cidrs | tojson }}
+private_subnet_cidrs = {{ private_subnet_cidrs | tojson }}
+
+container_port       = {{ container_port }}
+desired_count        = {{ desired_count }}

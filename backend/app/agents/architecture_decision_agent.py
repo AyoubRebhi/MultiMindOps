@@ -230,8 +230,25 @@ class ArchitectureDecisionAgent(BaseAgent):
                 arch_style=arch_style,
             )
 
+            # Stamp the strategy tier directly into the blueprint so it
+            # survives every downstream handoff (resume_with_selected_plan
+            # → TerraformAgent). Previously this was carried only on the
+            # outer strategy dict and got dropped on plan promotion.
+            variant_blueprint["strategy_tier"] = strategy["id"]
+
+            # Validate the adapted variant before persisting. Catches any
+            # blueprint mutation that produced an invalid shape (e.g. EKS
+            # without min_nodes) before the user ever sees it.
+            from backend.app.schemas.blueprint import parse_blueprint
+            validated_variant = parse_blueprint(variant_blueprint)
+            variant_blueprint = validated_variant.model_dump(mode="json", exclude_none=True)
+
             variant_plan = dict(base_plan)
             variant_plan["infrastructure_blueprint"] = variant_blueprint
+            # Carry the strategy id on the plan too — downstream code that
+            # only sees state["plan"] (not the strategy wrapper) can read it.
+            variant_plan["plan_id"] = strategy["id"]
+            variant_plan["strategy_tier"] = strategy["id"]
 
             cost_result = self._run_cost_estimation(variant_plan, variant_profile, strategy["id"])
             cost = cost_result.get("cost_estimation") or {}

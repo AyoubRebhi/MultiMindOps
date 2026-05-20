@@ -1,0 +1,29 @@
+output "cluster_endpoint" {
+  description = "API Gateway HTTP endpoint (serverless equivalent of cluster endpoint)."
+  value       = aws_apigatewayv2_api.main.api_endpoint
+}
+
+output "cluster_name" {
+  description = "Logical serverless cluster identifier."
+  value       = local.cluster_name
+}
+
+output "load_balancer_dns" {
+  description = "API Gateway DNS — serverless does not use a load balancer."
+  value       = replace(aws_apigatewayv2_api.main.api_endpoint, "https://", "")
+}
+
+output "ecr_repository_url" {
+  description = "Serverless deploys Lambda from S3 — ECR not used. Empty string for contract."
+  value       = ""
+}
+
+output "lambda_function_name" {
+  description = "Lambda function identifier."
+  value       = aws_lambda_function.app.function_name
+}
+
+output "lambda_code_bucket" {
+  description = "S3 bucket holding Lambda deployment artifacts."
+  value       = aws_s3_bucket.lambda_code.bucket
+}

@@ -1,0 +1,65 @@
+variable "project_name" {
+  type        = string
+  description = "Lowercase project identifier."
+}
+
+variable "environment" {
+  type        = string
+  description = "Deployment environment."
+  default     = "dev"
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region."
+}
+
+variable "strategy_tier" {
+  type        = string
+  description = "Cost tier."
+  validation {
+    condition     = contains(["low_cost", "balanced", "high_performance"], var.strategy_tier)
+    error_message = "strategy_tier must be one of: low_cost, balanced, high_performance."
+  }
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "VPC CIDR block."
+}
+
+variable "public_subnet_cidrs" {
+  type        = list(string)
+  description = "Public subnet CIDRs."
+}
+
+variable "private_subnet_cidrs" {
+  type        = list(string)
+  description = "Private subnet CIDRs."
+}
+
+variable "eks_version" {
+  type        = string
+  description = "EKS Kubernetes version."
+  default     = "1.30"
+}
+
+variable "node_instance_type" {
+  type        = string
+  description = "EC2 instance type for EKS worker nodes."
+}
+
+variable "min_nodes" {
+  type        = number
+  description = "Minimum worker node count."
+}
+
+variable "max_nodes" {
+  type        = number
+  description = "Maximum worker node count."
+}
+
+variable "desired_nodes" {
+  type        = number
+  description = "Desired worker node count."
+}

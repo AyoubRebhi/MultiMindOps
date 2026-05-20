@@ -38,10 +38,20 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+import os
+
 from backend.app.agents.base_agent import EnhancedBaseAgent
+from backend.app.agents.errors import (
+    BlueprintContractError,
+    TerraformGenerationError,
+    TerraformValidationError,
+)
+from backend.app.schemas.blueprint import InfrastructureBlueprint, parse_blueprint
 from backend.app.services.llm.provider_factory import ProviderFactory
 from backend.app.services.rag.rag_pipeline_service import RAGPipelineService
 from backend.app.services.rag.hybrid_rag_service import HybridRAGService
+# NOTE: terraform_generation imports are lazy (inside __init__) to avoid a
+# circular import — terraform_generation -> agents.errors -> agents -> here.
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +122,20 @@ class TerraformAgent(EnhancedBaseAgent):
         self.prompt_template = prompt_template
         self._rag_pipeline = RAGPipelineService()
         self._hybrid_rag = HybridRAGService()
+        # Deterministic template-driven generation is the default path.
+        # The free-form LLM path is retained behind TF_GENERATION_MODE=legacy
+        # for emergency rollback only.
+        # Lazy import to break the circular dependency between agents and
+        # terraform_generation (which imports from agents.errors).
+        from backend.app.services.terraform_generation import (
+            TerraformTemplateRenderer,
+            TerraformValidator,
+        )
+        self._renderer = TerraformTemplateRenderer()
+        self._validator = TerraformValidator()
+        self._generation_mode = (
+            os.getenv("TF_GENERATION_MODE", "deterministic").strip().lower()
+        )
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -121,6 +145,7 @@ class TerraformAgent(EnhancedBaseAgent):
         plan: Dict[str, Any],
         infrastructure_context: Optional[Dict[str, Any]] = None,
         approved_artifacts: Optional[List[str]] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate a complete Terraform project for the given prompt and plan.
@@ -139,9 +164,40 @@ class TerraformAgent(EnhancedBaseAgent):
         print("[DEBUG] Entering TerraformAgent")
         print("[DEBUG] Prompt size:", len(prompt))
 
-        architecture_type = self._extract_architecture_type(plan)
-        compute_config = self._extract_compute_config(plan, infrastructure_context)
-        region = self._extract_region(plan)
+        # ── Strict blueprint contract validation ─────────────────────────
+        # Replaces the previous .get(... default) cascade that masked every
+        # producer/consumer drift. If PlannerAgent or ArchitectureDecisionAgent
+        # emit a malformed blueprint, we want to know HERE — not after the
+        # LLM has already burned tokens generating defaults.
+        blueprint = self._require_blueprint(plan)
+        strategy_tier = self._require_strategy_tier(plan, blueprint)
+
+        # ── Mode dispatch ────────────────────────────────────────────────
+        # Deterministic templates are the default. Free-form HCL via LLM is
+        # retained only behind an explicit env flag for emergency rollback.
+        if self._generation_mode != "legacy":
+            return self._run_deterministic(
+                blueprint=blueprint,
+                strategy_tier=strategy_tier,
+                task_id=task_id,
+                infrastructure_context=infrastructure_context,
+            )
+
+        architecture_type = blueprint.terraform_architecture_type
+        region = blueprint.aws_region
+        compute_config = self._extract_compute_config(
+            blueprint=blueprint,
+            strategy_tier=strategy_tier,
+            infrastructure_context=infrastructure_context,
+        )
+        logger.info(
+            "[TerraformAgent] Contract validated — arch=%s region=%s tier=%s "
+            "instance=%s min=%s max=%s multi_az=%s",
+            architecture_type, region, strategy_tier,
+            compute_config["instance_type"],
+            compute_config["min_nodes"], compute_config["max_nodes"],
+            compute_config["multi_az"],
+        )
 
         # ── Hybrid RAG: MCP (schema) + Qdrant (corpus) ───────────────────────
         hybrid_result = self._retrieve_terraform_context(
@@ -160,6 +216,7 @@ class TerraformAgent(EnhancedBaseAgent):
             region=region,
             hybrid_result=hybrid_result,
             approved_artifacts=approved_artifacts,
+            strategy_tier=strategy_tier,
         )
         print("[DEBUG] Prompt size (messages):", len(user_prompt))
 
@@ -180,8 +237,52 @@ class TerraformAgent(EnhancedBaseAgent):
             max_tokens=3200,
         )
 
+        # ── Final post-loop quality gate ──────────────────────────────────────
+        # The ReAct loop returns whatever the LLM produced on iteration N
+        # regardless of whether the evaluator still has issues. Without a
+        # post-loop check, the orchestrator happily routes onward to
+        # Kubernetes with empty/invalid HCL. Make the failure explicit.
+        unresolved = evaluate_fn(response)
+        if unresolved:
+            raise TerraformGenerationError(
+                "Terraform generation could not satisfy the evaluator after "
+                f"{iterations_used[0]} ReAct iterations.",
+                metadata={
+                    "unresolved_issues": unresolved,
+                    "iterations_used": iterations_used[0],
+                    "strategy_tier": strategy_tier,
+                    "architecture_type": architecture_type,
+                },
+            )
+
         # ── Extract structured terraform_outputs contract ─────────────────────
         artifacts = response.setdefault("artifacts", {})
+
+        # ── Deterministic backend.tf — overwrite any LLM-produced version ────
+        # The LLM is forbidden from emitting backend.tf because state-bucket
+        # hallucination is unrecoverable. If TF_STATE_* env vars are not
+        # configured yet we log and skip rather than crash — the LLM's
+        # version stays in place for development. In production the env
+        # vars MUST be present.
+        if task_id:
+            try:
+                from backend.app.services.terraform_generation.backend_injector import (
+                    backend_config_from_env, render_backend_tf,
+                )
+                cfg = backend_config_from_env(task_id)
+                artifacts["terraform_backend"] = render_backend_tf(cfg)
+                logger.info(
+                    "[TerraformAgent] backend.tf overwritten deterministically "
+                    "(bucket=%s, key=%s)", cfg.bucket, cfg.state_key,
+                )
+            except RuntimeError as exc:
+                logger.warning(
+                    "[TerraformAgent] Deterministic backend.tf skipped — %s. "
+                    "Keeping LLM-generated backend.tf (DEVELOPMENT ONLY).", exc,
+                )
+            except Exception:
+                logger.exception("[TerraformAgent] backend.tf injection failed unexpectedly")
+
         terraform_outputs_contract = self._extract_outputs_contract(
             outputs_hcl=str(artifacts.get("terraform_outputs") or ""),
             architecture_type=architecture_type,
@@ -221,6 +322,102 @@ class TerraformAgent(EnhancedBaseAgent):
             response["rag"]["qdrant_available"],
         )
         return response
+
+    # ── Deterministic template-driven path (default) ─────────────────────────
+
+    def _run_deterministic(
+        self,
+        blueprint: InfrastructureBlueprint,
+        strategy_tier: str,
+        task_id: Optional[str],
+        infrastructure_context: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Render Terraform via the template engine, validate, and return the
+        same artifact shape the orchestrator already consumes.
+
+        No LLM is invoked. Every byte of HCL is reproducible from
+        {blueprint, strategy_tier, task_id, container_port}.
+        """
+        container_port = self._first_container_port(infrastructure_context)
+        project_name = (
+            (infrastructure_context or {}).get("project_name")
+            if infrastructure_context
+            else None
+        )
+
+        result = self._renderer.render(
+            blueprint=blueprint,
+            task_id=task_id,
+            project_name=project_name,
+            container_port=container_port,
+        )
+
+        # Validate before returning so the orchestrator can gate on result.
+        validation = self._validator.validate(result.artifacts)
+        if validation.is_blocking:
+            raise TerraformValidationError(
+                "Generated Terraform failed deterministic validation.",
+                validator="pipeline",
+                findings=[i.model_dump() for i in validation.issues]
+                + [s.model_dump() for s in validation.security_issues],
+                metadata={
+                    "validators_run": validation.validators_run,
+                    "skipped_validators": validation.skipped_validators,
+                    "template_metadata": result.metadata,
+                    "error_count": validation.error_count,
+                    "security_critical_count": validation.security_critical_count,
+                },
+            )
+
+        # Build the structured outputs contract from the rendered outputs.tf.
+        terraform_outputs_contract = self._extract_outputs_contract(
+            outputs_hcl=result.artifacts.get("terraform_outputs", ""),
+            architecture_type=blueprint.terraform_architecture_type,
+        )
+
+        # File-paths for the orchestrator's generated_artifacts list.
+        generated_artifacts = sorted(
+            file_path
+            for key, file_path in self.ARTIFACT_FILE_MAP.items()
+            if str(result.artifacts.get(key) or "").strip()
+        )
+        # backend.tf is rendered too — include it explicitly.
+        if "terraform_backend" in result.artifacts and "terraform/backend.tf" not in generated_artifacts:
+            generated_artifacts.append("terraform/backend.tf")
+            generated_artifacts.sort()
+
+        return {
+            "artifacts": result.artifacts,
+            "terraform_outputs": terraform_outputs_contract,
+            "architecture_type": blueprint.terraform_architecture_type,
+            "generated_artifacts": generated_artifacts,
+            "react_iterations": 0,            # no LLM iterations on this path
+            "summary": (
+                f"Rendered {blueprint.architecture_style}/{strategy_tier} "
+                f"template set deterministically."
+            ),
+            "generation_metadata": result.metadata,
+            "validation": validation.model_dump(),
+            "render_mode": "deterministic_template",
+            "rag": {
+                "enabled": False,
+                "reason": "deterministic_template_path",
+            },
+        }
+
+    @staticmethod
+    def _first_container_port(
+        infrastructure_context: Optional[Dict[str, Any]],
+    ) -> Optional[int]:
+        """Pull the first detected service port from the infra context, if any."""
+        if not infrastructure_context:
+            return None
+        for svc in infrastructure_context.get("services") or []:
+            port = svc.get("port")
+            if isinstance(port, int) and port > 0:
+                return port
+        return None
 
     # ── Quality evaluator ─────────────────────────────────────────────────────
 
@@ -278,60 +475,117 @@ class TerraformAgent(EnhancedBaseAgent):
 
         return evaluate
 
+    # ── Contract enforcement (Phase 1 of the audit refactor) ─────────────────
+
+    def _require_blueprint(self, plan: Dict[str, Any]) -> InfrastructureBlueprint:
+        """
+        Pull ``infrastructure_blueprint`` off the plan and validate it through
+        the typed schema. Raises ``BlueprintContractError`` on drift instead of
+        silently returning a half-empty dict.
+        """
+        raw = plan.get("infrastructure_blueprint")
+        if not raw or not isinstance(raw, dict):
+            raise BlueprintContractError(
+                "Plan is missing 'infrastructure_blueprint' — PlannerAgent / "
+                "ArchitectureDecisionAgent must produce one before Terraform runs.",
+                metadata={"plan_keys": sorted(plan.keys()) if isinstance(plan, dict) else []},
+            )
+        return parse_blueprint(raw)  # raises BlueprintContractError on bad shape
+
+    def _require_strategy_tier(
+        self,
+        plan: Dict[str, Any],
+        blueprint: InfrastructureBlueprint,
+    ) -> str:
+        """
+        Resolve the strategy tier (low_cost | balanced | high_performance) from
+        the canonical location, then fall back to the blueprint field
+        (architecture_decision_agent stamps it there too), then raise.
+
+        Replaces the previous substring search
+        ``"high_performance" in str(plan.get("plan_id"))`` which always
+        returned False because plan_id was never propagated by
+        resume_with_selected_plan.
+        """
+        tier = (
+            plan.get("strategy_tier")
+            or plan.get("plan_id")
+            or blueprint.strategy_tier
+        )
+        if tier not in ("low_cost", "balanced", "high_performance"):
+            raise BlueprintContractError(
+                f"Plan is missing a valid strategy_tier (got {tier!r}). "
+                "Expected one of: low_cost | balanced | high_performance. "
+                "Check resume_with_selected_plan propagation.",
+                metadata={
+                    "plan_strategy_tier": plan.get("strategy_tier"),
+                    "plan_plan_id": plan.get("plan_id"),
+                    "blueprint_strategy_tier": blueprint.strategy_tier,
+                },
+            )
+        return tier
+
     # ── Context extraction helpers ────────────────────────────────────────────
-
-    def _extract_architecture_type(self, plan: Dict[str, Any]) -> str:
-        blueprint = plan.get("infrastructure_blueprint") or {}
-        arch = (blueprint.get("architecture_type") or "").lower()
-        if arch in ("microservices", "eks"):
-            return "eks"
-        if arch in ("serverless", "lambda"):
-            return "serverless"
-        # monolith, default
-        compute = (blueprint.get("compute_type") or "").lower()
-        if "eks" in compute or "kubernetes" in compute:
-            return "eks"
-        return "ecs"
-
-    def _extract_region(self, plan: Dict[str, Any]) -> str:
-        blueprint = plan.get("infrastructure_blueprint") or {}
-        return blueprint.get("aws_region") or "us-east-1"
 
     def _extract_compute_config(
         self,
-        plan: Dict[str, Any],
+        blueprint: InfrastructureBlueprint,
+        strategy_tier: str,
         infrastructure_context: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        blueprint = plan.get("infrastructure_blueprint") or {}
+        """
+        Build the prompt-time compute config from the typed blueprint.
+
+        Every value here is now sourced from the validated schema — there are
+        NO ``.get(default)`` fallbacks for sizing, region, AZ, or instance
+        type. If a value is missing the blueprint validator would have
+        already raised, so anything reaching this method is guaranteed sane.
+        """
         context = infrastructure_context or {}
         services = context.get("services") or []
 
-        # Gather ports from services in the mapped context
         ports: List[int] = []
         for svc in services:
             port = svc.get("port")
             if port and isinstance(port, int):
                 ports.append(port)
 
+        # EKS carries node sizing; ECS/EC2 carry instance sizing. The
+        # blueprint's effective_instance_type accessor enforces this.
+        if blueprint.compute.type == "EKS":
+            min_nodes = blueprint.compute.min_nodes
+            max_nodes = blueprint.compute.max_nodes
+            if min_nodes is None or max_nodes is None:
+                # Defensive — validator should have caught this, but keep
+                # explicit so a future schema change doesn't regress silently.
+                raise BlueprintContractError(
+                    "EKS blueprint reached TerraformAgent without min_nodes/max_nodes",
+                    metadata={"compute": blueprint.compute.model_dump()},
+                )
+        else:
+            # ECS/Lambda — node sizing not applicable; expose conservative
+            # values so downstream prompt rendering still has consistent keys.
+            min_nodes = 1
+            max_nodes = 1 if blueprint.compute.type == "Lambda" else 3
+
+        # Multi-AZ is now a typed boolean on the blueprint. The substring
+        # heuristic is dead.
+        multi_az = blueprint.is_multi_az or strategy_tier == "high_performance"
+
+        # RDS / Redis flags come from explicit typed sub-models — no more
+        # stringified dict scraping for "rds" / "redis".
+        enable_rds = blueprint.needs_rds
+        enable_redis = blueprint.needs_redis
+
         return {
-            "instance_type": blueprint.get("instance_type") or "t3.medium",
-            "min_nodes": blueprint.get("min_nodes") or 2,
-            "max_nodes": blueprint.get("max_nodes") or 5,
+            "instance_type": blueprint.compute.effective_instance_type,
+            "min_nodes": min_nodes,
+            "max_nodes": max_nodes,
             "app_ports": ports or [80, 8080],
-            "enable_rds": bool(
-                "rds" in str(blueprint).lower()
-                or any(
-                    "database" in str(d).lower() or "rds" in str(d).lower()
-                    for d in (context.get("infrastructure_dependencies") or [])
-                )
-            ),
-            "enable_redis": bool(
-                any(
-                    "redis" in str(d).lower() or "elasticache" in str(d).lower()
-                    for d in (context.get("infrastructure_dependencies") or [])
-                )
-            ),
-            "multi_az": "high_performance" in str(plan.get("plan_id") or ""),
+            "enable_rds": enable_rds,
+            "enable_redis": enable_redis,
+            "multi_az": multi_az,
+            "strategy_tier": strategy_tier,
         }
 
     # ── Hybrid RAG retrieval ──────────────────────────────────────────────────
@@ -390,6 +644,7 @@ class TerraformAgent(EnhancedBaseAgent):
         region: str,
         hybrid_result: Dict[str, Any],
         approved_artifacts: Optional[List[str]],
+        strategy_tier: str,
     ) -> str:
         compact_plan = {
             "steps": (plan.get("steps") or [])[:6],
@@ -422,6 +677,7 @@ Execution plan (terraform-relevant steps):
 {compact_plan}
 
 Infrastructure configuration:
+- Strategy tier: {strategy_tier}
 - Architecture: {architecture_type.upper()}
 - AWS Region: {region}
 - Instance type: {compute_config['instance_type']}

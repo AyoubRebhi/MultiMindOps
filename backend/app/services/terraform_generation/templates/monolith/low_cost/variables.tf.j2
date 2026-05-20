@@ -1,0 +1,56 @@
+variable "project_name" {
+  type        = string
+  description = "Lowercase project identifier used as resource name prefix."
+}
+
+variable "environment" {
+  type        = string
+  description = "Deployment environment."
+  default     = "dev"
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region."
+}
+
+variable "strategy_tier" {
+  type        = string
+  description = "Cost tier (low_cost for this template)."
+  validation {
+    condition     = var.strategy_tier == "low_cost"
+    error_message = "This template renders the low_cost tier only."
+  }
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "CIDR block for the VPC."
+}
+
+variable "public_subnet_cidrs" {
+  type        = list(string)
+  description = "CIDR blocks for public subnets (single-AZ for low_cost)."
+}
+
+variable "private_subnet_cidrs" {
+  type        = list(string)
+  description = "CIDR blocks for private subnets."
+}
+
+variable "container_image" {
+  type        = string
+  description = "Container image URI."
+  default     = "public.ecr.aws/nginx/nginx:stable"
+}
+
+variable "container_port" {
+  type        = number
+  description = "Container port."
+}
+
+variable "desired_count" {
+  type        = number
+  description = "Desired ECS task count."
+  default     = 1
+}

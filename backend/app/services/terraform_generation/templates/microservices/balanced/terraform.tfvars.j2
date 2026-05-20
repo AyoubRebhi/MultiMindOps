@@ -1,0 +1,13 @@
+project_name         = "{{ project_name }}"
+environment          = "{{ environment }}"
+aws_region           = "{{ aws_region }}"
+strategy_tier        = "{{ strategy_tier }}"
+
+vpc_cidr             = "{{ vpc_cidr }}"
+public_subnet_cidrs  = {{ public_subnet_cidrs | tojson }}
+private_subnet_cidrs = {{ private_subnet_cidrs | tojson }}
+
+node_instance_type   = "{{ instance_type }}"
+min_nodes            = {{ min_nodes }}
+max_nodes            = {{ max_nodes }}
+desired_nodes        = {{ desired_count }}
