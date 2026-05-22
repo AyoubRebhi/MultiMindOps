@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FileCode2, History } from 'lucide-react'
-import { useArtifactDetail } from '@/hooks/useProjects'
+import { useArtifactDetail, useProjectRole } from '@/hooks/useProjects'
 import { cn, timeAgo } from '@/lib/utils'
-import type { ArtifactResponse } from '@/types/project'
+import type { ApprovalState, ArtifactResponse } from '@/types/project'
+import {
+  ApprovalStateBadge,
+  ArtifactApprovalPanel,
+} from '@/components/artifacts/ArtifactApprovalPanel'
+
+const APPROVER_ROLES = new Set(['CLOUD_ARCHITECT', 'OWNER', 'ADMIN'])
 
 interface Props {
   projectId: string
@@ -64,8 +70,11 @@ export function ArtifactViewer({ projectId, artifacts, emptyMessage }: Props) {
               )}
             >
               <span className="truncate font-mono">{a.artifact_subtype}</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/[0.04] shrink-0">
-                v{a.version}
+              <span className="flex items-center gap-1 shrink-0">
+                <ApprovalStateBadge state={a.approval_state} size="sm" />
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/[0.04]">
+                  v{a.version}
+                </span>
               </span>
             </button>
           </li>
@@ -85,6 +94,8 @@ export function ArtifactViewer({ projectId, artifacts, emptyMessage }: Props) {
 
 function ArtifactContent({ projectId, artifactId }: { projectId: string; artifactId: string }) {
   const { data, isLoading, error } = useArtifactDetail(projectId, artifactId)
+  const role = useProjectRole(projectId)
+  const canApprove = !!role && APPROVER_ROLES.has(role)
   const [version, setVersion] = useState<number | null>(null)
 
   useEffect(() => {
@@ -152,6 +163,16 @@ function ArtifactContent({ projectId, artifactId }: { projectId: string; artifac
       <pre className="p-4 text-xs font-mono text-slate-700 dark:text-slate-300 overflow-auto max-h-[420px] whitespace-pre-wrap break-words">
         {content}
       </pre>
+
+      <div className="px-3 py-3 border-t border-slate-200 dark:border-white/[0.06]">
+        <ArtifactApprovalPanel
+          projectId={projectId}
+          artifactId={data.id}
+          approvalState={(data.approval_state ?? 'pending_review') as ApprovalState}
+          approvals={data.approvals ?? []}
+          canApprove={canApprove}
+        />
+      </div>
     </div>
   )
 }

@@ -46,6 +46,10 @@ class Artifact(Base):
     version = Column(Integer, nullable=False, default=1)
     artifact_metadata = Column(MutableDict.as_mutable(JSONB), nullable=False, default=dict)
 
+    # Collaboration state — updated by ArtifactApprovalService.
+    # Values: 'pending_review' | 'approved' | 'rejected' | 'requires_changes'.
+    approval_state = Column(String, nullable=False, default="pending_review", index=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
@@ -87,3 +91,24 @@ class ArtifactVersion(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     artifact = relationship("Artifact", back_populates="versions")
+
+
+class ArtifactApproval(Base):
+    """Append-only approval history for an artifact.
+
+    Each row is one decision (approve / reject / request_changes) by one
+    reviewer. The denormalized ``Artifact.validation_status`` reflects the
+    most recent decision; this table preserves the full audit trail.
+    """
+
+    __tablename__ = "artifact_approvals"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    artifact_id = Column(String, ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=False, index=True)
+    approved_by = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    # 'approve' | 'reject' | 'request_changes'
+    action = Column(String, nullable=False)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    artifact = relationship("Artifact", backref="approvals")

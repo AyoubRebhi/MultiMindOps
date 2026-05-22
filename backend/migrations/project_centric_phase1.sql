@@ -109,3 +109,13 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id  VARCHAR REFERENCES projec
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS workflow_id VARCHAR REFERENCES workflows (id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS ix_tasks_project_id  ON tasks (project_id);
 CREATE INDEX IF NOT EXISTS ix_tasks_workflow_id ON tasks (workflow_id);
+
+-- ── Phase 2 — AI bootstrap layer ─────────────────────────────────────────────
+-- Adds the bootstrap state machine fields. Idempotent — safe to re-run.
+ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS bootstrap_status      VARCHAR NOT NULL DEFAULT 'pending';
+ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS bootstrap_error       TEXT;
+ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS repository_visibility VARCHAR;
+CREATE INDEX IF NOT EXISTS ix_projects_bootstrap_status ON projects (bootstrap_status);

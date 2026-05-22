@@ -37,6 +37,22 @@ class Project(Base):
     # Values: 'draft' | 'active' | 'archived' | 'failed'.
     current_status = Column(String, nullable=False, default="draft")
 
+    # AI bootstrap state machine — independent from current_status because the
+    # project can be 'active' (lifecycle) while a re-bootstrap is 'analyzing'.
+    # Values: 'pending' | 'analyzing' | 'context_building' | 'ready' | 'failed'.
+    # See backend/app/services/core/project_bootstrap_service.py for the
+    # canonical transitions and ProjectBootstrapStatus in schemas/project.py
+    # for the Pydantic enum exposed to the frontend.
+    bootstrap_status = Column(String, nullable=False, default="pending")
+    # Last bootstrap failure trace — preserved so ProjectDetail can render
+    # "Analysis failed" with a retry action and the operator has a structured
+    # error to investigate. Cleared on a successful re-bootstrap.
+    bootstrap_error = Column(Text, nullable=True)
+
+    # Repository visibility chosen at creation time. Drives which credentials
+    # the analyzer attempts to use. 'public' | 'private'.
+    repository_visibility = Column(String, nullable=True)
+
     project_metadata = Column(MutableDict.as_mutable(JSONB), nullable=False, default=dict)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

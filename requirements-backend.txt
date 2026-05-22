@@ -16,3 +16,6 @@ PyYAML
 mcp>=1.0.0
 # Optional: HCL syntax validation (improves validate_terraform_code accuracy)
 python-hcl2>=4.0.0
+# Tests
+pytest>=8.0
+pytest-asyncio>=0.23

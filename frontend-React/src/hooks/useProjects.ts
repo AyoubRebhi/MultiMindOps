@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { projectsApi } from '@/api/projects'
 import type {
+  ApprovalAction,
   PhaseName,
   ProjectCreatePayload,
+  ProjectRole,
   ProjectUpdatePayload,
   StartWorkflowPayload,
 } from '@/types/project'
@@ -22,6 +24,27 @@ export function useProject(id: string) {
     queryKey: [...PROJECTS_KEY, id],
     queryFn: () => projectsApi.get(id),
     enabled: Boolean(id),
+    // Poll while the bootstrap is in-flight so the ProjectDetail UI advances
+    // through analyzing → context_building → ready without a manual refresh.
+    refetchInterval: (query) => {
+      const status = query.state.data?.bootstrap_status
+      if (status === 'pending' || status === 'analyzing' || status === 'context_building') {
+        return 3_000
+      }
+      return false
+    },
+  })
+}
+
+export function useRetryBootstrap(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => projectsApi.retryBootstrap(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [...PROJECTS_KEY, id] })
+      qc.invalidateQueries({ queryKey: [...PROJECTS_KEY, id, 'workflows'] })
+      qc.invalidateQueries({ queryKey: [...PROJECTS_KEY, id, 'context'] })
+    },
   })
 }
 
@@ -107,4 +130,65 @@ export function useArtifactDetail(projectId: string, artifactId: string | null) 
     queryFn: () => projectsApi.getArtifact(projectId, artifactId as string),
     enabled: Boolean(projectId && artifactId),
   })
+}
+
+// ─── Architecture decision ──────────────────────────────────────────────────
+
+export function useArchitectureDecision(projectId: string, workflowId: string | null) {
+  return useQuery({
+    queryKey: [...PROJECTS_KEY, projectId, 'workflow', workflowId, 'architecture-decision'],
+    queryFn: () =>
+      projectsApi.getArchitectureDecision(projectId, workflowId as string),
+    enabled: Boolean(projectId && workflowId),
+    // 404 = no decision yet; don't keep retrying.
+    retry: (failureCount, error) => {
+      const status = (error as { response?: { status?: number } })?.response?.status
+      if (status === 404) return false
+      return failureCount < 2
+    },
+  })
+}
+
+// ─── Project context ────────────────────────────────────────────────────────
+
+export function useProjectContext(projectId: string) {
+  return useQuery({
+    queryKey: [...PROJECTS_KEY, projectId, 'context'],
+    queryFn: () => projectsApi.listContext(projectId),
+    enabled: Boolean(projectId),
+    refetchInterval: 30_000,
+  })
+}
+
+// ─── Artifact approvals ─────────────────────────────────────────────────────
+
+export function useCreateApproval(projectId: string, artifactId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: { action: ApprovalAction; comment?: string }) =>
+      projectsApi.createApproval(projectId, artifactId, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: [...PROJECTS_KEY, projectId, 'artifact', artifactId] })
+      qc.invalidateQueries({ queryKey: [...PROJECTS_KEY, projectId, 'artifacts'] })
+    },
+  })
+}
+
+// ─── Identity / role ────────────────────────────────────────────────────────
+
+export function useIdentity() {
+  return useQuery({
+    queryKey: ['identity'],
+    queryFn: projectsApi.getIdentity,
+    staleTime: 60_000,
+  })
+}
+
+/** Resolves the caller's role on a given project. Returns null while loading. */
+export function useProjectRole(projectId: string): ProjectRole | null {
+  const { data } = useIdentity()
+  if (!data) return null
+  return (
+    data.memberships.find((m) => m.project_id === projectId)?.role ?? null
+  )
 }

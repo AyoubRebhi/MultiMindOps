@@ -532,13 +532,23 @@ class PlannerAgent(BaseAgent):
         if not application_profile:
             return blueprint
 
+        # Pin the deterministic architectural choices — the LLM gets to suggest
+        # instance sizes and deployment flavors, but it must NOT relabel the
+        # architecture style or compute type. Past incidents: Groq rewriting
+        # `architecture_style` to free-form strings like 'layered' /
+        # 'event-driven' that the strict Literal validator then rejects.
+        pinned_arch_style = blueprint.get("architecture_style")
+        pinned_compute_type = (blueprint.get("compute") or {}).get("type")
+
         try:
             print("LLM PROVIDER: GROQ")
             refined = self.llm.chat_json(
                 system_prompt=(
                     "You are an AWS cloud architect. "
                     "Refine the given infrastructure blueprint JSON based on the application profile. "
-                    "Improve instance types and deployment options where appropriate. "
+                    "You may improve instance types, node sizes, deployment options, and scaling parameters. "
+                    "You MUST NOT change `architecture_style` or `compute.type` — those are fixed. "
+                    "`architecture_style` must remain exactly one of: 'monolith', 'microservices', 'serverless'. "
                     "Return ONLY the updated JSON object with the same keys. No prose or markdown."
                 ),
                 user_prompt=(
@@ -552,7 +562,12 @@ class PlannerAgent(BaseAgent):
             # Accept only if it preserves required top-level keys
             required = {"compute", "database", "networking", "scaling", "architecture_style"}
             if isinstance(refined, dict) and required.issubset(refined.keys()):
-                logger.debug("[PlannerAgent] LLM blueprint refinement accepted.")
+                # Force the pinned values back, regardless of what the LLM did.
+                if pinned_arch_style is not None:
+                    refined["architecture_style"] = pinned_arch_style
+                if pinned_compute_type is not None:
+                    refined.setdefault("compute", {})["type"] = pinned_compute_type
+                logger.debug("[PlannerAgent] LLM blueprint refinement accepted (arch_style/compute.type pinned).")
                 return refined
             logger.warning("[PlannerAgent] LLM blueprint refinement returned unexpected shape — ignoring.")
         except Exception as exc:

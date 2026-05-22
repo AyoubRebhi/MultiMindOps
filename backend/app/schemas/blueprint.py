@@ -31,6 +31,60 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # ── Enums (typed Literals) ────────────────────────────────────────────────────
 
 ArchitectureStyle = Literal["monolith", "microservices", "serverless"]
+
+# Common LLM synonyms for the three canonical architecture styles. Lowercase
+# keys, dashes and underscores normalized to underscores at lookup time.
+# Keep additions conservative — anything not in this map falls through to the
+# Literal validator and raises (which is what we want for genuinely unknown
+# values; we only want to absorb harmless paraphrases).
+_ARCHITECTURE_STYLE_SYNONYMS: Dict[str, str] = {
+    # → monolith
+    "monolithic":          "monolith",
+    "layered":             "monolith",
+    "n_tier":              "monolith",
+    "n-tier":              "monolith",
+    "multi_tier":          "monolith",
+    "multi-tier":          "monolith",
+    "three_tier":          "monolith",
+    "three-tier":          "monolith",
+    "single_tier":         "monolith",
+    "single-tier":         "monolith",
+    "mvc":                 "monolith",
+    "client_server":       "monolith",
+    "client-server":       "monolith",
+    # → microservices
+    "microservice":        "microservices",
+    "micro_services":      "microservices",
+    "micro-services":      "microservices",
+    "distributed":         "microservices",
+    "event_driven":        "microservices",
+    "event-driven":        "microservices",
+    "soa":                 "microservices",
+    "service_oriented":    "microservices",
+    "service-oriented":    "microservices",
+    # → serverless
+    "faas":                "serverless",
+    "function":            "serverless",
+    "functions":           "serverless",
+    "function_as_a_service": "serverless",
+    "function-as-a-service": "serverless",
+    "lambda":              "serverless",
+}
+
+
+def _normalize_architecture_style(raw: Any) -> Any:
+    """Map common LLM paraphrases onto the strict ArchitectureStyle Literal.
+
+    Pass-through for anything that already matches the canonical set, or for
+    non-string inputs (let the Literal validator generate the error). The
+    point is to absorb harmless naming variation without widening the type.
+    """
+    if not isinstance(raw, str):
+        return raw
+    key = raw.strip().lower()
+    if key in ("monolith", "microservices", "serverless"):
+        return key
+    return _ARCHITECTURE_STYLE_SYNONYMS.get(key, raw)
 ComputeType = Literal["ECS", "EKS", "Lambda", "EC2"]
 StrategyTier = Literal["low_cost", "balanced", "high_performance"]
 ScalingStrategy = Literal[
@@ -169,6 +223,14 @@ class InfrastructureBlueprint(BaseModel):
     # NEW — make formerly-implicit fields explicit & required.
     aws_region: str = "us-east-1"
     strategy_tier: Optional[StrategyTier] = None  # set by ArchitectureDecisionAgent
+
+    @field_validator("architecture_style", mode="before")
+    @classmethod
+    def _normalize_architecture_style(cls, value: Any) -> Any:
+        # Runs BEFORE the Literal validator so we can fold synonyms like
+        # 'layered' or 'event-driven' into the three canonical values
+        # without weakening the downstream type contract.
+        return _normalize_architecture_style(value)
 
     @field_validator("aws_region")
     @classmethod

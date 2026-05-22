@@ -10,6 +10,7 @@ from fastapi.responses import Response
 
 from backend.app.api.router import api_router
 from backend.app.core.config import settings
+from backend.app.core.schema_guard import run_schema_guard
 from backend.app.database.base import Base
 from backend.app.database.session import engine
 from backend.app.services.repository.github_service import resolve_workspace_dir
@@ -105,6 +106,11 @@ setup_utf8_encoding()
 
 def create_app() -> FastAPI:
     Base.metadata.create_all(bind=engine)
+    # create_all() only CREATES missing tables; it never ADDs columns to
+    # existing ones. Run the schema guard right after so additive drift
+    # (e.g. tasks.project_id) is detected and self-healed at boot — see
+    # backend/app/core/schema_guard.py.
+    run_schema_guard(engine)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

@@ -1,8 +1,15 @@
 import { useState } from 'react'
-import { Container, Boxes, ShieldCheck, Play, Rocket, Loader2 } from 'lucide-react'
-import { useRunPhase, useStartWorkflow } from '@/hooks/useProjects'
+import { Container, Boxes, ShieldCheck, Play, Rocket, Loader2, Lock } from 'lucide-react'
+import { useProjectRole, useRunPhase, useStartWorkflow } from '@/hooks/useProjects'
 import { cn, timeAgo } from '@/lib/utils'
-import type { PhaseName, WorkflowResponse } from '@/types/project'
+import type { PhaseName, ProjectRole, WorkflowResponse } from '@/types/project'
+
+const CONTRIBUTOR_ROLES = new Set<ProjectRole>([
+  'DEVELOPER',
+  'CLOUD_ARCHITECT',
+  'OWNER',
+  'ADMIN',
+])
 
 const PHASE_BUTTONS: { phase: PhaseName; label: string; icon: React.ElementType }[] = [
   { phase: 'DOCKER',     label: 'Run Docker',     icon: Container },
@@ -18,11 +25,32 @@ interface Props {
 
 export function WorkflowPanel({ projectId, workflows }: Props) {
   const latest = workflows[0]
+  const role = useProjectRole(projectId)
+  const canRun = !!role && CONTRIBUTOR_ROLES.has(role)
   return (
     <div className="space-y-4">
-      <StartWorkflowCard projectId={projectId} />
-      {latest && <ActiveWorkflowCard projectId={projectId} workflow={latest} />}
+      {canRun ? (
+        <StartWorkflowCard projectId={projectId} />
+      ) : (
+        <ReadOnlyHint role={role} />
+      )}
+      {latest && (
+        <ActiveWorkflowCard projectId={projectId} workflow={latest} canRun={canRun} />
+      )}
       {workflows.length > 1 && <WorkflowHistory workflows={workflows.slice(1)} />}
+    </div>
+  )
+}
+
+function ReadOnlyHint({ role }: { role: ProjectRole | null }) {
+  return (
+    <div className="p-3 rounded-xl border border-slate-200 dark:border-white/[0.06] bg-slate-50 dark:bg-surface-900/40 flex items-center gap-2 text-xs text-slate-500">
+      <Lock className="w-3.5 h-3.5" />
+      <span>
+        {role
+          ? `Your role (${role}) is read-only on this project.`
+          : 'Read-only access — sign in or request a contributor role.'}
+      </span>
     </div>
   )
 }
@@ -86,9 +114,11 @@ function StartWorkflowCard({ projectId }: { projectId: string }) {
 function ActiveWorkflowCard({
   projectId,
   workflow,
+  canRun,
 }: {
   projectId: string
   workflow: WorkflowResponse
+  canRun: boolean
 }) {
   const runPhase = useRunPhase(projectId, workflow.id)
   const phasesState = (workflow.phases_state ?? {}) as Record<string, { status?: string }>
@@ -127,7 +157,8 @@ function ActiveWorkflowCard({
             <button
               key={phase}
               onClick={() => runPhase.mutate(phase)}
-              disabled={runPhase.isPending}
+              disabled={runPhase.isPending || !canRun}
+              title={!canRun ? 'Read-only role' : undefined}
               className={cn(
                 'inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border',
                 'disabled:opacity-50 disabled:cursor-not-allowed',

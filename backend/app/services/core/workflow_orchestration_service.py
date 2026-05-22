@@ -23,6 +23,7 @@ from backend.app.models.task import Task
 from backend.app.models.user import User
 from backend.app.models.workflow import Workflow
 from backend.app.services.core.artifact_persistence_service import ArtifactPersistenceService
+from backend.app.services.core.project_context_service import ProjectContextService
 from backend.app.services.core.task_service import TaskService
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,17 @@ class WorkflowOrchestrationService:
         )
         workflow.current_phase = "ARCHITECTURE_DECISION"
         workflow.status = "awaiting_input"
+
+        # Capture analysis + architecture-decision digests into ProjectContext.
+        # Done before commit so it lands in the same transaction as the workflow row.
+        ProjectContextService.capture_from_state(
+            db,
+            project_id=project.id,
+            state=state,
+            phase="ARCHITECTURE_DECISION",
+            generated_by="OrchestratorAgent",
+        )
+
         db.commit()
         db.refresh(workflow)
         db.refresh(task)
@@ -115,6 +127,17 @@ class WorkflowOrchestrationService:
         )
         workflow.current_phase = "PLAN_SELECTED"
         workflow.status = "running"
+
+        # Persist the chosen plan + cost into ProjectContext so future reruns
+        # and recommendation surfaces can replay without recomputing.
+        ProjectContextService.capture_from_state(
+            db,
+            project_id=workflow.project_id,
+            state=state,
+            phase="PLAN_SELECTED",
+            generated_by="OrchestratorAgent",
+        )
+
         db.commit()
         db.refresh(workflow)
         return state
@@ -188,6 +211,16 @@ class WorkflowOrchestrationService:
             TaskService.save_result(db, task, state["result"])
         if state.get("plan"):
             TaskService.save_plan(db, task, state["plan"])
+
+        # Per-phase ProjectContext capture — docker/terraform/k8s hints,
+        # infrastructure summary, and validation rollup.
+        ProjectContextService.capture_from_state(
+            db,
+            project_id=project.id,
+            state=state,
+            phase=phase_upper,
+            generated_by=agent_name,
+        )
 
         db.commit()
         db.refresh(workflow)

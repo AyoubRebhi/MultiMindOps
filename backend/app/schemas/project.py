@@ -12,23 +12,46 @@ StrategyTier = Literal["minimal", "balanced", "robust"]
 ArchitectureType = Literal[
     "monolith", "microservices", "serverless", "static_site", "data_pipeline", "other"
 ]
+RepositoryVisibility = Literal["public", "private"]
+
+# AI bootstrap state machine — kept synchronized with Project.bootstrap_status
+# and ProjectBootstrapService transitions. See backend/app/services/core/
+# project_bootstrap_service.py.
+ProjectBootstrapStatus = Literal[
+    "pending",
+    "analyzing",
+    "context_building",
+    "ready",
+    "failed",
+]
 
 
 # ─── Project ─────────────────────────────────────────────────────────────────
+#
+# The architecture_type / application_profile / default_strategy_tier fields
+# are RETAINED on the API surface for backwards compatibility but the new UX
+# does not expose them in the New Project form — the AI bootstrap infers them
+# from repository analysis. Callers that omit them get nulls and the AI fills
+# them in later.
 
 class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
     repository_url: Optional[str] = None
+    repository_visibility: Optional[RepositoryVisibility] = "public"
+    # Legacy classifiers — optional; left in so existing API clients keep
+    # working. The bootstrap pipeline writes these post-analysis when the AI
+    # can infer them.
     architecture_type: Optional[ArchitectureType] = None
     application_profile: Optional[str] = None
-    default_strategy_tier: StrategyTier = "balanced"
+    default_strategy_tier: Optional[StrategyTier] = None
 
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = None
     repository_url: Optional[str] = None
+    repository_visibility: Optional[RepositoryVisibility] = None
     architecture_type: Optional[ArchitectureType] = None
     application_profile: Optional[str] = None
     default_strategy_tier: Optional[StrategyTier] = None
@@ -43,10 +66,13 @@ class ProjectResponse(BaseModel):
     name: str
     description: Optional[str] = None
     repository_url: Optional[str] = None
+    repository_visibility: Optional[str] = None
     architecture_type: Optional[str] = None
     application_profile: Optional[str] = None
     default_strategy_tier: Optional[str] = None
     current_status: str
+    bootstrap_status: str = "pending"
+    bootstrap_error: Optional[str] = None
     project_metadata: Dict[str, Any] = {}
     created_at: datetime
     updated_at: datetime
@@ -82,6 +108,7 @@ class ArtifactResponse(BaseModel):
     artifact_subtype: str
     content: str
     validation_status: str
+    approval_state: str = "pending_review"
     generated_by_agent: Optional[str] = None
     approved_by: Optional[str] = None
     version: int
@@ -164,6 +191,55 @@ class WorkflowPhaseRunResponse(BaseModel):
 
 class ArtifactDetailResponse(ArtifactResponse):
     versions: List["ArtifactVersionResponse"] = []
+    approvals: List["ArtifactApprovalResponse"] = []
+
+
+# ─── ProjectContext ──────────────────────────────────────────────────────────
+
+class ProjectContextResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    project_id: str
+    context_type: str
+    content: Dict[str, Any] = {}
+    generated_by: Optional[str] = None
+    embedding_reference: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ─── Artifact approval workflow ──────────────────────────────────────────────
+
+ApprovalAction = Literal["approve", "reject", "request_changes"]
+ApprovalState  = Literal["pending_review", "approved", "rejected", "requires_changes"]
+
+
+class ArtifactApprovalCreate(BaseModel):
+    action: ApprovalAction
+    comment: Optional[str] = Field(None, max_length=4000)
+
+
+class ArtifactApprovalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    artifact_id: str
+    approved_by: str
+    action: str
+    comment: Optional[str] = None
+    created_at: datetime
+
+
+# ─── Membership management ───────────────────────────────────────────────────
+
+class ProjectMemberCreate(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    role: ProjectRole = "DEVELOPER"
+
+
+class ProjectMemberUpdate(BaseModel):
+    role: ProjectRole
 
 
 ArtifactDetailResponse.model_rebuild()
