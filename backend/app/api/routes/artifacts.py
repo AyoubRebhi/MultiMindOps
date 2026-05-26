@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from backend.app.core.security import get_current_user
+from backend.app.models.user import User
 from backend.app.services.repository.github_service import GitHubService
 
 router = APIRouter(prefix="/artifacts", tags=["Artifacts"])
@@ -13,6 +15,7 @@ def view_artifact(
     branch: str = Query("main", description="Git branch to read from"),
     repository_visibility: str = Query("public", description="public or private"),
     github_token: str | None = Header(default=None, alias="X-GitHub-Token"),
+    _user: User = Depends(get_current_user),
 ):
     try:
         return github_service.get_repository_file_content(

@@ -174,6 +174,28 @@ export function useCreateApproval(projectId: string, artifactId: string) {
   })
 }
 
+// ─── Membership mutations ───────────────────────────────────────────────────
+
+export function useAddProjectMember(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: { user_id: string; role: ProjectRole }) =>
+      projectsApi.addMember(projectId, payload),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: [...PROJECTS_KEY, projectId, 'members'] }),
+  })
+}
+
+export function useUpdateProjectMember(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ memberId, role }: { memberId: string; role: ProjectRole }) =>
+      projectsApi.updateMember(projectId, memberId, role),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: [...PROJECTS_KEY, projectId, 'members'] }),
+  })
+}
+
 // ─── Identity / role ────────────────────────────────────────────────────────
 
 export function useIdentity() {

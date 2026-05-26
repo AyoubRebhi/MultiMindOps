@@ -117,6 +117,86 @@ CRITICAL_COLUMNS: List[ColumnRequirement] = [
         ),
         purpose="public/private flag driving credential resolution",
     ),
+    # ── Auth foundation columns ────────────────────────────────────────────
+    # See backend/migrations/auth_foundation.sql for the canonical migration.
+    ColumnRequirement(
+        table="users",
+        column="password_hash",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR"
+        ),
+        purpose="bcrypt password hash for the local-auth flow",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="avatar_url",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR"
+        ),
+        purpose="user avatar URL (UI)",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="auth_provider",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider "
+            "VARCHAR NOT NULL DEFAULT 'local'"
+        ),
+        purpose="auth provider tag (local | dev | google | github | ...)",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="email_verified",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified "
+            "VARCHAR NOT NULL DEFAULT 'false'"
+        ),
+        purpose="email confirmation flag",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="account_status",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status "
+            "VARCHAR NOT NULL DEFAULT 'active'"
+        ),
+        purpose="account state machine (active | disabled | locked | pending)",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="last_login_at",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ"
+        ),
+        purpose="last successful login timestamp",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="failed_login_attempts",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_login_attempts "
+            "INTEGER NOT NULL DEFAULT 0"
+        ),
+        purpose="lockout counter (reset on success)",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="created_by",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by "
+            "VARCHAR REFERENCES users (id) ON DELETE SET NULL"
+        ),
+        purpose="audit pointer: who created this user",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="updated_by",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_by "
+            "VARCHAR REFERENCES users (id) ON DELETE SET NULL"
+        ),
+        purpose="audit pointer: who last updated this user",
+    ),
 ]
 
 

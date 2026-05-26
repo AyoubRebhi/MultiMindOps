@@ -22,13 +22,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.app.core.security import get_current_user
 from backend.app.database.session import SessionLocal
 from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Corrector"])
+router = APIRouter(tags=["Corrector"], dependencies=[Depends(get_current_user)])
 
 _MAX_RETRIES_DEFAULT = 3
 

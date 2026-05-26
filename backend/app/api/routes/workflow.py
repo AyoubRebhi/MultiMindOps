@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.app.agents.orchestrator_agent import OrchestratorAgent
+from backend.app.core.security import get_current_user
 from backend.app.database.session import SessionLocal
 from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
@@ -35,7 +36,11 @@ from backend.app.services.environment.uploaded_env_file_service import UploadedE
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/workflow", tags=["Workflow"])
+router = APIRouter(
+    prefix="/workflow",
+    tags=["Workflow"],
+    dependencies=[Depends(get_current_user)],
+)
 _env_service = UploadedEnvFileService()
 
 

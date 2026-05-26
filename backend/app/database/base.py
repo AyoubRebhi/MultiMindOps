@@ -12,5 +12,6 @@ from backend.app.models import (  # noqa: E402,F401
     workflow,
     artifact,
     repository_analysis,
+    session,
     task,
 )

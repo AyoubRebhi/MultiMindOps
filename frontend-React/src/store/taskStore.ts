@@ -8,9 +8,13 @@ interface TaskStore {
   setWizard: (state: Partial<StepState>) => void
   resetWizard: () => void
 
-  // Sidebar collapsed
+  // Sidebar collapsed (desktop)
   sidebarCollapsed: boolean
   toggleSidebar: () => void
+
+  // Mobile drawer (transient — not persisted)
+  mobileNavOpen: boolean
+  setMobileNavOpen: (open: boolean) => void
 }
 
 const initialWizard: StepState = { step: 'form' }
@@ -26,6 +30,9 @@ export const useTaskStore = create<TaskStore>()(
       sidebarCollapsed: false,
       toggleSidebar: () =>
         set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+
+      mobileNavOpen: false,
+      setMobileNavOpen: (open) => set({ mobileNavOpen: open }),
     }),
     {
       name: 'devsecops-ui',

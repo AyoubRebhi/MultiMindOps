@@ -106,6 +106,25 @@ class Settings(BaseSettings):
     MCP_SERVER_PATH: str = "mcp/server.py"
     MCP_CACHE_TTL_HOURS: int = 24
 
+    # ── Auth / JWT ──────────────────────────────────────────────────────────
+    # Secret MUST be overridden via .env in any non-dev deployment — the
+    # built-in default is only meant to keep local dev boot working. If the
+    # value is left at the default in production, anyone with the source
+    # tree can mint valid tokens. ``APP_ENV != 'development'`` triggers a
+    # warning in the model validator below.
+    JWT_SECRET: str = "dev-insecure-change-me"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ISSUER: str = "devsecops-ai-platform"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+    # Soft-lock an account after this many consecutive failed logins. 0
+    # disables lockout entirely.
+    AUTH_MAX_FAILED_LOGIN_ATTEMPTS: int = 10
+    # When true, ``get_current_user`` falls back to the seeded dev user if
+    # no Authorization header is sent. Useful for local dev; MUST be false
+    # in any environment that handles real users.
+    AUTH_ALLOW_DEV_FALLBACK: bool = False
+
     # Docker Registry — used by DockerExecutor to push built images
     # Type: "dockerhub" | "ghcr" | "generic"
     DOCKER_REGISTRY_TYPE: str = "dockerhub"
@@ -134,6 +153,19 @@ class Settings(BaseSettings):
             _cfg_logger.warning(
                 "TERRAFORM_LLM_PROVIDER=lightning but LIGHTNING_API_KEY is not set. "
                 "LLMRouter will fall back to Groq."
+            )
+
+        # ── JWT secret sanity check ────────────────────────────────────────
+        # Warn loudly if the default secret is in use outside dev. We do not
+        # raise here because some CI/test setups leave APP_ENV at the
+        # default — failing startup would break those test runs.
+        env = (self.APP_ENV or "").strip().lower()
+        secret = (self.JWT_SECRET or "").strip()
+        if env != "development" and (not secret or secret == "dev-insecure-change-me"):
+            _cfg_logger.warning(
+                "JWT_SECRET is unset or left at the insecure default while "
+                "APP_ENV=%s. Set JWT_SECRET in .env to a long random string.",
+                env or "(empty)",
             )
         return self
 

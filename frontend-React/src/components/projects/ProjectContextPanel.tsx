@@ -151,14 +151,24 @@ function summarize(ctx: ProjectContextResponse): string | null {
   const c = ctx.content ?? {}
   switch (ctx.context_type) {
     case 'repository_summary': {
-      const lang = (c.language as string) ?? 'unknown'
-      const profile = (c.application_profile as string) ?? 'unknown'
+      const lang = (c.language as string) || 'unknown'
+      // application_profile is an OBJECT in the digest, not a string —
+      // pluck the human-meaningful field out instead of dumping [object Object].
+      const profileObj = (c.application_profile as Record<string, unknown> | string | null) ?? null
+      const profile =
+        typeof profileObj === 'string'
+          ? profileObj
+          : (profileObj?.application_type as string) ?? 'unknown'
       const services = (c.service_count as number) ?? 0
       return `${lang} · ${profile} · ${services} service(s)`
     }
     case 'detected_stack': {
       const frameworks = (c.frameworks as string[]) ?? []
-      return frameworks.length ? frameworks.slice(0, 5).join(', ') : null
+      if (frameworks.length) return frameworks.slice(0, 5).join(', ')
+      // Fall back to runtime/language when frameworks empty — otherwise the
+      // card renders nameless and the user has to expand to see anything.
+      const runtime = (c.runtime as string) || (c.language as string) || null
+      return runtime || null
     }
     case 'detected_services': {
       const services = (c.services as unknown[]) ?? []

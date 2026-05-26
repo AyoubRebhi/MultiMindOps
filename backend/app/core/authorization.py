@@ -26,6 +26,7 @@ from typing import Iterable, Set
 from fastapi import Depends, HTTPException, Path, status
 from sqlalchemy.orm import Session
 
+from backend.app.core.auth_errors import forbidden
 from backend.app.core.security import get_current_user, get_db
 from backend.app.models.project import Project, ProjectMember
 from backend.app.models.user import User
@@ -126,9 +127,8 @@ def require_project_role(*roles: str):
                 "[authz] denied user=%s project=%s role=%s required=%s",
                 current_user.id, project_id, role, sorted(allowed),
             )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Role '{role}' is not authorized for this action.",
+            raise forbidden(
+                f"Role '{role}' is not authorized for this action."
             )
         return member
 

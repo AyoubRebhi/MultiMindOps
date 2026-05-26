@@ -14,15 +14,20 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+from backend.app.core.security import get_current_user
 from backend.app.services.quality.llm_judge_service import get_llm_judge_service
 from backend.app.services.quality.plan_judge_service import get_plan_judge_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/evaluation", tags=["Evaluation"])
+router = APIRouter(
+    prefix="/evaluation",
+    tags=["Evaluation"],
+    dependencies=[Depends(get_current_user)],
+)
 
 # ---------------------------------------------------------------------------
 # Request / Response schemas

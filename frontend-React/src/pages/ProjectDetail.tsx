@@ -31,6 +31,10 @@ import { cn, timeAgo } from '@/lib/utils'
 import { ArtifactViewer } from '@/components/projects/ArtifactViewer'
 import { WorkflowPanel } from '@/components/projects/WorkflowPanel'
 import { ProjectContextPanel } from '@/components/projects/ProjectContextPanel'
+import { MembersTab } from '@/components/projects/MembersTab'
+import { RoleBadge } from '@/components/projects/RoleBadge'
+import { CodeAnalysisPanel } from '@/components/projects/CodeAnalysisPanel'
+import { useAuth } from '@/context/AuthContext'
 import { ArchitectureDecisionPanel } from '@/components/architecture/ArchitectureDecisionPanel'
 import { WorkflowTimeline } from '@/components/workflow/WorkflowTimeline'
 import type {
@@ -60,8 +64,9 @@ type TabKey = (typeof TABS)[number]['key']
 
 // Maps an Artifact.artifact_type → tab. Tabs not in this map render nothing
 // from the artifact list (handled by switch in the body).
+// NOTE: 'analysis' is handled by CodeAnalysisPanel (ProjectContext, not Artifact),
+// so it is intentionally absent here.
 const TYPE_BY_TAB: Partial<Record<TabKey, string[]>> = {
-  analysis: ['analysis'],
   docker: ['docker'],
   terraform: ['terraform'],
   kubernetes: ['kubernetes'],
@@ -80,6 +85,7 @@ export default function ProjectDetail() {
   const { data: workflows } = useProjectWorkflows(id)
   const { data: members } = useProjectMembers(id)
   const role = useProjectRole(id)
+  const { user } = useAuth()
 
   const latestWorkflow = workflows?.[0]
   const canSelectPlan   = !!role && CONTRIBUTOR_ROLES.has(role)
@@ -120,8 +126,9 @@ export default function ProjectDetail() {
             {project.architecture_type && <Chip>{project.architecture_type}</Chip>}
             {project.default_strategy_tier && <Chip>Tier: {project.default_strategy_tier}</Chip>}
             {role && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-600/15 text-brand-700 dark:text-brand-300 border border-brand-200 dark:border-brand-500/30">
-                Your role: {role}
+              <span className="inline-flex items-center gap-1.5">
+                <span className="text-slate-400 dark:text-slate-500">Your role:</span>
+                <RoleBadge role={role} />
               </span>
             )}
             {project.repository_url && (
@@ -171,6 +178,8 @@ export default function ProjectDetail() {
           canSelectPlan,
           canRegenerate,
           canApprove,
+          currentUserRole: role,
+          currentUserId: user?.id ?? null,
         })}
       </section>
     </div>
@@ -187,6 +196,8 @@ interface RenderTabArgs {
   canSelectPlan: boolean
   canRegenerate: boolean
   canApprove: boolean
+  currentUserRole: ProjectRole | null
+  currentUserId: string | null
 }
 
 function renderTab({
@@ -198,6 +209,8 @@ function renderTab({
   latestWorkflow,
   canSelectPlan,
   canRegenerate,
+  currentUserRole,
+  currentUserId,
 }: RenderTabArgs) {
   if (tab === 'overview') {
     return (
@@ -230,11 +243,21 @@ function renderTab({
       />
     )
   }
+  if (tab === 'analysis') {
+    return <CodeAnalysisPanel projectId={projectId} />
+  }
   if (tab === 'context') {
     return <ProjectContextPanel projectId={projectId} />
   }
   if (tab === 'members') {
-    return <MembersTab members={members} />
+    return (
+      <MembersTab
+        projectId={projectId}
+        members={members}
+        currentUserRole={currentUserRole}
+        currentUserId={currentUserId}
+      />
+    )
   }
   const types = TYPE_BY_TAB[tab] ?? []
   const filtered = artifacts.filter((a) => types.includes(a.artifact_type))
@@ -633,40 +656,3 @@ function capitalize(s: string) {
 // so the Stack card stands apart from the Code Analysis tab icon.
 const Code2Icon = FileCode2
 
-function MembersTab({ members }: { members: ProjectMemberResponse[] }) {
-  if (!members.length)
-    return <Placeholder title="No members" body="Members will be invitable in a later phase." />
-  return (
-    <ul className="space-y-2">
-      {members.map((m) => (
-        <li
-          key={m.id}
-          className={cn(
-            'flex items-center justify-between p-3 rounded-lg',
-            'bg-white dark:bg-surface-800/40',
-            'border border-slate-200 dark:border-white/[0.06]',
-          )}
-        >
-          <div className="text-xs font-mono text-slate-500">{m.user_id}</div>
-          <span className="text-xs px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-600/20 text-brand-700 dark:text-brand-300">
-            {m.role}
-          </span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function Placeholder({ title, body }: { title: string; body: string }) {
-  return (
-    <div
-      className={cn(
-        'p-6 rounded-xl text-center',
-        'border border-dashed border-slate-200 dark:border-white/[0.08]',
-      )}
-    >
-      <div className="text-sm font-medium text-slate-700 dark:text-slate-300">{title}</div>
-      <p className="text-xs text-slate-500 dark:text-slate-500 mt-1 max-w-md mx-auto">{body}</p>
-    </div>
-  )
-}

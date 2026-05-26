@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from backend.app.agents.orchestrator_agent import OrchestratorAgent
+from backend.app.core.security import get_current_user
 from backend.app.database.session import SessionLocal
+from backend.app.models.user import User
 from backend.app.schemas.task import (
     GenerateArtifactsRequest,
     PlanPreviewRequest,
@@ -19,7 +21,14 @@ from backend.app.schemas.task import (
 from backend.app.services.core.task_service import TaskService
 from backend.app.services.environment.uploaded_env_file_service import UploadedEnvFileService
 
-router = APIRouter(prefix="/tasks", tags=["Tasks"])
+# Every /tasks endpoint requires authentication. The legacy task model
+# is not project-scoped, so we cannot enforce per-tenant isolation here
+# without a follow-up migration — authentication alone is the gate today.
+router = APIRouter(
+    prefix="/tasks",
+    tags=["Tasks"],
+    dependencies=[Depends(get_current_user)],
+)
 uploaded_env_service = UploadedEnvFileService()
 
 

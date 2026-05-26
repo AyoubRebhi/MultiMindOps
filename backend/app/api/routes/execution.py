@@ -28,7 +28,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
+from backend.app.core.security import get_current_user
 from backend.app.database.session import SessionLocal
+from backend.app.models.user import User
 from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
 from backend.app.services.execution.docker_executor import DockerExecutor
@@ -572,6 +574,7 @@ async def _run_build_background(
 async def start_docker_build(
     task_id: str,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Start an async Docker build for the given task."""
     task = TaskService.get_task(db, task_id)
@@ -780,16 +783,18 @@ async def start_docker_build(
 async def retry_docker_build(
     task_id: str,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Retry Docker build using the latest saved editable artifacts."""
     logger.info("[Execution] Retry build requested for task=%s", task_id)
-    return await start_docker_build(task_id, db)
+    return await start_docker_build(task_id, db, user)
 
 
 @router.get("/api/execution/docker/status/{task_id}")
 def get_docker_build_status(
     task_id: str,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Return persisted Docker execution state (logs survive page refresh)."""
     task = TaskService.get_task(db, task_id)
