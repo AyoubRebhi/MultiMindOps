@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -53,6 +53,24 @@ class ColumnRequirement:
     column: str
     repair_sql: str
     purpose: str  # one-line human description for log output
+
+
+@dataclass(frozen=True)
+class NotNullRequirement:
+    """A column that MUST be NOT NULL in the live schema.
+
+    Unlike ``ColumnRequirement`` this does not self-heal: forcibly setting
+    a column NOT NULL when nulls already exist would either crash or hide
+    a tenancy violation. The guard reports the breach loudly and refuses
+    to boot — operators run the corresponding SQL migration explicitly.
+    The check is skipped if the column does not exist yet (a fresh deploy
+    on an empty DB still works because create_all() emits NOT NULL).
+    """
+
+    table: str
+    column: str
+    purpose: str
+    migration_hint: str  # which migration file to run by hand
 
 
 # Critical columns the project-centric model requires. Add new entries here
@@ -197,6 +215,144 @@ CRITICAL_COLUMNS: List[ColumnRequirement] = [
         ),
         purpose="audit pointer: who last updated this user",
     ),
+    # ── Phase 4 — encrypted credentials canary ─────────────────────────────
+    # The credentials table is created by SQLAlchemy at create_all() time.
+    # We declare ONE canary column so the guard's missing-table path fires
+    # if the table is somehow absent (older deployment, partial migration);
+    # the guard logs the table name and refuses to boot.
+    ColumnRequirement(
+        table="project_credentials",
+        column="encrypted_payload",
+        repair_sql=(
+            "ALTER TABLE project_credentials "
+            "ADD COLUMN IF NOT EXISTS encrypted_payload TEXT NOT NULL DEFAULT ''"
+        ),
+        purpose=(
+            "Phase 4 — Fernet ciphertext column on the per-project "
+            "credentials store; canary that surfaces a missing table early"
+        ),
+    ),
+    # ── Phase 3 — execution jobs canary ─────────────────────────────────────
+    # Same canary pattern: surfaces a missing execution_jobs table at boot.
+    # The per-project run-lock partial index is emitted by create_all() and
+    # the migration; the guard does not attempt to (re)create it.
+    ColumnRequirement(
+        table="execution_jobs",
+        column="status",
+        repair_sql=(
+            "ALTER TABLE execution_jobs "
+            "ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'pending'"
+        ),
+        purpose=(
+            "Phase 3 — durable job status column; canary that surfaces a "
+            "missing execution_jobs table early"
+        ),
+    ),
+    # ── Phase 2 — governance enforcement ───────────────────────────────────
+    # Content-hash columns on artifacts + artifact_versions, plus the
+    # approved_content_hash / approved_at columns that bind an approval to
+    # the exact bytes the reviewer saw. Self-healed additively here so
+    # older deployments come up; the canonical migration is
+    # phase2_governance_enforcement.sql (it also backfills hashes).
+    ColumnRequirement(
+        table="artifacts",
+        column="content_hash",
+        repair_sql=(
+            "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS content_hash VARCHAR"
+        ),
+        purpose="Phase 2 — SHA-256 of current content; drives the approval-drift gate",
+    ),
+    ColumnRequirement(
+        table="artifacts",
+        column="approved_at",
+        repair_sql=(
+            "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ"
+        ),
+        purpose="Phase 2 — when the current content was approved",
+    ),
+    ColumnRequirement(
+        table="artifacts",
+        column="approved_content_hash",
+        repair_sql=(
+            "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS approved_content_hash VARCHAR"
+        ),
+        purpose="Phase 2 — the content hash that was approved; drift→re-review",
+    ),
+    ColumnRequirement(
+        table="artifact_versions",
+        column="content_hash",
+        repair_sql=(
+            "ALTER TABLE artifact_versions ADD COLUMN IF NOT EXISTS content_hash VARCHAR"
+        ),
+        purpose="Phase 2 — frozen hash on each historical version",
+    ),
+    ColumnRequirement(
+        table="artifact_approvals",
+        column="approved_content_hash",
+        repair_sql=(
+            "ALTER TABLE artifact_approvals "
+            "ADD COLUMN IF NOT EXISTS approved_content_hash VARCHAR"
+        ),
+        purpose="Phase 2 — historical hash captured at decision time",
+    ),
+    ColumnRequirement(
+        table="artifact_approvals",
+        column="approved_version",
+        repair_sql=(
+            "ALTER TABLE artifact_approvals "
+            "ADD COLUMN IF NOT EXISTS approved_version INTEGER"
+        ),
+        purpose="Phase 2 — artifact version at decision time",
+    ),
+    # Canaries for the new release tables — create_all() makes them; if
+    # they're missing the guard refuses to boot with a clear pointer to
+    # the migration.
+    ColumnRequirement(
+        table="release_candidates",
+        column="status",
+        repair_sql=(
+            "ALTER TABLE release_candidates "
+            "ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'draft'"
+        ),
+        purpose="Phase 2 — release candidate status canary",
+    ),
+    ColumnRequirement(
+        table="release_artifact_snapshots",
+        column="snapshot_content_hash",
+        repair_sql=(
+            "ALTER TABLE release_artifact_snapshots "
+            "ADD COLUMN IF NOT EXISTS snapshot_content_hash VARCHAR NOT NULL DEFAULT ''"
+        ),
+        purpose="Phase 2 — frozen snapshot hash canary",
+    ),
+    # ── Phase 5 — workflow event log ───────────────────────────────────────
+    ColumnRequirement(
+        table="workflow_phase_events",
+        column="phase",
+        repair_sql=(
+            "ALTER TABLE workflow_phase_events "
+            "ADD COLUMN IF NOT EXISTS phase VARCHAR NOT NULL DEFAULT 'UNKNOWN'"
+        ),
+        purpose="Phase 5 — workflow event log canary",
+    ),
+]
+
+
+# Columns the guard refuses to boot without — invariants that secure
+# multi-tenant access. Promoting a column from nullable→NOT NULL is too
+# dangerous to self-heal (it would either crash on existing nulls or, worse,
+# hide them by inserting fake values), so the guard only DIAGNOSES and the
+# operator runs the SQL migration.
+NOT_NULL_REQUIREMENTS: List[NotNullRequirement] = [
+    NotNullRequirement(
+        table="tasks",
+        column="project_id",
+        purpose=(
+            "closes the cross-tenant access surface — every Task must "
+            "resolve to exactly one Project so the role gate is meaningful"
+        ),
+        migration_hint="backend/migrations/phase1_authz_unification.sql",
+    ),
 ]
 
 
@@ -214,6 +370,50 @@ def _existing_columns(engine: Engine, table: str) -> set[str]:
     except SQLAlchemyError as exc:
         logger.warning("[SCHEMA_GUARD] Inspector failed for table=%s: %s", table, exc)
         return set()
+
+
+def _column_nullable(engine: Engine, table: str, column: str) -> Optional[bool]:
+    """Return True/False if the column exists, None if the column or table is missing.
+
+    SQLAlchemy's reflection returns ``{"nullable": bool}`` on each column dict;
+    we surface the tri-state because "doesn't exist" is meaningfully different
+    from "exists and is nullable".
+    """
+    try:
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return None
+        for col in insp.get_columns(table):
+            if col["name"] == column:
+                return bool(col.get("nullable", True))
+        return None
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "[SCHEMA_GUARD] Inspector failed reading %s.%s nullability: %s",
+            table, column, exc,
+        )
+        return None
+
+
+def _count_null_rows(engine: Engine, table: str, column: str) -> Optional[int]:
+    """Best-effort SELECT COUNT(*) WHERE column IS NULL — None on error.
+
+    Used purely for diagnostic output so operators see how many rows the
+    migration would need to rescue. We do not block on the count itself —
+    the nullability flag is the authoritative invariant.
+    """
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(f"SELECT COUNT(*) FROM {table} WHERE {column} IS NULL")
+            ).scalar_one()
+            return int(row or 0)
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "[SCHEMA_GUARD] Could not count NULLs in %s.%s: %s",
+            table, column, exc,
+        )
+        return None
 
 
 def _apply_repair(engine: Engine, req: ColumnRequirement) -> None:
@@ -298,7 +498,55 @@ def run_schema_guard(engine: Engine) -> None:
             f"before restarting."
         )
 
+    # ── NOT NULL invariants — diagnose only, never auto-heal ──────────────
+    # These are tenancy invariants. If a column is nullable that must not be,
+    # or a NULL row slipped through, we refuse to boot. The operator runs
+    # the migration; we never silently re-tighten the schema.
+    notnull_violations: List[str] = []
+    for req in NOT_NULL_REQUIREMENTS:
+        is_nullable = _column_nullable(engine, req.table, req.column)
+        if is_nullable is None:
+            # Column or table is missing — that's a separate failure mode
+            # the column-level requirements would have surfaced if relevant.
+            # Skip the not-null check; do not mask the original error.
+            logger.info(
+                "[SCHEMA_GUARD] NOT NULL check skipped for %s.%s (column not present)",
+                req.table, req.column,
+            )
+            continue
+        if is_nullable:
+            null_count = _count_null_rows(engine, req.table, req.column)
+            notnull_violations.append(
+                f"{req.table}.{req.column} is nullable "
+                f"(NULL rows: {null_count if null_count is not None else 'unknown'}). "
+                f"Run {req.migration_hint} — {req.purpose}."
+            )
+            continue
+        # Defensive: the column is declared NOT NULL but the DB might still
+        # hold residual NULLs if NOT NULL was added without a backfill on a
+        # previous deploy (which Postgres would actually reject — this is a
+        # belt-and-braces check).
+        null_count = _count_null_rows(engine, req.table, req.column)
+        if null_count and null_count > 0:
+            notnull_violations.append(
+                f"{req.table}.{req.column} is declared NOT NULL but still has "
+                f"{null_count} NULL row(s). DB is inconsistent — investigate manually."
+            )
+
+    if notnull_violations:
+        for line in notnull_violations:
+            logger.error("[SCHEMA_GUARD] NOT NULL invariant breach: %s", line)
+        raise RuntimeError(
+            "[SCHEMA_GUARD] NOT NULL invariant breach — refusing to start:\n  - "
+            + "\n  - ".join(notnull_violations)
+        )
+
 
 def describe_requirements() -> Iterable[ColumnRequirement]:
     """Expose the requirement list (used by tests and ops tools)."""
     return tuple(CRITICAL_COLUMNS)
+
+
+def describe_not_null_requirements() -> Iterable[NotNullRequirement]:
+    """Expose the NOT NULL invariants (used by tests and ops tools)."""
+    return tuple(NOT_NULL_REQUIREMENTS)

@@ -21,7 +21,7 @@ the policy obvious at the call site instead of buried inside the handler.
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Set
+from typing import Iterable, Set, Tuple
 
 from fastapi import Depends, HTTPException, Path, status
 from sqlalchemy.orm import Session
@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.auth_errors import forbidden
 from backend.app.core.security import get_current_user, get_db
 from backend.app.models.project import Project, ProjectMember
+from backend.app.models.task import Task
 from backend.app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -145,3 +146,113 @@ def require_project_role(*roles: str):
 require_project_member        = require_project_role("DEVELOPER", "CLOUD_ARCHITECT", "VIEWER")
 require_project_contributor   = require_project_role("DEVELOPER", "CLOUD_ARCHITECT")
 require_project_approver      = require_project_role("CLOUD_ARCHITECT")
+
+
+# ─── Task-scoped project authorization ──────────────────────────────────────
+#
+# The legacy /workflow/*, /api/tasks/*, /api/execution/*, /api/corrector/* and
+# /api/tasks/{id}/artifacts routes identify the target by ``task_id`` only.
+# Before Phase 1 they checked authentication and nothing else, which is the
+# cross-tenant hole the audit flagged. Now every such route resolves the
+# task's owning project and runs the project-role check against it, so a
+# DEVELOPER on Project A cannot reach Project B's tasks even when they know
+# the task_id.
+#
+# The dependency returns (Task, ProjectMember) so handlers don't have to
+# re-query the task themselves — a single DB roundtrip serves both auth and
+# the handler's data needs.
+
+
+def resolve_task_membership(
+    db: Session,
+    *,
+    task_id: str,
+    user: User,
+    allowed_roles: Set[str],
+) -> Tuple[Task, ProjectMember]:
+    """Programmatic gate — usable from non-FastAPI contexts (e.g. WebSocket).
+
+    Identical semantics to ``require_task_project_role`` but callable
+    directly with the loaded user instead of relying on dependency injection.
+    Returns ``(task, member)``; raises ``HTTPException`` so the WebSocket
+    handler can translate to a close-code if it wants.
+    """
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if task is None:
+        # 404 on purpose — never disclose existence of a task the caller has
+        # no membership in, even with a 403. The legacy `task_id` is the same
+        # identifier that crosses tenant boundaries; treating it as private
+        # is the safe default.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+    if not task.project_id:
+        # Defensive: Phase 1 migration + schema guard make this unreachable
+        # in a correctly-migrated deployment, but if a row somehow slips
+        # through we still refuse it rather than waving it past the gate.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    member = (
+        db.query(ProjectMember)
+        .filter(
+            ProjectMember.project_id == task.project_id,
+            ProjectMember.user_id == user.id,
+        )
+        .first()
+    )
+    if member is None:
+        # 404, not 403 — see the comment in ``require_project_role``.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    role = (member.role or "").upper()
+    allowed = {r.upper() for r in allowed_roles} | ALWAYS_ALLOWED
+    if role not in allowed:
+        logger.info(
+            "[authz] task-scoped denial user=%s task=%s project=%s role=%s required=%s",
+            user.id, task_id, task.project_id, role, sorted(allowed),
+        )
+        raise forbidden(
+            f"Role '{role}' is not authorized for this action."
+        )
+    return task, member
+
+
+def require_task_project_role(*roles: str):
+    """Task-scoped project role gate (FastAPI dependency).
+
+    Resolves ``task_id`` from the path, loads the task's owning project,
+    and rejects the request unless the caller's role on that project is
+    in ``roles`` (or in ``ALWAYS_ALLOWED``).
+
+    Returns ``(Task, ProjectMember)`` so the handler can use both without
+    re-querying.
+
+    Caveat: this dependency requires ``task_id`` in the path. Routes that
+    use a different name must declare a thin wrapper that adapts the path
+    parameter and forwards to ``resolve_task_membership``.
+    """
+    allowed = {r.upper() for r in roles}
+
+    def _checker(
+        task_id: str = Path(...),
+        db: Session = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ) -> Tuple[Task, ProjectMember]:
+        return resolve_task_membership(
+            db, task_id=task_id, user=current_user, allowed_roles=allowed,
+        )
+
+    return _checker
+
+
+# Convenience aliases mirroring the project-scoped trio.
+require_task_project_member      = require_task_project_role("DEVELOPER", "CLOUD_ARCHITECT", "VIEWER")
+require_task_project_contributor = require_task_project_role("DEVELOPER", "CLOUD_ARCHITECT")
+require_task_project_approver    = require_task_project_role("CLOUD_ARCHITECT")

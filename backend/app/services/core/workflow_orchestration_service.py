@@ -23,6 +23,7 @@ from backend.app.models.task import Task
 from backend.app.models.user import User
 from backend.app.models.workflow import Workflow
 from backend.app.services.core.artifact_persistence_service import ArtifactPersistenceService
+from backend.app.services.core.credentials_service import CredentialsService
 from backend.app.services.core.project_context_service import ProjectContextService
 from backend.app.services.core.task_service import TaskService
 
@@ -67,18 +68,36 @@ class WorkflowOrchestrationService:
         db.add(workflow)
         db.flush()
 
-        task = TaskService.create_task(db, prompt)
-        # Link the task to its project + workflow so legacy code paths can resolve them.
-        task.project_id = project.id
-        task.workflow_id = workflow.id
+        # Phase 1 — Task.project_id is NOT NULL. The Task is created already
+        # linked to the project + workflow; the previous pattern of inserting
+        # and then patching the FK in is no longer possible.
+        task = TaskService.create_task(
+            db, prompt, project_id=project.id, workflow_id=workflow.id,
+        )
         TaskService.update_task_status(db, task, "in_progress")
+
+        # Phase 4 — pull the GitHub PAT (if any) from the encrypted store
+        # at request time and pass it directly into the agent call. The
+        # token is never written to ``state`` here, and the orchestrator's
+        # own writes are scrubbed by ``TaskService._sanitize_for_json``.
+        gh_token = None
+        try:
+            gh_token = CredentialsService.get_credential(
+                db, project_id=project.id, provider="github_pat",
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Credentials] github_pat fetch failed for project=%s — "
+                "architecture-decision will run without a token: %s",
+                project.id, exc.__class__.__name__,
+            )
 
         orchestrator = OrchestratorAgent()
         state = orchestrator.run_architecture_decision_phase(
             prompt=prompt,
             repo_url=project.repository_url or None,
             repository_visibility="public",
-            github_token=None,
+            github_token=gh_token,
         )
         TaskService.save_plan_awaiting_validation(db, task, state)
 
@@ -114,7 +133,11 @@ class WorkflowOrchestrationService:
         task: Task,
         plan_id: str,
     ) -> dict:
+        # Phase 4 — re-hydrate runtime-only secrets before passing state
+        # to the orchestrator. The post-call save_workflow_state strips
+        # them back out before persistence.
         state = TaskService.load_workflow_state(db, task) or {}
+        state = CredentialsService.hydrate_state(db, state, project_id=workflow.project_id)
         orchestrator = OrchestratorAgent()
         state = orchestrator.resume_with_selected_plan(prior_state=state, selected_plan_id=plan_id)
         TaskService.save_workflow_state(db, task, state)
@@ -162,6 +185,11 @@ class WorkflowOrchestrationService:
         Returns ``(state, persisted_artifact_ids)``.
         """
         prior_state = TaskService.load_workflow_state(db, task) or {}
+        # Phase 4 — re-hydrate runtime-only secrets. Stays in memory for
+        # this request only; never re-persisted.
+        prior_state = CredentialsService.hydrate_state(
+            db, prior_state, project_id=project.id,
+        )
         orchestrator = OrchestratorAgent()
 
         phase_upper = phase.upper()

@@ -21,9 +21,23 @@ class Task(Base):
     # Stores the full OrchestratorState between plan-preview and validate-plan
     workflow_state = Column(MutableDict.as_mutable(JSONB), nullable=True)
 
-    # Optional links to the project-centric model. Nullable so legacy tasks
-    # created before this migration keep working unattached.
-    project_id = Column(String, ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Project link is mandatory — Phase 1 authz unification closed the
+    # cross-tenant hole that existed while this column was nullable. Every
+    # legacy route that loads a task now also resolves the task's project
+    # and runs the role gate against it, so a Task without a project is
+    # both unreachable and security-meaningless. The migration
+    # ``backend/migrations/phase1_authz_unification.sql`` backfills older
+    # rows via the workflow link; rows that cannot be rescued must be
+    # resolved by the operator before the migration succeeds.
+    # ON DELETE CASCADE: deleting the project removes its tasks because
+    # tasks carry no value once detached and SET NULL would re-introduce
+    # the nullable hole this migration just closed.
+    project_id = Column(
+        String,
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     workflow_id = Column(String, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True, index=True)
 
     error_message = Column(Text, nullable=True)

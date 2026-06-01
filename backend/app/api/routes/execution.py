@@ -23,13 +23,21 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from backend.app.core.authorization import (
+    require_task_project_contributor,
+    require_task_project_member,
+    resolve_task_membership,
+)
 from backend.app.core.config import settings
+from backend.app.core.jwt import TokenError, decode_token
 from backend.app.core.security import get_current_user
 from backend.app.database.session import SessionLocal
+from backend.app.models.project import ProjectMember
+from backend.app.models.task import Task
 from backend.app.models.user import User
 from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
@@ -49,6 +57,7 @@ from backend.app.services.execution.execution_models import (
     ExecutionStatus,
     LogLevel,
 )
+from backend.app.services.execution.job_service import JobService
 
 logger = logging.getLogger(__name__)
 
@@ -574,7 +583,7 @@ async def _run_build_background(
 async def start_docker_build(
     task_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
 ) -> dict[str, Any]:
     """Start an async Docker build for the given task."""
     task = TaskService.get_task(db, task_id)
@@ -692,7 +701,26 @@ async def start_docker_build(
     # garbage-collected the temp clone, or this task survived a server restart),
     # re-clone from the original repo_url so the build phase is always
     # self-sufficient. Failing here is preferable to a silent repo_mirrored=0.
+    #
+    # Phase 4 — the GitHub token is NO LONGER read from state. It is fetched
+    # from the encrypted credentials store using the task's project_id at
+    # the exact moment we need it; never re-persisted. The local
+    # ``_runtime_gh_token`` lives only for the duration of this request.
     import os as _os
+    from backend.app.services.core.credentials_service import CredentialsService
+
+    _runtime_gh_token: str | None = None
+    try:
+        _runtime_gh_token = CredentialsService.get_credential(
+            db, project_id=task.project_id, provider="github_pat",
+        )
+    except Exception as exc:
+        logger.warning(
+            "[Credentials] github_pat fetch failed for project=%s task=%s — "
+            "build will proceed without a clone token: %s",
+            task.project_id, task_id, exc.__class__.__name__,
+        )
+
     if (not repo_source_path or not _os.path.isdir(repo_source_path)):
         repo_url = state.get("repo_url") or state.get("repository_url")
         if repo_url:
@@ -707,9 +735,12 @@ async def start_docker_build(
                 repo_source_path = gh.clone_repository(
                     repo_url=repo_url,
                     repository_visibility=state.get("repository_visibility", "public"),
-                    github_token=state.get("github_token"),
+                    github_token=_runtime_gh_token,
                 )
-                # Persist the fresh path so subsequent retries reuse it
+                # Persist the fresh path so subsequent retries reuse it.
+                # The save_workflow_state call scrubs any secret keys that
+                # the orchestrator may have re-introduced, so this write
+                # is safe by construction.
                 state.setdefault("infrastructure", {})["repo_source_path"] = repo_source_path
                 state["repo_path"] = repo_source_path
                 TaskService.save_workflow_state(db, task, state)
@@ -738,30 +769,43 @@ async def start_docker_build(
         f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
     )
 
-    # Pull repo_url + visibility/token from state so the executor's
-    # _ensure_repo_available step can re-clone as a last resort.
+    # Pull repo_url + visibility from state. The token is NOT stored in the
+    # job context — the worker's docker_build handler re-fetches it from the
+    # encrypted credentials store at run time (Phase 4).
     state_repo_url = state.get("repo_url") or state.get("repository_url")
     state_visibility = state.get("repository_visibility") or "public"
-    state_token = state.get("github_token")
 
-    asyncio.create_task(
-        _run_build_background(
-            task_id, artifacts, image_tag,
-            is_retry=is_retry,
-            build_number=build_number,
-            build_strategy=_build_strategy,
-            repo_source_path=repo_source_path,
-            execution_session_id=execution_session_id,
-            repo_url=state_repo_url,
-            repository_visibility=state_visibility,
-            github_token=state_token,
-        ),
-        name=f"docker_build_{task_id[:8]}",
+    # Phase 3 — enqueue a DURABLE job instead of asyncio.create_task. The
+    # in-process worker claims it and runs the build under the per-project
+    # run-lock + heartbeat + crash-recovery machinery. The idempotency key
+    # (task + build_number) dedupes a double-click that would otherwise
+    # enqueue two identical builds.
+    job = JobService.enqueue(
+        db,
+        project_id=task.project_id,
+        workflow_id=task.workflow_id,
+        task_id=task_id,
+        phase="docker_build",
+        idempotency_key=f"docker_build:{task_id}:{build_number}",
+        logs_reference="workflow_state.execution.docker.logs",
+        execution_context={
+            "task_id": task_id,
+            "artifacts": artifacts,
+            "image_tag": image_tag,
+            "is_retry": is_retry,
+            "build_number": build_number,
+            "build_strategy": _build_strategy,
+            "repo_source_path": repo_source_path,
+            "execution_session_id": execution_session_id,
+            "repo_url": state_repo_url,
+            "repository_visibility": state_visibility,
+            # NOTE: github_token is deliberately absent — see Phase 4.
+        },
     )
 
     logger.info(
-        "[Execution] Docker build started: task=%s image=%s build_number=%d session=%s repo=%s",
-        task_id, image_tag, build_number, execution_session_id, repo_source_path,
+        "[Execution] Docker build job enqueued: job=%s task=%s image=%s build_number=%d session=%s repo=%s",
+        job.id, task_id, image_tag, build_number, execution_session_id, repo_source_path,
     )
 
     return {
@@ -774,6 +818,7 @@ async def start_docker_build(
         "build_number": build_number,
         "retry_iteration": build_number,
         "execution_session_id": execution_session_id,
+        "job_id": job.id,
     }
 
 
@@ -783,18 +828,22 @@ async def start_docker_build(
 async def retry_docker_build(
     task_id: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
 ) -> dict[str, Any]:
-    """Retry Docker build using the latest saved editable artifacts."""
+    """Retry Docker build using the latest saved editable artifacts.
+
+    The gate has already validated project membership; forward the resolved
+    tuple to ``start_docker_build`` so the shared handler does not re-check.
+    """
     logger.info("[Execution] Retry build requested for task=%s", task_id)
-    return await start_docker_build(task_id, db, user)
+    return await start_docker_build(task_id, db, gate)
 
 
 @router.get("/api/execution/docker/status/{task_id}")
 def get_docker_build_status(
     task_id: str,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_member),
 ) -> dict[str, Any]:
     """Return persisted Docker execution state (logs survive page refresh)."""
     task = TaskService.get_task(db, task_id)
@@ -850,10 +899,82 @@ def get_docker_build_status(
 
 # ── WebSocket /ws/execution/{task_id} ──────────────────────────────────────────
 
+async def _ws_authenticate(
+    websocket: WebSocket,
+    task_id: str,
+    token: str | None,
+) -> tuple[Task, ProjectMember] | None:
+    """Authenticate + authorize a WebSocket handshake against a task.
+
+    Browsers cannot attach custom headers to the WS handshake, so this
+    endpoint accepts the access token via the ``?token=`` query string
+    instead of the ``Authorization`` header. The token is decoded, the
+    user is loaded, and ``resolve_task_membership`` enforces the same
+    project-membership gate that the HTTP routes use.
+
+    On failure we close the socket with a meaningful code (1008 = policy
+    violation) without ever streaming any log data, then return None so
+    the caller can short-circuit.
+    """
+    if not token:
+        await websocket.close(code=1008, reason="missing token")
+        return None
+
+    try:
+        payload = decode_token(token, expected_type="access")
+    except TokenError:
+        await websocket.close(code=1008, reason="invalid token")
+        return None
+
+    user_id = payload.get("sub")
+    if not user_id:
+        await websocket.close(code=1008, reason="invalid token")
+        return None
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None or not user.is_active_bool:
+            await websocket.close(code=1008, reason="account unavailable")
+            return None
+        try:
+            gate = resolve_task_membership(
+                db,
+                task_id=task_id,
+                user=user,
+                allowed_roles={"DEVELOPER", "CLOUD_ARCHITECT", "VIEWER"},
+            )
+        except HTTPException as exc:
+            # 404 → log stream is not visible to this caller. 403 → role.
+            # Either way the close-code is 1008 (policy violation); we
+            # avoid disclosing which one to a foreign caller.
+            logger.info(
+                "[WS] handshake denied user=%s task=%s status=%s",
+                user_id, task_id, exc.status_code,
+            )
+            await websocket.close(code=1008, reason="forbidden")
+            return None
+        return gate
+    finally:
+        db.close()
+
+
 @router.websocket("/ws/execution/{task_id}")
-async def ws_execution_logs(websocket: WebSocket, task_id: str):
+async def ws_execution_logs(
+    websocket: WebSocket,
+    task_id: str,
+    token: str | None = Query(default=None),
+):
     """
     Stream live Docker build logs to the frontend.
+
+    Authentication
+    --------------
+    The client MUST pass a valid access JWT via the ``?token=`` query
+    parameter on the handshake URL. The handshake resolves the task's
+    owning project and enforces the same role gate as the HTTP routes
+    (DEVELOPER+/VIEWER read). Unauthorized handshakes are closed with
+    code 1008 (policy violation) BEFORE any log content is sent.
 
     Payload format (standardized):
       log entry:  {"type": "log", "timestamp": "...", "level": "INFO", "message": "..."}
@@ -866,7 +987,14 @@ async def ws_execution_logs(websocket: WebSocket, task_id: str):
       - Separate asyncio task handles ping/close messages concurrently so the
         main stream loop is NEVER blocked waiting for client input.
     """
+    # Authenticate BEFORE accepting — closing pre-accept doesn't run a
+    # close handshake but does refuse the upgrade. We accept first because
+    # FastAPI's WebSocket.close() before accept() is awkward across browsers;
+    # post-accept close with code 1008 is the cleanest negative signal.
     await websocket.accept()
+    gate = await _ws_authenticate(websocket, task_id, token)
+    if gate is None:
+        return
     logger.info("[WS] Client connected: task_id=%s", task_id)
 
     # Shared cancellation flag — set by ping-receiver task on disconnect/close

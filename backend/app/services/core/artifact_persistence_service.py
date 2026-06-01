@@ -16,6 +16,7 @@ Contract guarantees
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -24,6 +25,16 @@ from sqlalchemy.orm import Session
 from backend.app.models.artifact import Artifact, ArtifactVersion
 
 logger = logging.getLogger(__name__)
+
+
+def compute_content_hash(content: str) -> str:
+    """SHA-256 of an artifact's content, deterministic across runs.
+
+    UTF-8 encoded; newlines are NOT normalised — a CRLF↔LF flip is a real
+    content change and the gate should treat it as such (it produces a
+    different file on disk and a different docker build).
+    """
+    return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
 
 
 # ─── Classification ──────────────────────────────────────────────────────────
@@ -170,6 +181,8 @@ class ArtifactPersistenceService:
             .first()
         )
 
+        new_hash = compute_content_hash(content)
+
         if existing is None:
             artifact = Artifact(
                 project_id=project_id,
@@ -177,6 +190,7 @@ class ArtifactPersistenceService:
                 artifact_type=artifact_type,
                 artifact_subtype=artifact_subtype,
                 content=content,
+                content_hash=new_hash,
                 version=1,
                 validation_status=validation_status,
                 generated_by_agent=generated_by_agent,
@@ -189,6 +203,7 @@ class ArtifactPersistenceService:
                     artifact_id=artifact.id,
                     version=1,
                     content=content,
+                    content_hash=new_hash,
                     workflow_id=workflow_id,
                     generated_by=generated_by_agent,
                 )
@@ -196,16 +211,35 @@ class ArtifactPersistenceService:
             return artifact
 
         # Existing — only append a version if content actually changed.
-        if existing.content == content:
-            # Still refresh denormalized fields (validation status / agent) in case they moved.
+        # Compare on HASH (not content) so a flag-day re-hash doesn't
+        # silently treat a real change as a no-op.
+        if existing.content_hash == new_hash:
+            # Still refresh denormalized fields in case they moved. Approval
+            # state is preserved — same content means the approval still applies.
             existing.validation_status = validation_status
             existing.generated_by_agent = generated_by_agent or existing.generated_by_agent
             existing.workflow_id = workflow_id or existing.workflow_id
             return existing
 
+        # ── Phase 2 — content change invalidates approval ─────────────────
+        # The reviewer approved the OLD content. The new bytes have not been
+        # reviewed; the enforcement gate must reject any execution attempt
+        # until a CLOUD_ARCHITECT re-approves.
+        if existing.approval_state == "approved" or existing.approved_content_hash:
+            logger.warning(
+                "[ArtifactGovernance] content changed on artifact=%s "
+                "(was hash=%s now hash=%s) — invalidating approval",
+                existing.id, existing.approved_content_hash, new_hash,
+            )
+            existing.approval_state = "pending_review"
+            existing.approved_by = None
+            existing.approved_at = None
+            existing.approved_content_hash = None
+
         next_version = (existing.version or 1) + 1
         existing.version = next_version
         existing.content = content
+        existing.content_hash = new_hash
         existing.validation_status = validation_status
         existing.generated_by_agent = generated_by_agent or existing.generated_by_agent
         existing.workflow_id = workflow_id or existing.workflow_id
@@ -215,6 +249,7 @@ class ArtifactPersistenceService:
                 artifact_id=existing.id,
                 version=next_version,
                 content=content,
+                content_hash=new_hash,
                 workflow_id=workflow_id,
                 generated_by=generated_by_agent,
             )

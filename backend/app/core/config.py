@@ -125,6 +125,36 @@ class Settings(BaseSettings):
     # in any environment that handles real users.
     AUTH_ALLOW_DEV_FALLBACK: bool = False
 
+    # ── Credential encryption (Phase 4) ──────────────────────────────────────
+    # Fernet key (or comma-separated list, newest-first, for rotation) used
+    # to encrypt per-project credentials at rest. Generate with:
+    #   python -c "from backend.app.core.encryption import generate_app_secret_key; print(generate_app_secret_key())"
+    # Empty default means the credential subsystem is DISABLED — writes raise
+    # 503 and the workflow flow degrades to "no token". MUST be set in any
+    # deployment that stores GitHub PATs / AWS credentials. The encryption
+    # module reads os.environ first (so a real env var or a test monkeypatch
+    # wins), then falls back to this value loaded from .env.
+    APP_SECRET_KEY: str = ""
+
+    # ── Durable execution jobs (Phase 3) ─────────────────────────────────────
+    # When true, the API process starts an in-process worker in its lifespan
+    # so a single container both serves HTTP and drains the job queue. Set
+    # false to run a dedicated worker process
+    # (``python -m backend.app.workers.execution_worker``) instead.
+    EXECUTION_WORKER_ENABLED: bool = True
+    # How many jobs one worker runs concurrently. Per-project mutual
+    # exclusion is enforced separately at the DB layer, so this is purely a
+    # throughput knob across DIFFERENT projects.
+    EXECUTION_WORKER_CONCURRENCY: int = 2
+    # Poll cadence for the claim loop.
+    EXECUTION_JOB_POLL_INTERVAL_SECONDS: float = 2.0
+    # How often a running job's heartbeat is refreshed.
+    EXECUTION_JOB_HEARTBEAT_INTERVAL_SECONDS: float = 10.0
+    # A running job whose heartbeat is older than this is considered orphaned
+    # and re-queued by the reaper. Must be comfortably larger than the
+    # heartbeat interval so a momentarily-slow tick doesn't trigger a false reap.
+    EXECUTION_JOB_HEARTBEAT_TIMEOUT_SECONDS: int = 60
+
     # Docker Registry — used by DockerExecutor to push built images
     # Type: "dockerhub" | "ghcr" | "generic"
     DOCKER_REGISTRY_TYPE: str = "dockerhub"
@@ -165,6 +195,25 @@ class Settings(BaseSettings):
             _cfg_logger.warning(
                 "JWT_SECRET is unset or left at the insecure default while "
                 "APP_ENV=%s. Set JWT_SECRET in .env to a long random string.",
+                env or "(empty)",
+            )
+
+        # ── Credential-encryption key check (Phase 4) ──────────────────────
+        # Outside development, an unset APP_SECRET_KEY means the credential
+        # subsystem is silently disabled — operators would discover this only
+        # when a credential write 503s. Warn at boot so it's visible in logs.
+        # Not a hard raise (same reasoning as JWT_SECRET: CI/test setups leave
+        # APP_ENV at the default), and a deployment with no private repos /
+        # cloud creds yet can legitimately run without it.
+        if env != "development" and not str(
+            os.environ.get("APP_SECRET_KEY") or self.APP_SECRET_KEY or ""
+        ).strip():
+            _cfg_logger.warning(
+                "APP_SECRET_KEY is unset while APP_ENV=%s. The credential "
+                "subsystem is DISABLED — storing GitHub/AWS credentials will "
+                "fail with 503. Generate a key with "
+                "`python -c \"from backend.app.core.encryption import "
+                "generate_app_secret_key; print(generate_app_secret_key())\"`.",
                 env or "(empty)",
             )
         return self

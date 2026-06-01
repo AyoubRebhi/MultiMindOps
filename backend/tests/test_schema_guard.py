@@ -73,12 +73,22 @@ def test_guard_repairs_missing_columns(sqlite_engine, monkeypatch):
     accept (``IF NOT EXISTS`` on ADD COLUMN, ``REFERENCES`` clauses with
     ON DELETE actions). We swap in a sqlite-compatible variant so the test
     can validate the guard's *behavior* without paying for Postgres.
+
+    Phase-1 note: the schema guard also enforces a separate NOT_NULL
+    invariant set after the column repairs run. The test fixture creates
+    ``tasks.project_id`` directly with ``NOT NULL`` so the invariant pass
+    sees the post-Phase-1 state. To validate the no-op repair path
+    independently from the invariant, we also stub out NOT_NULL_REQUIREMENTS
+    when it would otherwise reference columns the test doesn't materialize.
     """
     sqlite_safe = [
         ColumnRequirement(
             table="tasks",
             column="project_id",
-            repair_sql="ALTER TABLE tasks ADD COLUMN project_id VARCHAR",
+            # NOT NULL to match the Phase-1 invariant the guard now enforces.
+            # In production the migration backfills before tightening; in this
+            # test the column starts empty so adding NOT NULL is fine.
+            repair_sql="ALTER TABLE tasks ADD COLUMN project_id VARCHAR NOT NULL DEFAULT ''",
             purpose="test",
         ),
         ColumnRequirement(
@@ -135,7 +145,7 @@ def test_guard_is_a_no_op_on_a_healthy_schema(sqlite_engine, monkeypatch):
         ColumnRequirement(
             table="tasks",
             column="project_id",
-            repair_sql="ALTER TABLE tasks ADD COLUMN project_id VARCHAR",
+            repair_sql="ALTER TABLE tasks ADD COLUMN project_id VARCHAR NOT NULL DEFAULT ''",
             purpose="test",
         ),
     ]
@@ -143,9 +153,12 @@ def test_guard_is_a_no_op_on_a_healthy_schema(sqlite_engine, monkeypatch):
         "backend.app.core.schema_guard.CRITICAL_COLUMNS",
         sqlite_safe,
     )
-    # Pre-add the column so the guard has nothing to do.
+    # Pre-add the column NOT NULL so the column repair is a no-op AND the
+    # Phase-1 NOT NULL invariant pass is satisfied.
     with sqlite_engine.begin() as conn:
-        conn.execute(text("ALTER TABLE tasks ADD COLUMN project_id VARCHAR"))
+        conn.execute(text(
+            "ALTER TABLE tasks ADD COLUMN project_id VARCHAR NOT NULL DEFAULT ''"
+        ))
 
     # Second pass — must not raise.
     run_schema_guard(sqlite_engine)

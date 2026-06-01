@@ -14,7 +14,6 @@ analysis objects. All state mutations flow through the execution pipeline.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -22,13 +21,23 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.app.core.authorization import (
+    require_task_project_contributor,
+    require_task_project_member,
+)
 from backend.app.core.security import get_current_user
 from backend.app.database.session import SessionLocal
+from backend.app.models.project import ProjectMember
+from backend.app.models.task import Task
 from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
+from backend.app.services.execution.job_service import JobService
 
 logger = logging.getLogger(__name__)
 
+# Phase 1 — every corrector route resolves the owning project via the
+# task_id path parameter and runs the role gate against it. Read endpoints
+# require any project membership; the reanalyze trigger requires DEVELOPER+.
 router = APIRouter(tags=["Corrector"], dependencies=[Depends(get_current_user)])
 
 _MAX_RETRIES_DEFAULT = 3
@@ -81,6 +90,7 @@ def _docker_artifacts(workflow_state: dict) -> dict:
 def get_corrector_status(
     task_id: str,
     db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_member),
 ) -> dict[str, Any]:
     """
     Return the latest corrector analysis, retry lifecycle, and current phase.
@@ -123,6 +133,7 @@ def get_corrector_status(
 async def reanalyze(
     task_id: str,
     db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
 ) -> dict[str, Any]:
     """
     Re-run corrector analysis on the stored Docker build logs.
@@ -148,8 +159,6 @@ async def reanalyze(
             detail="No Docker build logs found for this task. Run a build first.",
         )
 
-    artifacts = _docker_artifacts(state)
-
     # Mark corrector as running and update phase
     execution = state.setdefault("execution", {})
     corrector = execution.setdefault("corrector", {})
@@ -163,14 +172,23 @@ async def reanalyze(
 
     logger.info("[Corrector] Re-analysis requested for task=%s", task_id)
 
-    asyncio.create_task(
-        _reanalyze_background(task_id, raw_logs, artifacts),
-        name=f"reanalyze_{task_id[:8]}",
+    # Phase 3 — enqueue a durable job instead of asyncio.create_task. The
+    # handler re-derives raw_logs + artifacts from workflow_state so the
+    # job is self-contained and re-runnable after a crash.
+    job = JobService.enqueue(
+        db,
+        project_id=task.project_id,
+        workflow_id=task.workflow_id,
+        task_id=task_id,
+        phase="corrector_reanalyze",
+        idempotency_key=f"corrector_reanalyze:{task_id}",
+        execution_context={"task_id": task_id},
     )
 
     return {
         "task_id": task_id,
         "status": "running",
+        "job_id": job.id,
         "message": (
             "Corrector re-analysis started. "
             "Poll GET /api/corrector/{task_id} for the result."

@@ -9,12 +9,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.app.core.authorization import (
+    require_task_project_contributor,
+    require_task_project_member,
+)
 from backend.app.core.security import get_current_user
 from backend.app.database.session import SessionLocal
+from backend.app.models.project import ProjectMember
+from backend.app.models.task import Task
 from backend.app.services.core.artifact_service import ArtifactService
 from backend.app.services.core.task_service import TaskService
 
 logger = logging.getLogger(__name__)
+# Phase 1 — every artifact-edit endpoint resolves the owning project via
+# task_id and runs the role gate. Read (GET) requires any member; PATCH /
+# reset / apply-ai-patch require DEVELOPER+.
 router = APIRouter(tags=["Artifact Edit"], dependencies=[Depends(get_current_user)])
 
 ARTIFACTS_BASE_ROUTE = "/api/tasks/{task_id}/artifacts"
@@ -43,6 +52,7 @@ class ResetArtifactRequest(BaseModel):
 def get_artifacts(
     task_id: str,
     db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_member),
 ) -> dict[str, Any]:
     """Return current artifact content, comparison slots, and history."""
     task = TaskService.get_task(db, task_id)
@@ -84,6 +94,7 @@ def patch_artifacts(
     task_id: str,
     body: PatchArtifactsRequest,
     db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
 ) -> dict[str, Any]:
     """Persist user-edited artifact content."""
     task = TaskService.get_task(db, task_id)
@@ -115,6 +126,7 @@ def reset_artifact(
     task_id: str,
     body: ResetArtifactRequest,
     db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
 ) -> dict[str, Any]:
     """Restore current_content to original_content for one artifact."""
     task = TaskService.get_task(db, task_id)
@@ -145,6 +157,7 @@ def reset_artifact(
 def apply_ai_patch(
     task_id: str,
     db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
 ) -> dict[str, Any]:
     """Promote stored AI patch previews into current editable artifacts."""
     task = TaskService.get_task(db, task_id)

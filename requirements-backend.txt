@@ -12,6 +12,10 @@ python-multipart
 passlib[bcrypt]>=1.7.4
 bcrypt>=4.0.0,<5.0
 PyJWT>=2.8.0
+# Symmetric encryption for project credentials (Fernet — AES-128-CBC + HMAC-SHA256).
+# Was previously available transitively via PyJWT; pinned now because the
+# credentials layer treats it as a direct, load-bearing dependency.
+cryptography>=42.0
 qdrant-client
 langgraph
 chromadb

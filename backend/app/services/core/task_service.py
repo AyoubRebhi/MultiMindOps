@@ -1,14 +1,64 @@
 import base64
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
 from backend.app.models.task import Task
 
 
+# Keys that MUST NEVER be persisted into Task.workflow_state. Credentials
+# live in the encrypted ``project_credentials`` table instead — see
+# backend/app/services/core/credentials_service.py. This set is the single
+# chokepoint: anything added here is automatically scrubbed from every
+# state write the orchestrator/workflow path makes, regardless of nesting
+# depth.
+#
+# Match is case-insensitive and applies recursively — a nested
+# ``state["auth"]["github_token"]`` is scrubbed just like a top-level one.
+_SECRET_KEYS_LOWER = frozenset({
+    "github_token",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "docker_registry_password",
+    "registry_password",
+    "password",
+    "secret",
+    "api_key",
+    "bearer_token",
+    "access_token",
+    "refresh_token",
+    "private_key",
+})
+
+
+def _is_secret_key(key: Any) -> bool:
+    """Match a JSONB key against the secret deny-list.
+
+    Case-insensitive on the assumption that an attacker (or an
+    inattentive contributor) typing ``"Github_Token"`` should not be
+    able to bypass the scrub.
+    """
+    if not isinstance(key, str):
+        return False
+    return key.strip().lower() in _SECRET_KEYS_LOWER
+
+
 def _sanitize_for_json(obj):
-    """Recursively convert non-JSON-serializable values (bytes, sets) to safe types."""
+    """Recursively convert non-JSON-serialisable values AND scrub secrets.
+
+    Two responsibilities collapsed into one pass:
+
+    1. Coerce bytes/sets into JSON-safe shapes (the original purpose).
+    2. Strip any dict entry whose KEY is in ``_SECRET_KEYS_LOWER`` so a
+       credential cannot ride the workflow_state into the DB.
+
+    Both are done in a single tree walk so a fresh secret key added to
+    the deny-list takes effect everywhere ``save_workflow_state`` /
+    ``save_plan_awaiting_validation`` are called — without each callsite
+    having to remember to call a scrub helper first.
+    """
     if isinstance(obj, bytes):
         try:
             return obj.decode("utf-8")
@@ -17,7 +67,14 @@ def _sanitize_for_json(obj):
     if isinstance(obj, set):
         return [_sanitize_for_json(item) for item in obj]
     if isinstance(obj, dict):
-        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+        # Drop secret-keyed entries instead of recursing into them so
+        # neither the key nor the value lands in storage. Recurse into
+        # non-secret entries so a nested dict still gets scrubbed.
+        return {
+            k: _sanitize_for_json(v)
+            for k, v in obj.items()
+            if not _is_secret_key(k)
+        }
     if isinstance(obj, list):
         return [_sanitize_for_json(item) for item in obj]
     return obj
@@ -25,10 +82,27 @@ def _sanitize_for_json(obj):
 
 class TaskService:
     @staticmethod
-    def create_task(db: Session, prompt: str) -> Task:
+    def create_task(
+        db: Session,
+        prompt: str,
+        *,
+        project_id: str,
+        workflow_id: Optional[str] = None,
+    ) -> Task:
+        """Create a Task row.
+
+        ``project_id`` is required since Phase 1 — tasks are no longer
+        allowed to exist outside a project boundary. Callers that used to
+        create tasks without a project (legacy /tasks/, /tasks/plan-preview,
+        /workflow/architecture-decision, /workflow/plan) were removed in
+        the same phase; the only remaining caller is
+        ``WorkflowOrchestrationService.start_workflow``.
+        """
         task = Task(
             prompt=prompt,
             status="pending",
+            project_id=project_id,
+            workflow_id=workflow_id,
             logs=[{"step": "task_created", "message": "Task created successfully"}],
         )
         db.add(task)

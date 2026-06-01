@@ -10,6 +10,7 @@ from fastapi.responses import Response
 
 from backend.app.api.router import api_router
 from backend.app.core.config import settings
+from backend.app.core.log_redaction import install_secret_redactor
 from backend.app.core.schema_guard import run_schema_guard
 from backend.app.database.base import Base
 from backend.app.database.session import engine
@@ -102,6 +103,10 @@ def setup_utf8_encoding() -> None:
 
 # Apply at import time so any module-level logging is also covered.
 setup_utf8_encoding()
+# Phase 4 — install the secret redactor before any of the application
+# modules below have a chance to log. The filter is idempotent so it's
+# safe to call again later if a worker process re-imports this file.
+install_secret_redactor()
 
 
 def create_app() -> FastAPI:
@@ -125,7 +130,37 @@ def create_app() -> FastAPI:
         route_list = "\n".join(sorted(rows))
         logger.info("Registered routes:\n%s", route_list)
         print(f"[startup] Registered routes:\n{route_list}", flush=True)
-        yield
+
+        # Phase 3 — start the in-process durable-job worker (unless an
+        # operator runs a dedicated worker process and disables this). The
+        # worker drains the execution_jobs queue: Docker builds + corrector
+        # reanalysis run here instead of as fire-and-forget asyncio tasks,
+        # so they survive a restart (the job row is reaped + re-run).
+        worker = None
+        if settings.EXECUTION_WORKER_ENABLED:
+            from backend.app.workers.execution_worker import start_in_process_worker
+            # Importing the handlers module registers the phase handlers.
+            from backend.app.workers import handlers as _handlers  # noqa: F401
+            worker = start_in_process_worker(
+                poll_interval_seconds=settings.EXECUTION_JOB_POLL_INTERVAL_SECONDS,
+                heartbeat_interval_seconds=settings.EXECUTION_JOB_HEARTBEAT_INTERVAL_SECONDS,
+                heartbeat_timeout_seconds=settings.EXECUTION_JOB_HEARTBEAT_TIMEOUT_SECONDS,
+                max_concurrency=settings.EXECUTION_WORKER_CONCURRENCY,
+            )
+            logger.info("[startup] in-process execution worker started: %s", worker.worker_id)
+        else:
+            logger.info(
+                "[startup] EXECUTION_WORKER_ENABLED=false — no in-process worker; "
+                "run `python -m backend.app.workers.execution_worker` separately."
+            )
+
+        try:
+            yield
+        finally:
+            if worker is not None:
+                from backend.app.workers.execution_worker import stop_in_process_worker
+                logger.info("[shutdown] stopping in-process execution worker")
+                await stop_in_process_worker()
 
     app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 

@@ -23,25 +23,47 @@ import traceback
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.app.agents.orchestrator_agent import OrchestratorAgent
+from backend.app.core.authorization import (
+    require_task_project_contributor,
+    require_task_project_member,
+)
 from backend.app.core.security import get_current_user
 from backend.app.database.session import SessionLocal
+from backend.app.models.project import ProjectMember
+from backend.app.models.task import Task
 from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
+from backend.app.services.core.credentials_service import CredentialsService
 from backend.app.services.core.task_service import TaskService
-from backend.app.services.environment.uploaded_env_file_service import UploadedEnvFileService
 
 logger = logging.getLogger(__name__)
 
+# Phase 1 — Execution authorization unification.
+#
+# Per-task phase endpoints (run-docker / run-terraform / run-kubernetes /
+# run-cicd / select-plan / GET state) now resolve the owning project via
+# ``require_task_project_*`` so a peer DEVELOPER cannot run a phase on a
+# task they don't have access to.
+#
+# The unscoped task-creating endpoints (``/architecture-decision``,
+# ``/plan``) were removed — they used to mint a Task with no project
+# linkage. New work flows through
+# ``POST /api/projects/{project_id}/workflows`` which carries the role gate.
 router = APIRouter(
     prefix="/workflow",
     tags=["Workflow"],
     dependencies=[Depends(get_current_user)],
 )
-_env_service = UploadedEnvFileService()
+
+_GONE_DETAIL = (
+    "This endpoint was removed in the Phase 1 authorization unification. "
+    "Use POST /api/projects/{project_id}/workflows instead — it runs the "
+    "same architecture-decision phase inside a project boundary."
+)
 
 
 # ── DB dependency ─────────────────────────────────────────────────────────────
@@ -153,6 +175,13 @@ def _load_state(db: Session, task_id: str) -> dict:
             status_code=422,
             detail="No workflow state found for this task. Run /workflow/plan first.",
         )
+    # Phase 4 — re-hydrate runtime-only credentials (github_token, …) from
+    # the encrypted store into the in-memory state. They are NEVER persisted:
+    # the scrub in TaskService._sanitize_for_json strips them on the next
+    # save_workflow_state. Without this, the per-phase agents that re-clone
+    # a private repo would lose access to the token that Phase 4 removed
+    # from workflow_state.
+    state = CredentialsService.hydrate_state(db, state, project_id=task.project_id)
     return state, task
 
 
@@ -162,60 +191,15 @@ class SelectPlanRequest(BaseModel):
 
 # ── Architecture Decision phase (replaces /plan for new workflow) ─────────────
 
-@router.post("/architecture-decision", response_model=WorkflowPhaseResponse)
-async def workflow_architecture_decision(request: Request, db: Session = Depends(get_db)):
+@router.post("/architecture-decision", status_code=status.HTTP_410_GONE)
+async def workflow_architecture_decision_gone():
+    """Removed in Phase 1 — see module docstring.
+
+    The replacement is ``POST /api/projects/{project_id}/workflows``,
+    which runs the same architecture-decision phase but requires
+    project membership (DEVELOPER+).
     """
-    Unified PLAN + COST_ESTIMATION replacement.
-
-    Runs repository analysis (if repo_url provided) then generates 1–3 deployment
-    strategies each enriched with AWS cost estimates.  Returns all strategies for
-    user comparison before any infrastructure is generated.
-
-    Frontend must NOT call run-docker until /select-plan is called first.
-    """
-    content_type = request.headers.get("content-type", "")
-    if "application/json" in content_type:
-        payload_data = await request.json()
-        prompt      = payload_data.get("prompt", "")
-        repo_url    = payload_data.get("repo_url") or ""
-        visibility  = payload_data.get("repository_visibility") or "public"
-        token       = payload_data.get("github_token")
-        env_input   = None
-    else:
-        form       = await request.form()
-        prompt     = str(form.get("prompt") or "").strip()
-        repo_url   = str(form.get("repo_url") or "").strip() or ""
-        visibility = str(form.get("repository_visibility") or "public")
-        token      = str(form.get("github_token") or "") or None
-        env_input  = None
-        env_file   = form.get("env_file")
-        if getattr(env_file, "filename", None):
-            env_input = await _env_service.build_input_from_upload(env_file)
-
-    task = TaskService.create_task(db, prompt)
-    TaskService.update_task_status(db, task, "in_progress")
-
-    try:
-        orchestrator = OrchestratorAgent()
-        state = orchestrator.run_architecture_decision_phase(
-            prompt=prompt,
-            repo_url=repo_url or None,
-            repository_visibility=visibility,
-            github_token=token,
-            uploaded_env_input=env_input,
-        )
-
-        TaskService.save_plan_awaiting_validation(db, task, state)
-
-        logger.info(
-            "[Workflow] architecture-decision complete for task %s — phase: %s",
-            task.id, state.get("current_phase"),
-        )
-        return _phase_response(task.id, state, "Architecture strategies generated — awaiting selection")
-    except Exception as exc:
-        traceback.print_exc()
-        TaskService.save_error(db, task, str(exc))
-        raise HTTPException(status_code=500, detail=f"Architecture decision failed: {exc}")
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail=_GONE_DETAIL)
 
 
 # ── Plan selection gate ────────────────────────────────────────────────────────
@@ -225,6 +209,7 @@ async def select_plan(
     task_id: str,
     body: SelectPlanRequest,
     db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
 ):
     """
     Apply the user's plan selection from the architecture-decision phase.
@@ -277,64 +262,25 @@ async def select_plan(
 
 # ── Phase 0: plan (preserved for backward compat) ─────────────────────────────
 
-@router.post("/plan", response_model=WorkflowPhaseResponse)
-async def workflow_plan(request: Request, db: Session = Depends(get_db)):
+@router.post("/plan", status_code=status.HTTP_410_GONE)
+async def workflow_plan_gone():
+    """Removed in Phase 1.
+
+    Same migration path as ``/architecture-decision``: use
+    ``POST /api/projects/{project_id}/workflows`` to start a project-scoped
+    plan/architecture flow.
     """
-    Start the workflow: run repository analysis + planning, then pause for user review.
-    Returns the generated plan without running any code generation.
-    """
-    content_type = request.headers.get("content-type", "")
-    if "application/json" in content_type:
-        payload_data = await request.json()
-        prompt     = payload_data.get("prompt", "")
-        repo_url   = payload_data.get("repo_url") or ""
-        visibility = payload_data.get("repository_visibility") or "public"
-        token      = payload_data.get("github_token")
-        approved   = payload_data.get("approved_artifacts") or []
-        env_input  = None
-    else:
-        form      = await request.form()
-        prompt    = str(form.get("prompt") or "").strip()
-        repo_url  = str(form.get("repo_url") or "").strip() or ""
-        visibility = str(form.get("repository_visibility") or "public")
-        token     = str(form.get("github_token") or "") or None
-        approved  = []
-        env_input = None
-        env_file  = form.get("env_file")
-        if getattr(env_file, "filename", None):
-            env_input = await _env_service.build_input_from_upload(env_file)
-
-    task = TaskService.create_task(db, prompt)
-    TaskService.update_task_status(db, task, "in_progress")
-
-    try:
-        orchestrator = OrchestratorAgent()
-        state = orchestrator.run_plan_preview(
-            prompt=prompt,
-            repo_url=repo_url or None,
-            repository_visibility=visibility,
-            github_token=token,
-            uploaded_env_input=env_input,
-        )
-        state["approved_artifacts"] = approved
-        plan = dict(state.get("plan") or {})
-        plan["approved_artifacts"] = approved
-        state["plan"] = plan
-        state["current_phase"] = "planning_complete"
-
-        TaskService.save_plan_awaiting_validation(db, task, state)
-
-        return _phase_response(task.id, state, "Plan generated — awaiting approval")
-    except Exception as exc:
-        traceback.print_exc()
-        TaskService.save_error(db, task, str(exc))
-        raise HTTPException(status_code=500, detail=f"Planning failed: {exc}")
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail=_GONE_DETAIL)
 
 
 # ── Phase 1: Docker ───────────────────────────────────────────────────────────
 
 @router.post("/{task_id}/run-docker", response_model=WorkflowPhaseResponse)
-async def run_docker(task_id: str, db: Session = Depends(get_db)):
+async def run_docker(
+    task_id: str,
+    db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
+):
     """
     User approved the plan — run InfrastructureAgent (Docker phase only).
     Returns Dockerfile, .dockerignore, docker-compose.
@@ -407,7 +353,11 @@ async def run_docker(task_id: str, db: Session = Depends(get_db)):
 # ── Phase 2: Terraform ────────────────────────────────────────────────────────
 
 @router.post("/{task_id}/run-terraform", response_model=WorkflowPhaseResponse)
-async def run_terraform(task_id: str, db: Session = Depends(get_db)):
+async def run_terraform(
+    task_id: str,
+    db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
+):
     """
     User approved Docker artifacts — run TerraformAgent.
     Returns .tf files and terraform_outputs contract for Kubernetes.
@@ -438,7 +388,11 @@ async def run_terraform(task_id: str, db: Session = Depends(get_db)):
 # ── Phase 3: Kubernetes ───────────────────────────────────────────────────────
 
 @router.post("/{task_id}/run-kubernetes", response_model=WorkflowPhaseResponse)
-async def run_kubernetes(task_id: str, db: Session = Depends(get_db)):
+async def run_kubernetes(
+    task_id: str,
+    db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
+):
     """
     User approved Terraform — run KubernetesAgent.
     Returns deployment.yaml, service.yaml (using terraform_outputs contract).
@@ -467,7 +421,11 @@ async def run_kubernetes(task_id: str, db: Session = Depends(get_db)):
 # ── Phase 4: CI/CD + Finalize ─────────────────────────────────────────────────
 
 @router.post("/{task_id}/run-cicd", response_model=WorkflowPhaseResponse)
-async def run_cicd(task_id: str, db: Session = Depends(get_db)):
+async def run_cicd(
+    task_id: str,
+    db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
+):
     """
     User approved Kubernetes — run security scan, validation, CI/CD, and finalize.
     Returns the complete artifact set and final result.
@@ -504,7 +462,11 @@ async def run_cicd(task_id: str, db: Session = Depends(get_db)):
 # ── GET: poll current state ───────────────────────────────────────────────────
 
 @router.get("/{task_id}", response_model=WorkflowPhaseResponse)
-def get_workflow_state(task_id: str, db: Session = Depends(get_db)):
+def get_workflow_state(
+    task_id: str,
+    db: Session = Depends(get_db),
+    _gate: tuple[Task, ProjectMember] = Depends(require_task_project_member),
+):
     """
     Return current workflow phase, artifacts accumulated so far, and logs.
     Frontend polls this after each run-* call.

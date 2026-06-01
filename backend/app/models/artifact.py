@@ -1,12 +1,17 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from backend.app.database.base import Base
+
+# JSONB in production (Postgres); JSON on SQLite (tests). Same rationale +
+# pattern as ExecutionJob — lets the Phase-2 tests exercise the artifact
+# tables against a real session instead of mocks.
+_JSON_VARIANT = JSONB().with_variant(JSON(), "sqlite")
 
 
 class Artifact(Base):
@@ -38,13 +43,24 @@ class Artifact(Base):
     artifact_subtype = Column(String, nullable=False)
 
     content = Column(Text, nullable=False, default="")
+    # ── Phase 2 — content hashing for governance enforcement ──────────────
+    # SHA-256 of the current content. Carried denormalised on the row so
+    # the approval gate can compare "what was approved" vs. "what is about
+    # to execute" in a single read. Computed deterministically — see
+    # ``backend.app.services.core.artifact_persistence_service.compute_content_hash``.
+    content_hash = Column(String, nullable=True, index=True)
     # pending | passed | failed | skipped
     validation_status = Column(String, nullable=False, default="pending")
     generated_by_agent = Column(String, nullable=True)
     approved_by = Column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    # The hash that was approved by approved_by at approved_at. Diverges
+    # from ``content_hash`` if someone edits the artifact post-approval —
+    # the enforcement gate refuses to execute in that case.
+    approved_content_hash = Column(String, nullable=True)
 
     version = Column(Integer, nullable=False, default=1)
-    artifact_metadata = Column(MutableDict.as_mutable(JSONB), nullable=False, default=dict)
+    artifact_metadata = Column(MutableDict.as_mutable(_JSON_VARIANT), nullable=False, default=dict)
 
     # Collaboration state — updated by ArtifactApprovalService.
     # Values: 'pending_review' | 'approved' | 'rejected' | 'requires_changes'.
@@ -85,7 +101,11 @@ class ArtifactVersion(Base):
     artifact_id = Column(String, ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=False, index=True)
     version = Column(Integer, nullable=False)
     content = Column(Text, nullable=False, default="")
-    validation_results = Column(MutableDict.as_mutable(JSONB), nullable=False, default=dict)
+    # SHA-256 of ``content``. Stamped at insert time; immutable thereafter —
+    # any divergence between this column and a re-hash of ``content`` is a
+    # tamper signal that the test suite + audit tooling should flag.
+    content_hash = Column(String, nullable=True, index=True)
+    validation_results = Column(MutableDict.as_mutable(_JSON_VARIANT), nullable=False, default=dict)
     generated_by = Column(String, nullable=True)
     workflow_id = Column(String, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -109,6 +129,15 @@ class ArtifactApproval(Base):
     # 'approve' | 'reject' | 'request_changes'
     action = Column(String, nullable=False)
     comment = Column(Text, nullable=True)
+    # Phase 2 — captures the EXACT content the reviewer saw. If the artifact
+    # is edited afterwards (content_hash changes) the enforcement gate
+    # refuses to execute, even though this approval row stays in the audit
+    # trail as the historical decision.
+    approved_content_hash = Column(String, nullable=True)
+    # The artifact's integer version at the moment of approval. Lets the UI
+    # render "approved at v3, current is v4 — re-review required" without
+    # walking the version history.
+    approved_version = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     artifact = relationship("Artifact", backref="approvals")
