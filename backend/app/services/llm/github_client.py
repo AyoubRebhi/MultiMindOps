@@ -53,6 +53,5 @@ class GitHubLLMClient:
             self.model,
             total_tokens,
         )
-        print(f"[LLM] GitHub | model={self.model} | tokens={total_tokens}")
 
         return content

@@ -99,7 +99,6 @@ class LLMRouter:
             "[LLM] GitHub failed — falling back to Groq. reason=%s",
             self._classify_error(github_error),
         )
-        print(f"[LLM] Falling back to Groq... reason={self._classify_error(github_error)}")
         return self._chat_with_groq(system_prompt, user_prompt, temperature, max_tokens)
 
     # ── Groq fallback ─────────────────────────────────────────────────────────

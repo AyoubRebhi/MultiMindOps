@@ -72,7 +72,6 @@ class LLMClient:
         max_tokens: int = 2000,
     ) -> str:
         """Send a chat request and return the raw string response."""
-        print("LLM PROVIDER: GROQ")
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [

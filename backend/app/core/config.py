@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
 
+    # Root log level. When unset, defaults to INFO in development and WARNING
+    # in production (see backend/app/core/logging_setup.py).
+    LOG_LEVEL: str = ""
+
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "devsecops_db"

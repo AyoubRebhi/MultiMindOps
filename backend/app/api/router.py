@@ -12,6 +12,7 @@ from backend.app.api.routes.jobs import router as jobs_router
 from backend.app.api.routes.releases import router as releases_router
 from backend.app.api.routes.projects import router as projects_router
 from backend.app.api.routes.tasks import router as tasks_router
+from backend.app.api.routes.terraform import router as terraform_router
 from backend.app.api.routes.workflow import router as workflow_router
 
 api_router = APIRouter()
@@ -38,3 +39,5 @@ api_router.include_router(execution_router)
 api_router.include_router(corrector_router)
 # Editable artifact persistence (/api/tasks/{id}/artifacts)
 api_router.include_router(artifact_edit_router)
+# Minimal Terraform generation + validation pipeline (/terraform/...)
+api_router.include_router(terraform_router)

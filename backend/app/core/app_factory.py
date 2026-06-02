@@ -11,6 +11,7 @@ from fastapi.responses import Response
 from backend.app.api.router import api_router
 from backend.app.core.config import settings
 from backend.app.core.log_redaction import install_secret_redactor
+from backend.app.core.logging_setup import configure_logging
 from backend.app.core.schema_guard import run_schema_guard
 from backend.app.database.base import Base
 from backend.app.database.session import engine
@@ -103,6 +104,9 @@ def setup_utf8_encoding() -> None:
 
 # Apply at import time so any module-level logging is also covered.
 setup_utf8_encoding()
+# Configure root log level + silence noisy third-party libs before any
+# import-time logger.info() calls have a chance to fire. Idempotent.
+configure_logging(app_env=settings.APP_ENV, level_override=settings.LOG_LEVEL)
 # Phase 4 — install the secret redactor before any of the application
 # modules below have a chance to log. The filter is idempotent so it's
 # safe to call again later if a worker process re-imports this file.
@@ -129,7 +133,6 @@ def create_app() -> FastAPI:
             rows.append(f"  {methods or 'ANY':10s}  {route.path}")
         route_list = "\n".join(sorted(rows))
         logger.info("Registered routes:\n%s", route_list)
-        print(f"[startup] Registered routes:\n{route_list}", flush=True)
 
         # Phase 3 — start the in-process durable-job worker (unless an
         # operator runs a dedicated worker process and disables this). The

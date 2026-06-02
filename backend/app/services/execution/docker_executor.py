@@ -870,45 +870,42 @@ class DockerExecutor:
         Execute a command, stream BOTH stdout and stderr line-by-line,
         and return the exit code. Raises asyncio.TimeoutError on timeout.
         """
+        import time as _time
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,  # Capture stderr separately
             cwd=self._workspace,
         )
+        start = _time.monotonic()
+        logger.info("[DockerExecutor] %s phase started", phase_label)
 
         last_stdout: str | None = None
         last_stderr: str | None = None
+        stdout_count = 0
+        stderr_count = 0
 
         async def _drain_stdout() -> None:
-            nonlocal last_stdout
+            nonlocal last_stdout, stdout_count
             assert proc.stdout is not None
-            logger.info("[DockerExecutor] Streaming stdout for %s phase...", phase_label)
-            line_count = 0
             async for raw_line in proc.stdout:
                 line = raw_line.decode(errors="replace").rstrip()
                 if line:
                     last_stdout = line
                     self._track_step(line)
                     await self._publish_log_line(line)
-                    line_count += 1
-                    logger.debug("[DockerExecutor] stdout line #%d: %.60s", line_count, line)
-            logger.info("[DockerExecutor] stdout drain complete: %d lines", line_count)
+                    stdout_count += 1
 
         async def _drain_stderr() -> None:
-            nonlocal last_stderr
+            nonlocal last_stderr, stderr_count
             assert proc.stderr is not None
-            logger.info("[DockerExecutor] Streaming stderr for %s phase...", phase_label)
-            line_count = 0
             async for raw_line in proc.stderr:
                 line = raw_line.decode(errors="replace").rstrip()
                 if line:
                     last_stderr = line
                     self._last_error_line = line
                     await self._publish_log_line(line)
-                    line_count += 1
-                    logger.debug("[DockerExecutor] stderr line #%d: %.60s", line_count, line)
-            logger.info("[DockerExecutor] stderr drain complete: %d lines", line_count)
+                    stderr_count += 1
 
         drain_stdout = asyncio.create_task(_drain_stdout())
         drain_stderr = asyncio.create_task(_drain_stderr())
@@ -925,9 +922,18 @@ class DockerExecutor:
             raise
 
         exit_code = proc.returncode or 0
-        if exit_code != 0:
-            logger.info("[DockerExecutor] Build failed with exit_code=%d", exit_code)
-            logger.info("[DockerExecutor] Last error line: %s", last_stderr or last_stdout)
+        duration_ms = int((_time.monotonic() - start) * 1000)
+        if exit_code == 0:
+            logger.info(
+                "[DockerExecutor] %s phase succeeded exit=0 stdout=%d stderr=%d duration=%dms",
+                phase_label, stdout_count, stderr_count, duration_ms,
+            )
+        else:
+            logger.warning(
+                "[DockerExecutor] %s phase failed exit=%d stdout=%d stderr=%d duration=%dms last=%s",
+                phase_label, exit_code, stdout_count, stderr_count, duration_ms,
+                last_stderr or last_stdout,
+            )
             # Ensure last_error_line is set from either stream
             if not self._last_error_line:
                 self._last_error_line = last_stderr or last_stdout

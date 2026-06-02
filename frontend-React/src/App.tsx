@@ -16,6 +16,7 @@ import LoginPage              from '@/pages/LoginPage'
 import RegisterPage           from '@/pages/RegisterPage'
 import UnauthorizedPage       from '@/pages/UnauthorizedPage'
 import NotFound               from '@/pages/NotFound'
+import TerraformPage          from '@/pages/TerraformPage'
 
 export default function App() {
   return (
@@ -46,6 +47,10 @@ export default function App() {
             <Route path="workflow" element={<WorkflowPage />} />
             <Route path=":id" element={<TaskDetail />} />
             <Route path=":id/review" element={<TaskReview />} />
+          </Route>
+          <Route path="terraform">
+            <Route index element={<TerraformPage />} />
+            <Route path=":artifactId" element={<TerraformPage />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Route>

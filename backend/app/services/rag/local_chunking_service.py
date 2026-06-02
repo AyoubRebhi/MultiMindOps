@@ -152,7 +152,7 @@ class LocalChunkingService:
         Returns: {ok, provider, model, latency_ms, error}
         """
         if self._force_fallback:
-            print("  [Chunking] [X] force_fallback=True -- no Ollama connectivity test")
+            logger.debug("[Chunking] force_fallback=True — skipping Ollama connectivity test")
             return {"ok": False, "provider": "none", "error": "force_fallback=True"}
 
         t0 = time.monotonic()
@@ -165,9 +165,9 @@ class LocalChunkingService:
             models = {m.get("name", "") for m in (data.get("models") or []) if isinstance(m, dict)}
             ok = self._model in models
             if ok:
-                print(f"  [Chunking] [OK] ollama OK | model={self._model} | {latency_ms}ms")
+                logger.debug("[Chunking] ollama OK model=%s latency=%dms", self._model, latency_ms)
                 return {"ok": True, "provider": "local", "model": self._model, "latency_ms": latency_ms}
-            print(f"  [Chunking] [FAIL] ollama model missing: {self._model} | {latency_ms}ms")
+            logger.warning("[Chunking] ollama model missing: %s latency=%dms", self._model, latency_ms)
             return {
                 "ok": False,
                 "provider": "local",
@@ -177,7 +177,7 @@ class LocalChunkingService:
             }
         except Exception as exc:
             latency_ms = round((time.monotonic() - t0) * 1000)
-            print(f"  [Chunking] [X] ollama ERROR: {exc}")
+            logger.warning("[Chunking] ollama ERROR: %s", exc)
             return {"ok": False, "provider": "local", "model": self._model, "latency_ms": latency_ms, "error": str(exc)}
 
     # ── Public API ───────────────────────────────────────────────────────────

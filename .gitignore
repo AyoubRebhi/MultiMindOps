@@ -30,6 +30,8 @@ workspace/
 devsecops.db
 
 # documentations/
+generated_terraform/
+
 .pytest_cache/
 
 .claude/

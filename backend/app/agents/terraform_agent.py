@@ -161,8 +161,7 @@ class TerraformAgent(EnhancedBaseAgent):
         - ``rag``                — RAG metadata
         - ``summary``            — brief description
         """
-        print("[DEBUG] Entering TerraformAgent")
-        print("[DEBUG] Prompt size:", len(prompt))
+        logger.debug("[TerraformAgent] entering run prompt_size=%d", len(prompt))
 
         # ── Strict blueprint contract validation ─────────────────────────
         # Replaces the previous .get(... default) cascade that masked every
@@ -205,7 +204,7 @@ class TerraformAgent(EnhancedBaseAgent):
             architecture_type=architecture_type,
         )
 
-        print("[DEBUG] Context length:", len(hybrid_result.get("context") or ""))
+        logger.debug("[TerraformAgent] context_length=%d", len(hybrid_result.get("context") or ""))
 
         # ── Build user prompt ─────────────────────────────────────────────────
         user_prompt = self._build_user_prompt(
@@ -218,7 +217,7 @@ class TerraformAgent(EnhancedBaseAgent):
             approved_artifacts=approved_artifacts,
             strategy_tier=strategy_tier,
         )
-        print("[DEBUG] Prompt size (messages):", len(user_prompt))
+        logger.debug("[TerraformAgent] user_prompt_size=%d", len(user_prompt))
 
         # ── ReAct loop ────────────────────────────────────────────────────────
         evaluate_fn = self._make_terraform_evaluator(architecture_type)

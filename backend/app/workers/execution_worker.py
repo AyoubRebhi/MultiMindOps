@@ -312,7 +312,9 @@ async def _main_async() -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    from backend.app.core.config import settings
+    from backend.app.core.logging_setup import configure_logging
+    configure_logging(app_env=settings.APP_ENV, level_override=settings.LOG_LEVEL)
     try:
         asyncio.run(_main_async())
     except KeyboardInterrupt:

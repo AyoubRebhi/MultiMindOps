@@ -121,8 +121,10 @@ class KubernetesAgent(EnhancedBaseAgent):
         - ``rag``                 — RAG metadata
         - ``summary``             — brief description
         """
-        print("[DEBUG] Entering KubernetesAgent")
-        print("[DEBUG] Context length:", len(str(terraform_outputs)))
+        logger.debug(
+            "[KubernetesAgent] entering run terraform_outputs_length=%d",
+            len(str(terraform_outputs)),
+        )
 
         # ── RAG: kubernetes-filtered retrieval ────────────────────────────────
         rag_result = self._retrieve_k8s_context(app_config)
@@ -134,7 +136,7 @@ class KubernetesAgent(EnhancedBaseAgent):
             plan=plan,
             rag_result=rag_result,
         )
-        print("[DEBUG] Prompt size (messages):", len(user_prompt))
+        logger.debug("[KubernetesAgent] user_prompt_size=%d", len(user_prompt))
 
         # ── ReAct loop ────────────────────────────────────────────────────────
         evaluate_fn = self._make_k8s_evaluator()

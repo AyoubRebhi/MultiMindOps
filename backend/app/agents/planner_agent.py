@@ -81,7 +81,7 @@ class PlannerAgent(BaseAgent):
         """
         ctx = planner_context or {}
         application_profile = ctx.get("application_profile")
-        print("APPLICATION PROFILE:", application_profile)
+        logger.debug("[PlannerAgent] application_profile=%s", application_profile)
         if not application_profile:
             raise Exception(
                 "Application profile missing — cannot plan infrastructure. "
@@ -114,7 +114,6 @@ class PlannerAgent(BaseAgent):
 
     def _single_plan(self, prompt: str, user_prompt: str) -> Dict[str, Any]:
         """Issue one LLM call and return the validated plan dict."""
-        print("LLM PROVIDER: GROQ")
         response = self.llm.chat_json(
             system_prompt=self.prompt_template,
             user_prompt=user_prompt,
@@ -541,7 +540,6 @@ class PlannerAgent(BaseAgent):
         pinned_compute_type = (blueprint.get("compute") or {}).get("type")
 
         try:
-            print("LLM PROVIDER: GROQ")
             refined = self.llm.chat_json(
                 system_prompt=(
                     "You are an AWS cloud architect. "
