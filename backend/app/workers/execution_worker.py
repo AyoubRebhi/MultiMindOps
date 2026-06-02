@@ -314,6 +314,11 @@ async def _main_async() -> None:
 def main() -> None:
     from backend.app.core.config import settings
     from backend.app.core.logging_setup import configure_logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
     configure_logging(app_env=settings.APP_ENV, level_override=settings.LOG_LEVEL)
     try:
         asyncio.run(_main_async())

@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # Root log level. When unset, defaults to INFO in development and WARNING
     # in production (see backend/app/core/logging_setup.py).
     LOG_LEVEL: str = ""
+    # SQLAlchemy engine echo. Default OFF — flip to true only when debugging
+    # raw SQL. Enabling this also installs SQLAlchemy's own logging handler
+    # which overrides logging_setup's third-party silencing.
+    SQL_ECHO: bool = False
 
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"

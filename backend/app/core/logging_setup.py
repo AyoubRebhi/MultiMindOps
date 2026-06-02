@@ -71,18 +71,9 @@ def configure_logging(app_env: str = "development", level_override: Optional[str
     root = logging.getLogger()
     root.setLevel(effective)
 
-    # basicConfig() is a no-op if handlers already exist (uvicorn attaches its
-    # own). Add a minimal handler only when no other handler is wired up so we
-    # never duplicate uvicorn's output.
-    if not root.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter(
-                fmt="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
-                datefmt="%H:%M:%S",
-            )
-        )
-        root.addHandler(handler)
+    # Do NOT attach a handler here — uvicorn installs its own when serving the
+    # API, and the standalone worker calls ``logging.basicConfig`` in its
+    # entry point. Adding one here would duplicate every line under uvicorn.
 
     for noisy in _NOISY_LIBRARIES:
         logging.getLogger(noisy).setLevel(logging.WARNING)
