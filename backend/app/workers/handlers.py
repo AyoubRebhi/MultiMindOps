@@ -155,3 +155,141 @@ async def _handle_corrector_reanalyze(job: ExecutionJob) -> Optional[dict]:
 
     await _reanalyze_background(task_id, raw_logs, artifacts)
     return {"task_id": task_id, "reanalyzed": True}
+
+
+# ── terraform_validate / terraform_plan ───────────────────────────────────────
+
+
+async def _run_terraform_phase(job: ExecutionJob, *, steps_name: str) -> Optional[dict]:
+    """Shared body for the streamed Terraform validation / plan phases.
+
+    Runs the terraform command sequence against the generated artifact
+    directory, streaming every line over the existing ``log_stream_manager``
+    (so it surfaces on the same WebSocket as Docker builds), then records the
+    outcome into the workflow. A terraform-logic failure (bad config, missing
+    cloud credentials) is NOT raised — it is recorded as a failed phase and the
+    job still succeeds, so the worker does not pointlessly retry it. Only an
+    environment error (terraform binary absent) propagates.
+    """
+    from backend.app.services.core.workflow_orchestration_service import (
+        WorkflowOrchestrationService,
+    )
+    from backend.app.services.execution.docker_streamer import log_stream_manager
+    from backend.app.services.terraform_pipeline import TerraformPipelineService
+    from backend.app.services.terraform_pipeline.pipeline_service import (
+        PLAN_STEPS,
+        VALIDATE_STEPS,
+    )
+    from backend.app.services.terraform_pipeline.streaming import stream_terraform_steps
+
+    ctx = dict(job.execution_context or {})
+    artifact_id = ctx.get("artifact_id")
+    task_id = ctx.get("task_id")
+    workflow_id = ctx.get("workflow_id")
+    phase = ctx.get("phase")
+    stream_key = ctx.get("stream_key") or f"{task_id}::{steps_name}"
+    if not artifact_id or not phase:
+        raise ValueError(
+            f"{steps_name} job missing artifact_id/phase in execution_context"
+        )
+
+    steps = VALIDATE_STEPS if steps_name == "terraform_validate" else PLAN_STEPS
+
+    svc = TerraformPipelineService()
+    artifact_dir = svc.artifact_path(artifact_id)
+
+    async def _publish(line: str) -> None:
+        await log_stream_manager.publish(stream_key, line)
+
+    ok = False
+    results: list[dict] = []
+    error: Optional[str] = None
+    env_error: Optional[Exception] = None
+    plan_json: Optional[str] = None
+    infrastructure_summary: Optional[dict] = None
+    try:
+        await _publish(f"== {phase} starting (artifact {artifact_id}) ==")
+        ok, results = await stream_terraform_steps(artifact_dir, steps, _publish)
+        if not ok:
+            error = "terraform reported a non-zero exit — see logs"
+        elif steps_name == "terraform_plan":
+            # Plan succeeded → derive a human-readable Infrastructure Summary.
+            # A failure here (unparseable plan, terraform show error) must NOT
+            # fail the plan phase itself — the plan still ran fine.
+            plan_json, infrastructure_summary = await _build_plan_summary(
+                artifact_dir, _publish
+            )
+    except RuntimeError as exc:
+        # Environment problem (binary missing / artifact dir gone). Record the
+        # phase as failed AND propagate so the job itself is marked failed.
+        error = str(exc)
+        env_error = exc
+        await _publish(f"ERROR: {error}")
+    finally:
+        await log_stream_manager.finish(stream_key)
+
+    db = SessionLocal()
+    try:
+        WorkflowOrchestrationService.record_terraform_phase_result(
+            db,
+            workflow_id=workflow_id,
+            task_id=task_id,
+            project_id=job.project_id,
+            phase=phase,
+            ok=ok,
+            results=results,
+            artifact_id=artifact_id,
+            error=error,
+            plan_json=plan_json,
+            infrastructure_summary=infrastructure_summary,
+        )
+    finally:
+        db.close()
+
+    if env_error is not None:
+        raise env_error
+
+    return {"phase": phase, "artifact_id": artifact_id, "ok": ok}
+
+
+async def _build_plan_summary(artifact_dir, publish) -> tuple[Optional[str], Optional[dict]]:
+    """Generate ``plan.json`` + a categorized Infrastructure Summary.
+
+    Best-effort: any failure is logged to the live stream and swallowed
+    (returns ``(None, None)``) so the already-successful plan phase is never
+    downgraded to failed just because the readable summary could not be built.
+    """
+    from backend.app.services.terraform_pipeline.plan_summary import (
+        build_infrastructure_summary,
+        generate_plan_json,
+    )
+
+    try:
+        await publish("== generating plan summary (terraform show -json) ==")
+        plan_json = await generate_plan_json(artifact_dir)
+        if not plan_json:
+            await publish("WARN: could not read plan JSON — summary skipped")
+            return None, None
+        summary = build_infrastructure_summary(plan_json)
+        if summary is not None:
+            await publish(
+                f"== infrastructure summary: {summary.get('total_resources', 0)} "
+                f"resource(s) across {len(summary.get('categories') or [])} categor(ies) =="
+            )
+        return plan_json, summary
+    except Exception as exc:  # noqa: BLE001 — summary is best-effort
+        logger.warning("[Jobs] plan summary generation failed: %s", exc)
+        await publish(f"WARN: plan summary generation failed: {exc}")
+        return None, None
+
+
+@register("terraform_validate")
+async def _handle_terraform_validate(job: ExecutionJob) -> Optional[dict]:
+    """Run ``terraform init -backend=false`` + ``terraform validate``, streamed."""
+    return await _run_terraform_phase(job, steps_name="terraform_validate")
+
+
+@register("terraform_plan")
+async def _handle_terraform_plan(job: ExecutionJob) -> Optional[dict]:
+    """Run ``terraform init -backend=false`` + ``terraform plan -out=tfplan``, streamed."""
+    return await _run_terraform_phase(job, steps_name="terraform_plan")

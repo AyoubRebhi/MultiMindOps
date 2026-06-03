@@ -36,6 +36,32 @@ PHASE_TERRAFORM = "TERRAFORM"
 PHASE_KUBERNETES = "KUBERNETES"
 PHASE_CICD = "CICD"
 
+# Infrastructure Lifecycle phases — template-driven MVP pipeline
+# (``TerraformPipelineService``), independent of the LLM/MCP ``PHASE_TERRAFORM``
+# above. Designed as standalone phases so a future DAG executor can schedule
+# them in parallel with CI/CD or security analysis.
+PHASE_TF_GENERATION = "TERRAFORM_GENERATION"
+PHASE_TF_VALIDATION = "TERRAFORM_VALIDATION"
+PHASE_TF_PLAN = "TERRAFORM_PLAN"
+
+_TF_PIPELINE_PHASES = {PHASE_TF_GENERATION, PHASE_TF_VALIDATION, PHASE_TF_PLAN}
+
+# Phase → durable job phase string consumed by the worker handler registry.
+_TF_JOB_PHASE = {
+    PHASE_TF_VALIDATION: "terraform_validate",
+    PHASE_TF_PLAN: "terraform_plan",
+}
+
+
+def terraform_stream_key(task_id: str, job_phase: str) -> str:
+    """Namespaced ``log_stream_manager`` key for a Terraform phase.
+
+    Keying per (task, phase) keeps Terraform validation/plan output isolated
+    from Docker build output (which streams on the bare ``task_id``) so they
+    never interleave on the shared stream manager.
+    """
+    return f"{task_id}::{job_phase}"
+
 
 class WorkflowOrchestrationService:
     # ─── Workflow lifecycle ──────────────────────────────────────────────────
@@ -184,6 +210,15 @@ class WorkflowOrchestrationService:
 
         Returns ``(state, persisted_artifact_ids)``.
         """
+        # Infrastructure Lifecycle phases run through a dedicated path: the
+        # template MVP pipeline + (for validation/plan) the durable job system.
+        # They do NOT touch the OrchestratorAgent / LLM terraform phase.
+        if phase.upper() in _TF_PIPELINE_PHASES:
+            return WorkflowOrchestrationService._run_terraform_pipeline_phase(
+                db, project=project, workflow=workflow, task=task,
+                phase=phase.upper(),
+            )
+
         prior_state = TaskService.load_workflow_state(db, task) or {}
         # Phase 4 — re-hydrate runtime-only secrets. Stays in memory for
         # this request only; never re-persisted.
@@ -253,6 +288,308 @@ class WorkflowOrchestrationService:
         db.commit()
         db.refresh(workflow)
         return state, [a.id for a in artifacts]
+
+    # ─── Infrastructure Lifecycle (Terraform MVP pipeline) ───────────────────
+
+    @staticmethod
+    def _run_terraform_pipeline_phase(
+        db: Session,
+        *,
+        project: Project,
+        workflow: Workflow,
+        task: Task,
+        phase: str,
+    ) -> Tuple[dict, List[str]]:
+        """Dispatch one Infrastructure Lifecycle phase.
+
+        * GENERATION runs inline (fast template render → persist artifacts).
+        * VALIDATION / PLAN enqueue a durable job that streams terraform logs
+          over the WebSocket and finalises the phase on completion. They
+          return immediately with the phase marked ``running``.
+        """
+        if phase == PHASE_TF_GENERATION:
+            return WorkflowOrchestrationService._run_terraform_generation(
+                db, project=project, workflow=workflow, task=task,
+            )
+        return WorkflowOrchestrationService._enqueue_terraform_job(
+            db, project=project, workflow=workflow, task=task, phase=phase,
+        )
+
+    @staticmethod
+    def _run_terraform_generation(
+        db: Session,
+        *,
+        project: Project,
+        workflow: Workflow,
+        task: Task,
+    ) -> Tuple[dict, List[str]]:
+        from backend.app.services.core.artifact_persistence_service import (
+            classify_artifact,
+        )
+        from backend.app.services.terraform_pipeline import TerraformPipelineService
+
+        state = TaskService.load_workflow_state(db, task) or {}
+        plan = state.get("plan") or {}
+        blueprint = plan.get("infrastructure_blueprint") or {}
+
+        architecture = (
+            blueprint.get("architecture_style")
+            or plan.get("architecture_style")
+            or state.get("architecture_style")
+        )
+        if not architecture:
+            raise ValueError(
+                "Cannot run TERRAFORM_GENERATION: no architecture style found in "
+                "the selected plan. Run architecture-decision + select-plan first."
+            )
+
+        # The MVP pipeline only supports the 'balanced' tier; pass it explicitly
+        # rather than the selected strategy id (low_cost/high_performance), which
+        # the template renderer does not implement.
+        project_name = (plan.get("project_name") or project.name or "app")[:32]
+
+        svc = TerraformPipelineService()
+        result = svc.generate(
+            architecture=str(architecture),
+            tier="balanced",
+            project_name=project_name,
+        )
+
+        # Persist generated .tf into the project DB artifact store so the
+        # timeline counts them, alongside the filesystem copy generate() wrote.
+        persisted: List[str] = []
+        for filename, content in result.files.items():
+            row = ArtifactPersistenceService.upsert_artifact(
+                db,
+                project_id=project.id,
+                workflow_id=workflow.id,
+                artifact_type=classify_artifact(filename) or "terraform",
+                artifact_subtype=filename,
+                content=content,
+                generated_by_agent="TerraformPipelineService",
+            )
+            persisted.append(row.id)
+        db.commit()
+
+        # Record the pipeline artifact id so validation/plan can locate the dir.
+        tf_state = state.setdefault("terraform_pipeline", {})
+        tf_state["artifact_id"] = result.id
+        tf_state["architecture"] = str(architecture)
+        tf_state["tier"] = "balanced"
+        tf_state["files"] = sorted(result.files.keys())
+        tf_state["metadata"] = result.metadata
+        TaskService.save_workflow_state(db, task, state)
+
+        WorkflowOrchestrationService._record_phase(
+            workflow,
+            phase=PHASE_TF_GENERATION,
+            status="completed",
+            extra={
+                "artifact_id": result.id,
+                "artifact_count": len(persisted),
+                "architecture": str(architecture),
+            },
+        )
+        workflow.current_phase = PHASE_TF_GENERATION
+        workflow.status = "running"
+        db.commit()
+        db.refresh(workflow)
+
+        logger.info(
+            "[TerraformPipeline] generation complete project=%s artifact=%s files=%d",
+            project.id, result.id, len(persisted),
+        )
+        return state, persisted
+
+    @staticmethod
+    def _enqueue_terraform_job(
+        db: Session,
+        *,
+        project: Project,
+        workflow: Workflow,
+        task: Task,
+        phase: str,
+    ) -> Tuple[dict, List[str]]:
+        from backend.app.services.execution.job_service import JobService
+
+        state = TaskService.load_workflow_state(db, task) or {}
+        tf_state = state.get("terraform_pipeline") or {}
+        artifact_id = tf_state.get("artifact_id")
+        if not artifact_id:
+            raise ValueError(
+                f"Cannot run {phase}: no Terraform artifact found. "
+                "Run TERRAFORM_GENERATION first."
+            )
+
+        job_phase = _TF_JOB_PHASE[phase]
+        stream_key = terraform_stream_key(task.id, job_phase)
+
+        job = JobService.enqueue(
+            db,
+            project_id=project.id,
+            workflow_id=workflow.id,
+            task_id=task.id,
+            phase=job_phase,
+            # No retries: a terraform-logic failure (bad config / missing creds)
+            # is deterministic, so re-running wastes the per-project run-lock.
+            max_retries=0,
+            idempotency_key=f"{job_phase}:{artifact_id}",
+            execution_context={
+                "artifact_id": artifact_id,
+                "task_id": task.id,
+                "workflow_id": workflow.id,
+                "phase": phase,
+                "stream_key": stream_key,
+            },
+        )
+
+        WorkflowOrchestrationService._record_phase(
+            workflow,
+            phase=phase,
+            status="running",
+            extra={
+                "artifact_id": artifact_id,
+                "job_id": job.id,
+                "stream_key": stream_key,
+            },
+        )
+        workflow.current_phase = phase
+        workflow.status = "running"
+        db.commit()
+        db.refresh(workflow)
+
+        logger.info(
+            "[TerraformPipeline] %s enqueued job=%s artifact=%s stream=%s",
+            phase, job.id, artifact_id, stream_key,
+        )
+        return state, []
+
+    @staticmethod
+    def record_terraform_phase_result(
+        db: Session,
+        *,
+        workflow_id: Optional[str],
+        task_id: Optional[str],
+        project_id: str,
+        phase: str,
+        ok: bool,
+        results: List[dict],
+        artifact_id: Optional[str] = None,
+        error: Optional[str] = None,
+        plan_json: Optional[str] = None,
+        infrastructure_summary: Optional[dict] = None,
+    ) -> None:
+        """Worker-side finaliser for a streamed Terraform phase.
+
+        Called from the job handler after validation/plan completes. Persists
+        the outcome into ``Workflow.phases_state`` and the backing Task's
+        workflow_state, and upserts the relevant DB artifacts:
+
+        * validation → a ``validation_report`` artifact.
+        * plan (on success) → the raw ``plan.json`` (``terraform show -json``)
+          plus a derived ``infrastructure_summary.json`` (categorized resource
+          counts). The categorized summary is also embedded into the
+          ``TERRAFORM_PLAN`` phase entry so the UI can render the Infrastructure
+          Summary card without a second fetch. The binary ``tfplan`` is left on
+          the filesystem and is NOT touched.
+        """
+        from backend.app.services.core.artifact_persistence_service import (
+            ArtifactPersistenceService as _APS,
+        )
+
+        status = "completed" if ok else "failed"
+
+        # 1. Workflow.phases_state — embed the readable summary on a good plan.
+        phase_extra: dict = {
+            "artifact_id": artifact_id,
+            "ok": ok,
+            "error": error,
+        }
+        if phase == PHASE_TF_PLAN and ok and infrastructure_summary is not None:
+            phase_extra["infrastructure_summary"] = infrastructure_summary
+
+        if workflow_id:
+            workflow = (
+                db.query(Workflow).filter(Workflow.id == workflow_id).first()
+            )
+            if workflow is not None:
+                WorkflowOrchestrationService._record_phase(
+                    workflow,
+                    phase=phase,
+                    status=status,
+                    extra=phase_extra,
+                )
+                workflow.current_phase = phase
+                workflow.status = "running"
+                db.commit()
+
+        # 2. Backing Task workflow_state
+        if task_id:
+            task = TaskService.get_task(db, task_id)
+            if task is not None:
+                state = TaskService.load_workflow_state(db, task) or {}
+                tf_state = state.setdefault("terraform_pipeline", {})
+                tf_state[phase] = {
+                    "ok": ok,
+                    "error": error,
+                    "results": results,
+                }
+                if phase == PHASE_TF_PLAN and infrastructure_summary is not None:
+                    tf_state[phase]["infrastructure_summary"] = infrastructure_summary
+                TaskService.save_workflow_state(db, task, state)
+
+        # 3a. Validation report artifact (text JSON).
+        if phase == PHASE_TF_VALIDATION:
+            import json as _json
+
+            report = _json.dumps(
+                {"ok": ok, "error": error, "results": results}, indent=2, default=str
+            )
+            _APS.upsert_artifact(
+                db,
+                project_id=project_id,
+                workflow_id=workflow_id,
+                artifact_type="validation_report",
+                artifact_subtype="terraform_validation.json",
+                content=report,
+                generated_by_agent="TerraformPipelineService",
+                validation_status="passed" if ok else "failed",
+            )
+            db.commit()
+
+        # 3b. Plan artifacts — raw plan.json + derived infrastructure_summary.json.
+        #     Both coexist alongside the binary tfplan on disk.
+        if phase == PHASE_TF_PLAN and ok:
+            import json as _json
+
+            if plan_json:
+                _APS.upsert_artifact(
+                    db,
+                    project_id=project_id,
+                    workflow_id=workflow_id,
+                    artifact_type="terraform_plan",
+                    artifact_subtype="plan.json",
+                    content=plan_json,
+                    generated_by_agent="TerraformPipelineService",
+                    validation_status="passed",
+                )
+            if infrastructure_summary is not None:
+                _APS.upsert_artifact(
+                    db,
+                    project_id=project_id,
+                    workflow_id=workflow_id,
+                    artifact_type="infrastructure_summary",
+                    artifact_subtype="infrastructure_summary.json",
+                    content=_json.dumps(infrastructure_summary, indent=2, default=str),
+                    generated_by_agent="TerraformPipelineService",
+                    validation_status="passed",
+                )
+            db.commit()
+
+        logger.info(
+            "[TerraformPipeline] recorded %s result ok=%s task=%s",
+            phase, ok, task_id,
+        )
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 

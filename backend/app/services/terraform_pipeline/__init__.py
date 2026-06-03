@@ -8,6 +8,7 @@ from backend.app.services.terraform_pipeline.pipeline_service import (
     TerraformPipelineService,
     GenerationResult,
     ValidationResult,
+    PlanResult,
     UnsupportedArchitectureError,
     ArtifactNotFoundError,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "TerraformPipelineService",
     "GenerationResult",
     "ValidationResult",
+    "PlanResult",
     "UnsupportedArchitectureError",
     "ArtifactNotFoundError",
 ]

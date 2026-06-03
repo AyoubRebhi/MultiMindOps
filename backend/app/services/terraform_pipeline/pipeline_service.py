@@ -101,6 +101,100 @@ class ValidationResult:
         }
 
 
+@dataclass
+class PlanResult:
+    id: str
+    init_ok: bool
+    plan_ok: bool
+    init_stdout: str
+    init_stderr: str
+    plan_stdout: str
+    plan_stderr: str
+    plan_file: Optional[str]
+    duration_ms: int
+
+    @property
+    def is_planned(self) -> bool:
+        return self.init_ok and self.plan_ok
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "planned": self.is_planned,
+            "init": {
+                "ok": self.init_ok,
+                "stdout": self.init_stdout,
+                "stderr": self.init_stderr,
+            },
+            "plan": {
+                "ok": self.plan_ok,
+                "stdout": self.plan_stdout,
+                "stderr": self.plan_stderr,
+            },
+            "plan_file": self.plan_file,
+            "duration_ms": self.duration_ms,
+        }
+
+
+# ── Terraform command-step sequences ─────────────────────────────────────────
+#
+# Single source of truth for the terraform invocations. Both the blocking API
+# methods below and the streaming workflow handlers
+# (``terraform_pipeline.streaming``) consume these, so flags can never drift
+# between the synchronous ``/terraform/*`` path and the streamed workflow
+# phases.
+#
+# ``plan`` reuses ``-backend=false`` so it never tries to configure the S3
+# remote backend declared in backend.tf (which would need credentials). The
+# AWS provider may still demand credentials/region at plan time; that failure
+# is surfaced through the result rather than swallowed.
+
+VALIDATE_STEPS: List[tuple] = [
+    ("init",     ["init", "-backend=false", "-input=false", "-no-color"]),
+    ("validate", ["validate", "-no-color"]),
+]
+
+PLAN_STEPS: List[tuple] = [
+    ("init", ["init", "-backend=false", "-input=false", "-no-color"]),
+    ("plan", ["plan", "-out=tfplan", "-input=false", "-no-color"]),
+]
+
+PLAN_OUTPUT_FILE = "tfplan"
+
+
+# ── Terraform subprocess environment ─────────────────────────────────────────
+
+
+def terraform_subprocess_env() -> Dict[str, str]:
+    """Build the environment for terraform subprocesses.
+
+    Starts from the inherited ``os.environ`` (so a developer relying on the AWS
+    shared credentials file ``~/.aws/credentials`` is unaffected), then overlays
+    any AWS credentials configured via ``.env`` / settings. Empty settings are
+    NOT exported — so the precedence is:
+
+        explicit .env credentials  >  inherited shell env / ~/.aws
+
+    Region is exported under both ``AWS_DEFAULT_REGION`` and ``AWS_REGION`` since
+    the AWS provider honours either.
+    """
+    from backend.app.core.config import settings
+
+    env = dict(os.environ)
+
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        value = str(getattr(settings, name, "") or "").strip()
+        if value:
+            env[name] = value
+
+    region = str(getattr(settings, "AWS_DEFAULT_REGION", "") or "").strip()
+    if region:
+        env["AWS_DEFAULT_REGION"] = region
+        env["AWS_REGION"] = region
+
+    return env
+
+
 # ── Minimal blueprint factories ──────────────────────────────────────────────
 #
 # Each factory returns a dict that satisfies ``InfrastructureBlueprint``.
@@ -295,14 +389,14 @@ class TerraformPipelineService:
             )
 
         start = time.perf_counter()
-        init = self._run_terraform(
-            binary, ["init", "-backend=false", "-input=false", "-no-color"],
-            cwd=artifact_dir,
+        _, init_args = VALIDATE_STEPS[0]
+        _, validate_args = VALIDATE_STEPS[1]
+        init = self._run_terraform(binary, init_args, cwd=artifact_dir)
+        validate = (
+            self._run_terraform(binary, validate_args, cwd=artifact_dir)
+            if init.returncode == 0
+            else None
         )
-        validate = self._run_terraform(
-            binary, ["validate", "-no-color"],
-            cwd=artifact_dir,
-        ) if init.returncode == 0 else None
 
         duration_ms = int((time.perf_counter() - start) * 1000)
 
@@ -316,6 +410,63 @@ class TerraformPipelineService:
             validate_stderr=(validate.stderr if validate else "skipped: init failed") or "",
             duration_ms=duration_ms,
         )
+
+    def plan(self, artifact_id: str) -> PlanResult:
+        """
+        Run ``terraform init`` + ``terraform plan -out=tfplan`` against the
+        persisted artifact directory. Mirrors :meth:`validate` (same subprocess
+        machinery, same ``-backend=false`` init) and writes the binary
+        ``tfplan`` into the artifact directory.
+
+        A plan that fails because cloud credentials are absent is reported
+        through the returned :class:`PlanResult` (``plan_ok=False``) rather
+        than raising — credential handling is out of scope for this phase.
+        """
+        artifact_dir = self._artifact_dir(artifact_id)
+        if not artifact_dir.exists():
+            raise ArtifactNotFoundError(f"No artifact with id '{artifact_id}'")
+
+        binary = shutil.which("terraform")
+        if not binary:
+            raise RuntimeError(
+                "The 'terraform' binary was not found on PATH. "
+                "Install Terraform to use the plan endpoint."
+            )
+
+        start = time.perf_counter()
+        _, init_args = PLAN_STEPS[0]
+        _, plan_args = PLAN_STEPS[1]
+        init = self._run_terraform(binary, init_args, cwd=artifact_dir)
+        plan = (
+            self._run_terraform(binary, plan_args, cwd=artifact_dir)
+            if init.returncode == 0
+            else None
+        )
+
+        duration_ms = int((time.perf_counter() - start) * 1000)
+
+        plan_path = artifact_dir / PLAN_OUTPUT_FILE
+        plan_file = str(plan_path) if plan_path.exists() else None
+
+        return PlanResult(
+            id=artifact_id,
+            init_ok=init.returncode == 0,
+            plan_ok=bool(plan and plan.returncode == 0),
+            init_stdout=init.stdout or "",
+            init_stderr=init.stderr or "",
+            plan_stdout=(plan.stdout if plan else "") or "",
+            plan_stderr=(plan.stderr if plan else "skipped: init failed") or "",
+            plan_file=plan_file,
+            duration_ms=duration_ms,
+        )
+
+    def artifact_path(self, artifact_id: str) -> Path:
+        """Public accessor for an artifact's on-disk directory.
+
+        Used by the streaming workflow handlers, which run terraform against
+        the same directory this service persisted to.
+        """
+        return self._artifact_dir(artifact_id)
 
     def list_ids(self) -> List[str]:
         """Convenience: enumerate persisted artifact ids."""
@@ -362,4 +513,5 @@ class TerraformPipelineService:
             text=True,
             timeout=self._timeout,
             check=False,
+            env=terraform_subprocess_env(),
         )

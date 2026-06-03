@@ -1158,6 +1158,127 @@ async def ws_execution_logs(
             pass
 
 
+# ── WebSocket /ws/terraform/{task_id}/{job_phase} ──────────────────────────────
+
+_TF_WS_PHASES = {"terraform_validate", "terraform_plan"}
+_TF_JOB_TO_WORKFLOW_PHASE = {
+    "terraform_validate": "TERRAFORM_VALIDATION",
+    "terraform_plan": "TERRAFORM_PLAN",
+}
+
+
+@router.websocket("/ws/terraform/{task_id}/{job_phase}")
+async def ws_terraform_logs(
+    websocket: WebSocket,
+    task_id: str,
+    job_phase: str,
+    token: str | None = Query(default=None),
+):
+    """Stream live Terraform validation / plan logs.
+
+    Reuses the same ``log_stream_manager`` + auth gate + protocol as the Docker
+    build socket — this is the SAME streaming system, namespaced by phase so
+    Terraform output never collides with Docker build output on a shared task.
+    """
+    await websocket.accept()
+    gate = await _ws_authenticate(websocket, task_id, token)
+    if gate is None:
+        return
+    if job_phase not in _TF_WS_PHASES:
+        await websocket.send_text(
+            json.dumps({"type": "error", "message": f"unknown phase '{job_phase}'"})
+        )
+        await websocket.close(code=1008)
+        return
+
+    stream_key = f"{task_id}::{job_phase}"
+    logger.info("[WS-TF] Client connected: stream=%s", stream_key)
+
+    closed = asyncio.Event()
+
+    async def _ping_receiver() -> None:
+        while not closed.is_set():
+            try:
+                raw = await websocket.receive_text()
+                data = json.loads(raw)
+                if data.get("type") == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+                elif data.get("type") == "close":
+                    closed.set()
+                    break
+            except (WebSocketDisconnect, Exception):
+                closed.set()
+                break
+
+    async def _send(payload: dict) -> bool:
+        if closed.is_set():
+            return False
+        try:
+            await websocket.send_text(json.dumps(payload))
+            return True
+        except Exception:
+            closed.set()
+            return False
+
+    ping_task = asyncio.create_task(_ping_receiver())
+    try:
+        # Wait briefly for the worker to create the stream after enqueue.
+        stream = None
+        for _ in range(40):  # up to 10s
+            if closed.is_set():
+                break
+            stream = log_stream_manager.get(stream_key)
+            if stream is not None:
+                break
+            await asyncio.sleep(0.25)
+
+        if stream is None or closed.is_set():
+            await _send({
+                "type": "info",
+                "message": "Terraform phase not currently running. Reconnect when it starts.",
+            })
+            ping_task.cancel()
+            return
+
+        async for entry in stream.subscribe():
+            if closed.is_set():
+                break
+            if not await _send(entry.to_dict()):
+                break
+
+        ping_task.cancel()
+        if closed.is_set():
+            return
+
+        # Determine final status from the persisted phase result.
+        wf_phase = _TF_JOB_TO_WORKFLOW_PHASE[job_phase]
+        db2 = SessionLocal()
+        try:
+            task2 = TaskService.get_task(db2, task_id)
+            state2 = TaskService.load_workflow_state(db2, task2) if task2 else {}
+            result = ((state2 or {}).get("terraform_pipeline") or {}).get(wf_phase) or {}
+        finally:
+            db2.close()
+        ok = bool(result.get("ok"))
+        await _send({
+            "type": "complete",
+            "status": "success" if ok else "failed",
+            "exit_code": 0 if ok else 1,
+        })
+    except WebSocketDisconnect:
+        logger.info("[WS-TF] Client disconnected: stream=%s", stream_key)
+    except Exception as exc:
+        logger.exception("[WS-TF] Unexpected error stream=%s: %s", stream_key, exc)
+        try:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": str(exc), "exit_code": 1})
+            )
+        except Exception:
+            pass
+    finally:
+        ping_task.cancel()
+
+
 # ── Corrector orchestration hook ───────────────────────────────────────────────
 
 async def _run_corrector_on_failure(

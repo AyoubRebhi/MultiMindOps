@@ -116,6 +116,17 @@ export function useRunPhase(projectId: string, workflowId: string) {
   })
 }
 
+/**
+ * Returns a stable callback that refreshes project + workflows + artifacts.
+ * Used to refresh the timeline when an async phase (Terraform validate/plan)
+ * signals completion over the WebSocket — same invalidation the phase
+ * mutations use, no polling.
+ */
+export function useRefreshProjectWorkflows(projectId: string) {
+  const qc = useQueryClient()
+  return () => invalidateProject(qc, projectId)
+}
+
 export function useSelectPlan(projectId: string, workflowId: string) {
   const qc = useQueryClient()
   return useMutation({

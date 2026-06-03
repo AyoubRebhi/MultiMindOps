@@ -173,6 +173,18 @@ class Settings(BaseSettings):
     # When true, push the image after a successful build
     DOCKER_PUSH_ON_SUCCESS: bool = False
 
+    # ── AWS credentials (Terraform plan) ─────────────────────────────────────
+    # Long-term IAM user keys (from `aws configure`) the AWS provider uses when
+    # Terraform runs init/plan. These are overlaid onto the terraform subprocess
+    # environment (see terraform_pipeline.pipeline_service.terraform_subprocess_env).
+    # Leave EMPTY to fall back to the shared credentials file (~/.aws/credentials)
+    # / instance role chain — so a developer who already ran `aws configure`
+    # needs no .env change. AWS_SESSION_TOKEN is only for temporary STS creds.
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_SESSION_TOKEN: str = ""
+    AWS_DEFAULT_REGION: str = "us-east-1"
+
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), extra="ignore")
 
     @model_validator(mode="after")

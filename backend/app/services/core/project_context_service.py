@@ -130,37 +130,60 @@ class ProjectContextService:
     # an exception — orchestrator state shape evolves, and a failed digest
     # must not break a workflow.
 
+    # NOTE: the orchestrator stores codebase-analysis output under
+    # ``state["repo_summary"]`` (the parser's ``project_summary``) and
+    # ``state["application_profile"]`` — NOT under ``state["codebase_analysis"]``.
+    # These helpers read that real shape: ``project_summary`` carries a nested
+    # ``stack`` ({languages, frameworks, package_managers, devops_tools}),
+    # ``services``, ``runtime``, and ``has_docker``/``has_ci_cd`` flags.
     @staticmethod
     def _digest_repo_summary(state: Dict[str, Any]) -> Dict[str, Any]:
         agent_ctx = state.get("agent_context") or {}
-        repo_meta = state.get("repository_metadata") or {}
-        analysis  = state.get("codebase_analysis") or {}
+        summary   = state.get("repo_summary") or {}
+        stack     = summary.get("stack") or {}
+        languages = stack.get("languages") or []
+        devops    = stack.get("devops_tools") or []
+        services  = summary.get("services") or []
         return {
-            "language":          analysis.get("language") or repo_meta.get("language"),
-            "frameworks":        analysis.get("frameworks") or [],
-            "build_systems":     analysis.get("build_systems") or [],
-            "service_count":     len(analysis.get("services") or []),
-            "lines_of_code":     analysis.get("lines_of_code"),
-            "has_dockerfile":    bool(analysis.get("has_dockerfile")),
-            "has_compose":       bool(analysis.get("has_compose")),
-            "has_ci":            bool(analysis.get("has_ci")),
+            "project_type":      summary.get("project_type"),
+            "language":          languages[0] if languages else None,
+            "languages":         languages,
+            "frameworks":        stack.get("frameworks") or [],
+            "build_systems":     stack.get("package_managers") or [],
+            "devops_tools":      devops,
+            "service_count":     len(services),
+            "lines_of_code":     summary.get("lines_of_code"),
+            "has_dockerfile":    bool(summary.get("has_docker")),
+            "has_compose":       "Docker Compose" in devops,
+            "has_ci":            bool(summary.get("has_ci_cd")),
             "application_profile": agent_ctx.get("application_profile") or state.get("application_profile"),
         }
 
     @staticmethod
     def _digest_detected_stack(state: Dict[str, Any]) -> Dict[str, Any]:
-        analysis = state.get("codebase_analysis") or {}
+        summary   = state.get("repo_summary") or {}
+        stack     = summary.get("stack") or {}
+        runtime   = summary.get("runtime") or {}
+        languages = stack.get("languages") or []
+        # Prefer a concrete detected version; fall back to the primary language.
+        runtime_label = (
+            runtime.get("python_version")
+            or runtime.get("node_version")
+            or runtime.get("java_version")
+            or (languages[0] if languages else None)
+        )
         return {
-            "language":      analysis.get("language"),
-            "runtime":       analysis.get("runtime"),
-            "frameworks":    analysis.get("frameworks") or [],
-            "dependencies":  (analysis.get("dependencies") or [])[:50],
+            "language":      languages[0] if languages else None,
+            "languages":     languages,
+            "runtime":       runtime_label,
+            "frameworks":    stack.get("frameworks") or [],
+            "dependencies":  (stack.get("package_managers") or [])[:50],
         }
 
     @staticmethod
     def _digest_detected_services(state: Dict[str, Any]) -> Dict[str, Any]:
-        analysis = state.get("codebase_analysis") or {}
-        services = analysis.get("services") or []
+        summary = state.get("repo_summary") or {}
+        services = summary.get("services") or []
         return {"services": services[:32]}
 
     @staticmethod

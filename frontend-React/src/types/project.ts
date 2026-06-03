@@ -199,7 +199,15 @@ export interface ProjectDetailResponse extends ProjectResponse {
 
 // ─── Workflow execution payloads ─────────────────────────────────────────────
 
-export type PhaseName = 'DOCKER' | 'TERRAFORM' | 'KUBERNETES' | 'CICD'
+export type PhaseName =
+  | 'DOCKER'
+  | 'TERRAFORM'
+  | 'KUBERNETES'
+  | 'CICD'
+  // Infrastructure Lifecycle phases (template-driven MVP pipeline).
+  | 'TERRAFORM_GENERATION'
+  | 'TERRAFORM_VALIDATION'
+  | 'TERRAFORM_PLAN'
 
 export interface StartWorkflowPayload {
   prompt: string

@@ -163,7 +163,16 @@ class SelectPlanRequest(BaseModel):
     plan_id: str = Field(..., min_length=1)
 
 
-PhaseName = Literal["DOCKER", "TERRAFORM", "KUBERNETES", "CICD"]
+PhaseName = Literal[
+    "DOCKER",
+    "TERRAFORM",
+    "KUBERNETES",
+    "CICD",
+    # Infrastructure Lifecycle phases (template-driven MVP pipeline).
+    "TERRAFORM_GENERATION",
+    "TERRAFORM_VALIDATION",
+    "TERRAFORM_PLAN",
+]
 
 
 class WorkflowStartResponse(BaseModel):

@@ -252,6 +252,28 @@ export function getWsExecutionUrl(taskId: string): string {
   return `${wsBase}/ws/execution/${taskId}`
 }
 
+export type TerraformWsPhase = 'terraform_validate' | 'terraform_plan'
+
+/**
+ * Compute the WebSocket URL for live Terraform validation / plan log streaming.
+ * Reuses the same streaming system as Docker builds, namespaced per phase. The
+ * access token is appended as a query param because browsers cannot set custom
+ * headers on a WS handshake.
+ */
+export function getWsTerraformUrl(
+  taskId: string,
+  phase: TerraformWsPhase,
+  token?: string | null,
+): string {
+  const wsBase = BASE
+    ? BASE.replace(/^http/, 'ws')
+    : (typeof window !== 'undefined'
+      ? `ws://${window.location.host}`
+      : 'ws://localhost:8000')
+  const q = token ? `?token=${encodeURIComponent(token)}` : ''
+  return `${wsBase}/ws/terraform/${taskId}/${phase}${q}`
+}
+
 async function _workflowPost(path: string, body?: unknown): Promise<WorkflowPhaseResponse> {
   const res = await fetch(`${BASE}/api${path}`, {
     method: 'POST',
