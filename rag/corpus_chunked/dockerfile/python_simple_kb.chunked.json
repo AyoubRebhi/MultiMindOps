@@ -1,0 +1,46 @@
+{
+  "file_name": "rag/corpus/dockerfile/python_simple_kb.json",
+  "source_file": "rag/corpus_cleaned/dockerfile/python_simple_kb.cleaned.json",
+  "domain": "dockerfile",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "dockerfile/python_simple_kb::dockerfile_python_simple#0",
+      "parent_id": "dockerfile/python_simple_kb::dockerfile_python_simple",
+      "title": "Generic Python Backend Dockerfile",
+      "domain": "dockerfile",
+      "service": "Docker",
+      "content": "Generic Python Backend Dockerfile\n\nSimple fallback Dockerfile for a Python backend service when no specialized framework (FastAPI, Flask, Streamlit) is detected. Base: python:3.11-slim. Installs pip requirements, copies source. Sets PYTHONUNBUFFERED=1. CMD: sh -c python main.py.\n\nDecision rules:\n- Use when language=python, framework=generic, project_type=backend_service\n- Fall back to this template only when no framework-specific Dockerfile exists\n\nTrade-offs:\n- Assumes main.py as entrypoint — must be updated if the entrypoint differs\n- No multi-stage build and no non-root user — extend for production hardening\n\nAnti-patterns:\n- Do not use python:latest — always pin to a specific version (e.g. python:3.11-slim)\n- Do not copy source before installing requirements — always install deps first",
+      "metadata": {
+        "id": "dockerfile/python_simple_kb::dockerfile_python_simple",
+        "title": "Generic Python Backend Dockerfile",
+        "domain": "dockerfile",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "dockerfile",
+          "docker",
+          "build",
+          "runtime"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/dockerfile/python_simple_kb.json",
+          "source_id": "dockerfile_python_simple"
+        },
+        "cleaned_file": "rag/corpus_cleaned/dockerfile/python_simple_kb.cleaned.json",
+        "source_file": "rag/corpus/dockerfile/python_simple_kb.json",
+        "original_content_hash": "afd6b92176d5412d9a06842eb2987206db38a316e008fe216f67147d79efdae3"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

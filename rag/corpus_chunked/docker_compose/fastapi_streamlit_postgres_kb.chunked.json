@@ -1,0 +1,46 @@
+{
+  "file_name": "rag/corpus/docker_compose/fastapi_streamlit_postgres_kb.json",
+  "source_file": "rag/corpus_cleaned/docker_compose/fastapi_streamlit_postgres_kb.cleaned.json",
+  "domain": "docker_compose",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "docker_compose/fastapi_streamlit_postgres_kb::compose_fastapi_streamlit_postgres#0",
+      "parent_id": "docker_compose/fastapi_streamlit_postgres_kb::compose_fastapi_streamlit_postgres",
+      "title": "Full-stack FastAPI + Streamlit + PostgreSQL Compose",
+      "domain": "docker_compose",
+      "service": "Docker",
+      "content": "Full-stack FastAPI + Streamlit + PostgreSQL Compose\n\nCompose pattern for a three-service stack: FastAPI backend (port 8000) receiving DATABASE_URL and GROQ_API_KEY, Streamlit frontend (port 8501) depending on backend, and PostgreSQL 15 database. Frontend overrides CMD to run streamlit. All credentials supplied via environment variables.\n\nDecision rules:\n- Use for full-stack Python applications with Streamlit UI, FastAPI API, and PostgreSQL\n- Frontend depends_on backend — Compose starts backend service first\n- Pass GROQ_API_KEY and other third-party API keys only via .env or Docker secrets\n\nTrade-offs:\n- No persistent volume for database — add a named volume under volumes: for data durability\n- No readiness healthchecks — services may connect before dependencies finish initializing\n\nAnti-patterns:\n- Do not hardcode API keys (e.g. GROQ_API_KEY) inline in docker-compose.yml\n- Do not expose all internal service ports to the host unnecessarily",
+      "metadata": {
+        "id": "docker_compose/fastapi_streamlit_postgres_kb::compose_fastapi_streamlit_postgres",
+        "title": "Full-stack FastAPI + Streamlit + PostgreSQL Compose",
+        "domain": "docker_compose",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "docker-compose",
+          "docker",
+          "compose",
+          "local-development"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/docker_compose/fastapi_streamlit_postgres_kb.json",
+          "source_id": "compose_fastapi_streamlit_postgres"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker_compose/fastapi_streamlit_postgres_kb.cleaned.json",
+        "source_file": "rag/corpus/docker_compose/fastapi_streamlit_postgres_kb.json",
+        "original_content_hash": "0b4407f34013c2be4ac898efc76867142548aeb17e81fdceec079965433c9902"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

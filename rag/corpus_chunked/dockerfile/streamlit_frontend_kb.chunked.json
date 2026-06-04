@@ -1,0 +1,46 @@
+{
+  "file_name": "rag/corpus/dockerfile/streamlit_frontend_kb.json",
+  "source_file": "rag/corpus_cleaned/dockerfile/streamlit_frontend_kb.cleaned.json",
+  "domain": "dockerfile",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "dockerfile/streamlit_frontend_kb::dockerfile_streamlit_frontend#0",
+      "parent_id": "dockerfile/streamlit_frontend_kb::dockerfile_streamlit_frontend",
+      "title": "Streamlit Web UI Dockerfile",
+      "domain": "dockerfile",
+      "service": "Docker",
+      "content": "Streamlit Web UI Dockerfile\n\nDockerfile for a Streamlit web UI service. Base: python:3.11-slim. Installs pip requirements, copies source, exposes port 8501. CMD: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0.\n\nDecision rules:\n- Use when framework=streamlit, project_type=web_ui\n- Always bind to --server.address 0.0.0.0 (not 127.0.0.1) so the container port is reachable externally\n- Default Streamlit port is 8501 — map to desired host port in docker-compose or Kubernetes\n\nTrade-offs:\n- Single-stage build — suitable for frontend UI services where image size is less critical\n- No non-root user — add USER directive for security-hardened deployments\n\nAnti-patterns:\n- Do not bind to 127.0.0.1 (localhost) inside the container — traffic will not reach the service\n- Do not hardcode --server.port if flexible port binding across environments is needed",
+      "metadata": {
+        "id": "dockerfile/streamlit_frontend_kb::dockerfile_streamlit_frontend",
+        "title": "Streamlit Web UI Dockerfile",
+        "domain": "dockerfile",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "dockerfile",
+          "docker",
+          "build",
+          "runtime"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/dockerfile/streamlit_frontend_kb.json",
+          "source_id": "dockerfile_streamlit_frontend"
+        },
+        "cleaned_file": "rag/corpus_cleaned/dockerfile/streamlit_frontend_kb.cleaned.json",
+        "source_file": "rag/corpus/dockerfile/streamlit_frontend_kb.json",
+        "original_content_hash": "c1f5f83944b91fbc0f5f44942a4f788e20c704f9359378d8ee48bb280cfdf9b8"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

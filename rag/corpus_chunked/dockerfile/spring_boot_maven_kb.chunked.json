@@ -1,0 +1,46 @@
+{
+  "file_name": "rag/corpus/dockerfile/spring_boot_maven_kb.json",
+  "source_file": "rag/corpus_cleaned/dockerfile/spring_boot_maven_kb.cleaned.json",
+  "domain": "dockerfile",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "dockerfile/spring_boot_maven_kb::dockerfile_spring_boot_maven#0",
+      "parent_id": "dockerfile/spring_boot_maven_kb::dockerfile_spring_boot_maven",
+      "title": "Spring Boot Maven Multi-stage Dockerfile",
+      "domain": "dockerfile",
+      "service": "Docker",
+      "content": "Spring Boot Maven Multi-stage Dockerfile\n\nMulti-stage Dockerfile for a Spring Boot service built with Maven. Build stage: maven:3.9-eclipse-temurin-17 — copies pom.xml and mvnw, runs mvnw -DskipTests package. Runtime stage: eclipse-temurin:17-jre — copies compiled JAR, exposes 8080, ENTRYPOINT java -jar /app/app.jar.\n\nDecision rules:\n- Use when language=java, framework=spring_boot, runtime=maven\n- Multi-stage separates build tools from the runtime image, significantly reducing final image size\n- Use eclipse-temurin:17-jre (JRE only, not JDK) in runtime stage\n\nTrade-offs:\n- Build time is longer due to Maven dependency resolution, mitigated by caching pom.xml separately\n- mvnw wrapper must exist in project root; fall back to mvn if absent\n\nAnti-patterns:\n- Do not use a JDK image in the runtime stage — use JRE to minimize attack surface\n- Do not skip -DskipTests if test failures should gate the build",
+      "metadata": {
+        "id": "dockerfile/spring_boot_maven_kb::dockerfile_spring_boot_maven",
+        "title": "Spring Boot Maven Multi-stage Dockerfile",
+        "domain": "dockerfile",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "dockerfile",
+          "docker",
+          "build",
+          "runtime"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/dockerfile/spring_boot_maven_kb.json",
+          "source_id": "dockerfile_spring_boot_maven"
+        },
+        "cleaned_file": "rag/corpus_cleaned/dockerfile/spring_boot_maven_kb.cleaned.json",
+        "source_file": "rag/corpus/dockerfile/spring_boot_maven_kb.json",
+        "original_content_hash": "0ac429f0a47716168a5933775d324ba421990410f2fbfb4df02141f77f2d5409"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

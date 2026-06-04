@@ -1,0 +1,226 @@
+{
+  "file_name": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+  "source_file": "rag/corpus_cleaned/supply_chain/supply_chain_security_kb.cleaned.json",
+  "domain": "supply_chain",
+  "resource_type": "security",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 5,
+  "chunk_count": 5,
+  "chunks": [
+    {
+      "chunk_id": "supply_chain/supply_chain_security_kb::sc-001#0",
+      "parent_id": "supply_chain/supply_chain_security_kb::sc-001",
+      "title": "SLSA levels and what each one actually requires",
+      "domain": "supply_chain",
+      "service": "Sigstore Cosign",
+      "content": "SLSA levels and what each one actually requires\n\nSLSA (Supply-chain Levels for Software Artifacts) defines four progressive levels of build integrity. Level 1: build process is documented and produces provenance. Level 2: build runs on a hosted service that generates signed provenance. Level 3: build platform is hardened, source and build are isolated, provenance is non-forgeable. Level 4 (in v0.1; deprecated as a level in v1.0): hermetic, reproducible builds with two-party review. Most teams should target Level 3 — it is the meaningful security boundary and is achievable on GitHub Actions with the slsa-github-generator.\n\nDecision rules:\n- TARGET SLSA Level 3 for all production artifacts — Levels 1 and 2 do not meaningfully prevent build-system compromise\n- USE GitHub Actions with the official slsa-github-generator reusable workflow — produces L3 provenance out of the box\n- PUBLISH provenance alongside the artifact (OCI annotations or attestation) — consumers verify before pulling\n- ENFORCE provenance verification at deploy time — admission controller (sigstore policy-controller) blocks unsigned/unattested images\n- ROTATE signing keys via Sigstore keyless signing (OIDC-based, ephemeral keys) — eliminates key management\n\nTrade-offs:\n- SLSA L3 with hosted CI: clear win vs requires reusable workflow constraints (no arbitrary scripts in build phase)\n- Keyless cosign: zero key mgmt vs depends on public Rekor + Fulcio (sigstore public good infra)\n- Self-hosted L3: full control vs significant build-system hardening required\n\nAnti-patterns:\n- Claiming SLSA L1 'because we generate a build log' — provides no integrity guarantee\n- Signing artifacts but not verifying signatures at deploy time — signing without verification is security theater\n- Storing the cosign private key in CI secrets — keyless mode eliminates this risk",
+      "metadata": {
+        "id": "supply_chain/supply_chain_security_kb::sc-001",
+        "title": "SLSA levels and what each one actually requires",
+        "domain": "supply_chain",
+        "service": "Sigstore Cosign",
+        "category": "SLSA Framework",
+        "tags": [
+          "supply-chain",
+          "security",
+          "sigstore-cosign",
+          "slsa",
+          "sbom",
+          "cosign",
+          "sigstore",
+          "trivy",
+          "snyk",
+          "sonarqube",
+          "ci-cd",
+          "provenance",
+          "signing"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+          "source_id": "sc-001"
+        },
+        "cleaned_file": "rag/corpus_cleaned/supply_chain/supply_chain_security_kb.cleaned.json",
+        "source_file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+        "original_content_hash": "81dc9fea961d3072733e98840be05851a0233d74600c9c1eae9ddb15226a669a"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "supply_chain/supply_chain_security_kb::sc-002#0",
+      "parent_id": "supply_chain/supply_chain_security_kb::sc-002",
+      "title": "Generating, publishing, and consuming SBOMs",
+      "domain": "supply_chain",
+      "service": "Sigstore Cosign",
+      "content": "Generating, publishing, and consuming SBOMs\n\nAn SBOM (Software Bill of Materials) lists every component (direct and transitive) included in an artifact, with version and ideally hash. It is the prerequisite for fast vulnerability response — when log4shell drops, you query SBOMs to find affected systems in minutes, not weeks. Generate SBOMs at build time (when dependency resolution is fresh), in CycloneDX or SPDX format, and attach them as OCI attestations next to the image. Consume them at runtime by scanning continuously against vulnerability databases.\n\nDecision rules:\n- GENERATE SBOM at build time using syft (containers, language ecosystems) — embed in the artifact OCI attestation\n- PREFER CycloneDX 1.5+ for security-focused SBOMs (richer vuln, license, and ML-BOM extensions) or SPDX for license compliance\n- PUBLISH SBOM alongside the image: `cosign attest --predicate sbom.json --type cyclonedx` with keyless signing\n- SCAN SBOMs continuously (not just at build) — new CVEs appear daily; grype or Trivy can scan SBOMs offline\n- MAINTAIN an SBOM repository (Dependency-Track or GitHub Dependency Graph) for org-wide CVE-impact queries\n\nTrade-offs:\n- Build-time SBOM: accurate but tied to build infra vs runtime SBOM (scan deployed image) catches drift\n- CycloneDX: richer for security vs SPDX is more standard for legal/license teams — generate both if needed (cost is small)\n- Continuous scanning: catches new CVEs vs constant noise — tune severity thresholds\n\nAnti-patterns:\n- Generating SBOM only at build time, never re-scanning — misses CVEs disclosed after release\n- SBOM that includes only direct deps — transitive deps are where most CVEs live\n- Publishing SBOMs without signing — an SBOM you cannot trust is worse than no SBOM",
+      "metadata": {
+        "id": "supply_chain/supply_chain_security_kb::sc-002",
+        "title": "Generating, publishing, and consuming SBOMs",
+        "domain": "supply_chain",
+        "service": "Sigstore Cosign",
+        "category": "SBOM",
+        "tags": [
+          "supply-chain",
+          "security",
+          "sigstore-cosign",
+          "slsa",
+          "sbom",
+          "cosign",
+          "sigstore",
+          "trivy",
+          "snyk",
+          "sonarqube",
+          "ci-cd",
+          "provenance",
+          "signing"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+          "source_id": "sc-002"
+        },
+        "cleaned_file": "rag/corpus_cleaned/supply_chain/supply_chain_security_kb.cleaned.json",
+        "source_file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+        "original_content_hash": "8f97b8400e586364aa834ff88c51b7cccbc5158346df543427f0a08b2b7e024b"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "supply_chain/supply_chain_security_kb::sc-003#0",
+      "parent_id": "supply_chain/supply_chain_security_kb::sc-003",
+      "title": "Cosign keyless signing and admission-policy enforcement",
+      "domain": "supply_chain",
+      "service": "Sigstore Cosign",
+      "content": "Cosign keyless signing and admission-policy enforcement\n\ncosign (Sigstore) signs container images and other OCI artifacts. Keyless mode uses short-lived certificates issued by Fulcio based on OIDC identity (e.g. GitHub Actions OIDC token), eliminating long-lived signing keys. The signature is logged to the public transparency log Rekor. At deploy time, an admission controller (sigstore policy-controller, Kyverno, or Connaisseur) verifies that every image is signed by an expected identity before the pod is admitted.\n\nDecision rules:\n- SIGN every production image with cosign keyless during the build job — `cosign sign --yes ${IMAGE}@${DIGEST}`\n- VERIFY at admission time using an identity claim, not a public key: `--certificate-identity=https://github.com/<org>/<repo>/.github/workflows/release.yml@refs/tags/*` and `--certificate-oidc-issuer=https://token.actions.githubusercontent.com`\n- PIN images by digest (`@sha256:...`), not by tag — tags are mutable, digests are not\n- ATTACH attestations (SBOM, SLSA provenance) to the same digest — verify them with the same identity-based policy\n- BLOCK at admission: if signature is missing, identity is wrong, or no Rekor entry exists — fail closed\n\nTrade-offs:\n- Keyless signing: no key management vs depends on public Sigstore infrastructure (highly available but third-party)\n- Self-hosted Sigstore (Fulcio + Rekor): control vs operational burden — only needed for air-gapped environments\n- Strict identity match: high integrity vs blocks legitimate deploys when workflow paths change\n\nAnti-patterns:\n- Signing with a long-lived cosign keypair stored in CI secrets — defeats most of the security gain\n- Verifying only that a signature exists, not who signed it — anyone can sign any image\n- Pinning by `:latest` tag — no integrity guarantee even with verified signatures",
+      "metadata": {
+        "id": "supply_chain/supply_chain_security_kb::sc-003",
+        "title": "Cosign keyless signing and admission-policy enforcement",
+        "domain": "supply_chain",
+        "service": "Sigstore Cosign",
+        "category": "Container Signing",
+        "tags": [
+          "supply-chain",
+          "security",
+          "sigstore-cosign",
+          "slsa",
+          "sbom",
+          "cosign",
+          "sigstore",
+          "trivy",
+          "snyk",
+          "sonarqube",
+          "ci-cd",
+          "provenance",
+          "signing"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+          "source_id": "sc-003"
+        },
+        "cleaned_file": "rag/corpus_cleaned/supply_chain/supply_chain_security_kb.cleaned.json",
+        "source_file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+        "original_content_hash": "e57f7a9c1b80537f5977d8132b800fb22d9c663e3392b734fbe5489cf29e4ae5"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "supply_chain/supply_chain_security_kb::sc-004#0",
+      "parent_id": "supply_chain/supply_chain_security_kb::sc-004",
+      "title": "Hardening a GitHub Actions / GitLab CI build pipeline",
+      "domain": "supply_chain",
+      "service": "GitHub Actions",
+      "content": "Hardening a GitHub Actions / GitLab CI build pipeline\n\nThe pipeline IS the supply chain. A compromised CI runner is a worst-case incident — it can sign and deploy malicious artifacts wearing your identity. Hardening: pin all third-party actions by SHA (not by tag), use OIDC federation to AWS instead of long-lived keys, enable required reviews on protected workflow files, run dependency scans (Dependabot/Renovate + Snyk/Trivy), run static analysis (SonarQube/CodeQL), and enforce branch protection.\n\nDecision rules:\n- PIN third-party actions by full commit SHA — `uses: actions/checkout@8f4b7f...` not `@v4` (Dependabot can update SHAs)\n- USE OIDC federation from CI to AWS/GCP/Azure — no long-lived cloud credentials in CI secrets\n- ENFORCE branch protection on main: required PR review, signed commits, status checks (lint, test, scan, SAST)\n- RUN SCAN GATES (block on Critical CVEs): Trivy on container, Snyk/OWASP Dependency-Check on libraries, gitleaks on secrets, CodeQL/Semgrep on code\n- ISOLATE build jobs: separate runners or ephemeral runners for production builds; never reuse runner state across runs\n- REVIEW required workflow file changes via CODEOWNERS — workflow modifications are the most sensitive change in the repo\n\nTrade-offs:\n- SHA-pinning: prevents action-tag retargeting vs requires Renovate/Dependabot to keep moving\n- Ephemeral runners: cleanest isolation vs slower and more expensive than reusable runners\n- Strict scan gates: catches issues vs blocks deploys on noisy findings — tune severity per repo\n\nAnti-patterns:\n- `uses: random/action@main` — the action author can ship malicious code at any time\n- Long-lived AWS keys in CI secrets — OIDC federation has been GA since 2021\n- `pull_request_target` with checkout of PR head + privileged secrets — public-repo poisoning vector\n- Self-hosted runners on public repos without isolation — strangers run code with your secrets",
+      "metadata": {
+        "id": "supply_chain/supply_chain_security_kb::sc-004",
+        "title": "Hardening a GitHub Actions / GitLab CI build pipeline",
+        "domain": "supply_chain",
+        "service": "GitHub Actions",
+        "category": "Secure CI Pipeline",
+        "tags": [
+          "supply-chain",
+          "security",
+          "github-actions",
+          "slsa",
+          "sbom",
+          "cosign",
+          "sigstore",
+          "trivy",
+          "snyk",
+          "sonarqube",
+          "ci-cd",
+          "provenance",
+          "signing"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+          "source_id": "sc-004"
+        },
+        "cleaned_file": "rag/corpus_cleaned/supply_chain/supply_chain_security_kb.cleaned.json",
+        "source_file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+        "original_content_hash": "7f2556ca539bc971a779728a72c622c1e60fd03439168c3d15ef09c10bbe00fa"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "supply_chain/supply_chain_security_kb::sc-005#0",
+      "parent_id": "supply_chain/supply_chain_security_kb::sc-005",
+      "title": "Trivy, Snyk, SonarQube — what each is for and how to combine them",
+      "domain": "supply_chain",
+      "service": "Trivy",
+      "content": "Trivy, Snyk, SonarQube — what each is for and how to combine them\n\nThese tools cover overlapping but distinct surfaces. Trivy (Aqua) is the de facto open-source scanner for containers, IaC, and SBOMs — fast, free, broad. Snyk is commercial, with strong dependency-vulnerability databases, license compliance, and developer UX. SonarQube focuses on code quality and SAST findings (bugs, code smells, security hotspots). A balanced pipeline runs Trivy on every container build and IaC plan, Snyk on dependencies (or use Trivy + grype if budget-constrained), and SonarQube/CodeQL/Semgrep on the source.\n\nDecision rules:\n- RUN Trivy on every container image in CI (`trivy image --severity CRITICAL,HIGH --exit-code 1`) — fail the build on Critical/High\n- RUN Trivy on Terraform/CloudFormation/K8s manifests (`trivy config`) before plan/apply\n- RUN dependency scan on every PR (Snyk, Dependabot, or `trivy fs`) — gate merge on no new Critical CVEs\n- RUN SAST (SonarQube, CodeQL, or Semgrep) on every PR — block on new security hotspots or quality regressions\n- DEFINE an exception process — CVEs without fixes need documented risk acceptance with expiry, not silent suppression\n- CONTINUOUSLY scan production images, not just at build — new CVEs disclose against deployed images daily\n\nTrade-offs:\n- Trivy free vs Snyk paid: Trivy covers most needs; Snyk's value is in advanced reachability analysis and the developer UX\n- Strict block on High/Critical: forces hygiene vs blocks legitimate work when no upstream fix exists — exception process is essential\n- Continuous scanning: catches new CVEs vs alert fatigue — route to a triage queue, not directly to engineers\n\nAnti-patterns:\n- Suppressing CVEs in `.trivyignore` without a documented reason or expiry date\n- Running scans but not blocking merges on findings — provides visibility, no enforcement\n- Scanning only at build time — misses post-deploy CVE disclosures",
+      "metadata": {
+        "id": "supply_chain/supply_chain_security_kb::sc-005",
+        "title": "Trivy, Snyk, SonarQube — what each is for and how to combine them",
+        "domain": "supply_chain",
+        "service": "Trivy",
+        "category": "Vulnerability Management",
+        "tags": [
+          "supply-chain",
+          "security",
+          "trivy",
+          "slsa",
+          "sbom",
+          "cosign",
+          "sigstore",
+          "snyk",
+          "sonarqube",
+          "ci-cd",
+          "provenance",
+          "signing"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+          "source_id": "sc-005"
+        },
+        "cleaned_file": "rag/corpus_cleaned/supply_chain/supply_chain_security_kb.cleaned.json",
+        "source_file": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+        "original_content_hash": "50ba1825852491cb16ba095b4d0a86ab144c4a72ea1a4c5d806b4dea9c08a9e5"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

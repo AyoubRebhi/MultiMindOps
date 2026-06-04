@@ -1,0 +1,44 @@
+{
+  "file_name": "rag/corpus/security/terraform_security_notes_kb.json",
+  "source_file": "rag/corpus_cleaned/security/terraform_security_notes_kb.cleaned.json",
+  "domain": "security",
+  "resource_type": "security",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "security/terraform_security_notes_kb::security_terraform_notes#0",
+      "parent_id": "security/terraform_security_notes_kb::security_terraform_notes",
+      "title": "Terraform Security Baseline Reminders",
+      "domain": "security",
+      "service": "HashiCorp Terraform",
+      "content": "Terraform Security Baseline Reminders\n\nSecurity reminders applied during Terraform code generation: always pin provider versions with version constraints, never set sensitive values as hardcoded variable defaults, mark outputs containing sensitive data with sensitive = true.\n\nDecision rules:\n- Pin all provider versions with constraints (e.g. version = \"~> 5.0\") — never omit or use \"latest\"\n- Declare sensitive variables with sensitive = true to suppress them in plan/apply logs\n- Default values for sensitive variables should be null or omitted — require explicit injection\n\nAnti-patterns:\n- Using no version constraint or version = \"latest\" for Terraform providers\n- Setting default = \"mysecretpassword\" on a sensitive variable\n- Outputting sensitive values (DB passwords, private keys) without sensitive = true",
+      "metadata": {
+        "id": "security/terraform_security_notes_kb::security_terraform_notes",
+        "title": "Terraform Security Baseline Reminders",
+        "domain": "security",
+        "service": "HashiCorp Terraform",
+        "category": "terraform",
+        "tags": [
+          "security",
+          "hashicorp-terraform"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/security/terraform_security_notes_kb.json",
+          "source_id": "security_terraform_notes"
+        },
+        "cleaned_file": "rag/corpus_cleaned/security/terraform_security_notes_kb.cleaned.json",
+        "source_file": "rag/corpus/security/terraform_security_notes_kb.json",
+        "original_content_hash": "015f6b29e8ceda9d1b2628c4af805188dc055265beb8827d8f8502b93da1a0d6"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

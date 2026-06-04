@@ -1,0 +1,82 @@
+{
+  "file_name": "rag/corpus/terraform/aws_vpc_complete.tf",
+  "source_file": "rag/corpus_cleaned/terraform/aws_vpc_complete.cleaned.json",
+  "domain": "terraform",
+  "resource_type": "terraform",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 2,
+  "chunk_count": 2,
+  "chunks": [
+    {
+      "chunk_id": "terraform/aws_vpc_complete::tf-vpc-001#0",
+      "parent_id": "terraform/aws_vpc_complete::tf-vpc-001",
+      "title": "Production VPC Layout — Multi-AZ Public/Private Subnets with Per-AZ NAT",
+      "domain": "terraform",
+      "service": "Amazon VPC",
+      "content": "Production VPC Layout — Multi-AZ Public/Private Subnets with Per-AZ NAT\n\nProvisions a production VPC with DNS support and hostnames enabled, an Internet Gateway, and one public and one private subnet per availability zone (CIDRs derived deterministically via cidrsubnet). Public subnets set map_public_ip_on_launch=true and route 0.0.0.0/0 to the Internet Gateway; private subnets have no public IPs and route 0.0.0.0/0 to a per-AZ NAT Gateway (each with its own Elastic IP). The AZ list, VPC CIDR (default 10.0.0.0/16), region, and environment are variables.\n\nWhen to use:\n- Use as the network foundation for multi-AZ production workloads that need public ingress/egress (load balancers, NAT) and private application/data tiers\n- Use the availability_zones list variable to control how many AZs (and therefore subnets and NAT gateways) are created\n\nBest practices:\n- Derive subnet CIDRs with cidrsubnet(var.vpc_cidr, 8, index) so subnets are non-overlapping and deterministic across AZs\n- Deploy one NAT Gateway (and one Elastic IP) per AZ so a single AZ failure does not cut outbound access for the other AZs; associate each private subnet with its own per-AZ private route table\n- Enable enable_dns_support and enable_dns_hostnames on the VPC, and tag every resource with Environment, Tier (public/private), and ManagedBy=terraform\n\nSecurity considerations:\n- Keep map_public_ip_on_launch=false on private subnets so application and data tiers never receive public IPs\n- Place only internet-facing resources in public subnets; private subnets reach the internet only outbound through NAT, with no inbound path from the IGW\n\nTerraform resources: aws_vpc (DNS on) + aws_internet_gateway + aws_subnet.public/private (count over AZs, cidrsubnet) + aws_eip.nat + aws_nat_gateway (per AZ, depends_on IGW) + aws_route_table public(IGW)/private(NAT) + associations.",
+      "metadata": {
+        "id": "terraform/aws_vpc_complete::tf-vpc-001",
+        "title": "Production VPC Layout — Multi-AZ Public/Private Subnets with Per-AZ NAT",
+        "domain": "terraform",
+        "service": "Amazon VPC",
+        "category": "AWS Networking — VPC",
+        "tags": [
+          "terraform",
+          "infrastructure",
+          "provisioning",
+          "iac",
+          "amazon-vpc"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "terraform",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/terraform/aws_vpc_complete.tf",
+          "source_id": "tf-vpc-001"
+        },
+        "cleaned_file": "rag/corpus_cleaned/terraform/aws_vpc_complete.cleaned.json",
+        "source_file": "rag/corpus/terraform/aws_vpc_complete.tf",
+        "original_content_hash": "4c5a6a0b81c4c7c475922e5edbac3a7f7911be339d05f6bae2c9f544e4808576"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "terraform/aws_vpc_complete::tf-vpc-002#0",
+      "parent_id": "terraform/aws_vpc_complete::tf-vpc-002",
+      "title": "VPC Flow Logs to CloudWatch",
+      "domain": "terraform",
+      "service": "Amazon CloudWatch",
+      "content": "VPC Flow Logs to CloudWatch\n\nEnables VPC Flow Logs capturing ALL traffic for the VPC and delivering them to a dedicated CloudWatch Log Group (retention 30 days). A dedicated IAM role assumable by vpc-flow-logs.amazonaws.com grants the logs:CreateLogGroup/CreateLogStream/PutLogEvents/DescribeLogGroups/DescribeLogStreams actions needed to write the logs.\n\nWhen to use:\n- Use as a security and network-observability baseline so VPC traffic (accepted and rejected) is recorded for audit, troubleshooting, and threat detection\n\nBest practices:\n- Capture traffic_type ALL (not just ACCEPT or REJECT) for complete visibility\n- Set an explicit CloudWatch log retention (30 days here) so logs are kept long enough to investigate without growing unbounded\n- Use a dedicated flow-log IAM role rather than reusing an unrelated role\n\nSecurity considerations:\n- Flow logs provide the network-visibility signal needed to detect and scope intrusions and misconfigurations\n- The flow-log role's logs policy uses Resource \"*\"; tightening it to the specific log group ARN would further enforce least privilege\n\nTerraform resources: aws_flow_log (traffic_type ALL → CloudWatch) + aws_cloudwatch_log_group (/aws/vpc-flow-log/${env}, retention 30) + aws_iam_role flow_log (assume by vpc-flow-logs.amazonaws.com) + aws_iam_role_policy (logs:* actions, Resource \"*\").",
+      "metadata": {
+        "id": "terraform/aws_vpc_complete::tf-vpc-002",
+        "title": "VPC Flow Logs to CloudWatch",
+        "domain": "terraform",
+        "service": "Amazon CloudWatch",
+        "category": "AWS Networking — Observability & Security",
+        "tags": [
+          "terraform",
+          "infrastructure",
+          "provisioning",
+          "iac",
+          "amazon-cloudwatch"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "terraform",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/terraform/aws_vpc_complete.tf",
+          "source_id": "tf-vpc-002"
+        },
+        "cleaned_file": "rag/corpus_cleaned/terraform/aws_vpc_complete.cleaned.json",
+        "source_file": "rag/corpus/terraform/aws_vpc_complete.tf",
+        "original_content_hash": "fa3e22b1a41d431531f8e0d8104d67d4badcd29f6dc167c9c540a0266332952e"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

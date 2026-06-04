@@ -1,0 +1,46 @@
+{
+  "file_name": "rag/corpus/env_example/springboot_mysql_kb.json",
+  "source_file": "rag/corpus_cleaned/env_example/springboot_mysql_kb.cleaned.json",
+  "domain": "env_example",
+  "resource_type": "security",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "env_example/springboot_mysql_kb::env_springboot_mysql#0",
+      "parent_id": "env_example/springboot_mysql_kb::env_springboot_mysql",
+      "title": "Spring Boot MySQL .env.example Template",
+      "domain": "env_example",
+      "service": "HashiCorp Vault",
+      "content": "Spring Boot MySQL .env.example Template\n\nSafe .env.example for Spring Boot with MySQL. Empty placeholders for MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD. All values blank to prevent credential leakage.\n\nDecision rules:\n- MYSQL_ROOT_PASSWORD is required by MySQL 8.0 container during initialization even when a regular user is also defined\n- Inject real values via CI/CD pipeline secrets (GitHub Actions secrets, GitLab CI variables, etc.) or a vault\n\nAnti-patterns:\n- Never set default passwords in .env.example\n- Never commit a populated .env file — use .gitignore to exclude .env",
+      "metadata": {
+        "id": "env_example/springboot_mysql_kb::env_springboot_mysql",
+        "title": "Spring Boot MySQL .env.example Template",
+        "domain": "env_example",
+        "service": "HashiCorp Vault",
+        "category": "secrets",
+        "tags": [
+          "env-example",
+          "secrets",
+          "configuration",
+          "hashicorp-vault"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/env_example/springboot_mysql_kb.json",
+          "source_id": "env_springboot_mysql"
+        },
+        "cleaned_file": "rag/corpus_cleaned/env_example/springboot_mysql_kb.cleaned.json",
+        "source_file": "rag/corpus/env_example/springboot_mysql_kb.json",
+        "original_content_hash": "dc5c7ef99f6ef83fbcf83cfd9d354757d27b972fb5dded9d45348d2b212f3161"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

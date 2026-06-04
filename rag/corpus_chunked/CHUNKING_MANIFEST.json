@@ -1,0 +1,191 @@
+{
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "totals": {
+    "files": 43,
+    "entries": 179,
+    "chunks": 179,
+    "llm_calls": 56,
+    "llm_split": 0,
+    "llm_kept_whole": 56,
+    "llm_fallback_rejected": 0,
+    "kept_short_no_llm": 123,
+    "kept_no_llm_flag": 0,
+    "cache_hits": 0,
+    "empty_entries": 0
+  },
+  "files": [
+    {
+      "source": "rag/corpus_cleaned/architecture/multi_tier_production_architectures_kb.cleaned.json",
+      "chunks": 5
+    },
+    {
+      "source": "rag/corpus_cleaned/cloud/aws_infrastructure_patterns_kb.cleaned.json",
+      "chunks": 10
+    },
+    {
+      "source": "rag/corpus_cleaned/cloud/aws_well_architected_security_kb.cleaned.json",
+      "chunks": 7
+    },
+    {
+      "source": "rag/corpus_cleaned/cost/aws_cost_optimization_kb.cleaned.json",
+      "chunks": 6
+    },
+    {
+      "source": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+      "chunks": 8
+    },
+    {
+      "source": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+      "chunks": 10
+    },
+    {
+      "source": "rag/corpus_cleaned/docker/dockerfile_production_patterns_kb.cleaned.json",
+      "chunks": 5
+    },
+    {
+      "source": "rag/corpus_cleaned/docker_compose/backend_redis_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/docker_compose/fastapi_postgres_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/docker_compose/fastapi_streamlit_postgres_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/docker_compose/springboot_mysql_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/dockerfile/fastapi_postgres_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/dockerfile/fastapi_uvicorn_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/dockerfile/python_simple_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/dockerfile/spring_boot_maven_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/dockerfile/spring_boot_mysql_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/dockerfile/streamlit_frontend_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/env_example/backend_external_api_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/env_example/fastapi_postgres_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/env_example/springboot_mysql_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/iam/aws_iam_decision_intelligence_kb.cleaned.json",
+      "chunks": 5
+    },
+    {
+      "source": "rag/corpus_cleaned/incidents/devsecops_failure_modes_kb.cleaned.json",
+      "chunks": 6
+    },
+    {
+      "source": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+      "chunks": 8
+    },
+    {
+      "source": "rag/corpus_cleaned/k8s/kubernetes_deployment_patterns_kb.cleaned.json",
+      "chunks": 5
+    },
+    {
+      "source": "rag/corpus_cleaned/kubernetes/backend_deployment_service_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/kubernetes/eks_decision_intelligence_kb.cleaned.json",
+      "chunks": 26
+    },
+    {
+      "source": "rag/corpus_cleaned/networking/zero_trust_networking_kb.cleaned.json",
+      "chunks": 6
+    },
+    {
+      "source": "rag/corpus_cleaned/observability/observability_patterns_kb.cleaned.json",
+      "chunks": 5
+    },
+    {
+      "source": "rag/corpus_cleaned/secrets/secrets_management_kb.cleaned.json",
+      "chunks": 5
+    },
+    {
+      "source": "rag/corpus_cleaned/security/compose_security_notes_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/security/docker_security_notes_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/security/kubernetes_security_notes_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/security/terraform_security_notes_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/supply_chain/supply_chain_security_kb.cleaned.json",
+      "chunks": 5
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/aws_iam_roles.cleaned.json",
+      "chunks": 3
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/aws_infra_kb_index.cleaned.json",
+      "chunks": 0
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/aws_vpc_complete.cleaned.json",
+      "chunks": 2
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/core_terraform_concepts_kb.cleaned.json",
+      "chunks": 7
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/docker_local_stack_kb.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/production_best_practices_kb.cleaned.json",
+      "chunks": 8
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/state_backend_s3.cleaned.json",
+      "chunks": 1
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/terraform_architecture_patterns_kb.cleaned.json",
+      "chunks": 8
+    },
+    {
+      "source": "rag/corpus_cleaned/terraform/terraform_security_best_practices_kb.cleaned.json",
+      "chunks": 9
+    }
+  ]
+}

@@ -1,0 +1,217 @@
+{
+  "file_name": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+  "source_file": "rag/corpus_cleaned/architecture/multi_tier_production_architectures_kb.cleaned.json",
+  "domain": "architecture",
+  "resource_type": "architecture",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 5,
+  "chunk_count": 5,
+  "chunks": [
+    {
+      "chunk_id": "architecture/multi_tier_production_architectures_kb::arch-001#0",
+      "parent_id": "architecture/multi_tier_production_architectures_kb::arch-001",
+      "title": "Production 3-tier web architecture on AWS",
+      "domain": "architecture",
+      "service": "AWS EKS",
+      "content": "Production 3-tier web architecture on AWS\n\nThe baseline reference: ALB in public subnets across 3 AZs → ECS/EKS application tier in private subnets across 3 AZs → RDS Multi-AZ in isolated data subnets. WAF in front of the ALB, CloudFront for static assets and edge caching, S3 for object storage, ElastiCache for session/cache. Every tier has its own Security Group, referencing the SG of the tier above it (web-sg → app-sg → db-sg). This is the safe default for any web-style workload — if you do not have a strong reason to deviate, ship this.\n\nDecision rules:\n- DEPLOY across 3 AZs minimum for production (2 AZs is staging)\n- USE ALB for HTTP(S), NLB for TCP/UDP or extreme throughput, API Gateway for serverless / fine-grained throttling\n- ENABLE WAF managed rule sets (AWS Managed Rules Common, Known Bad Inputs, SQLi)\n- PUT CloudFront in front of any externally-facing endpoint — DDoS protection (Shield Standard) + edge cache + lower data-transfer cost\n- RDS Multi-AZ for production; consider Aurora over RDS for >100GB databases or read-replica-heavy workloads\n\nTrade-offs:\n- 3 AZs: max availability vs higher NAT gateway and data-transfer cost\n- Aurora vs RDS: better performance and HA vs higher cost and AWS-only\n- ALB vs API Gateway: ALB cheaper and lower-latency vs API Gateway has built-in throttling, auth, mappings\n\nAnti-patterns:\n- Single-AZ deployment for production — one AZ event takes the service down\n- Public IPs on application instances 'for SSH' — use Session Manager\n- RDS in a public subnet 'so the BI team can connect' — use a bastion or AWS Client VPN",
+      "metadata": {
+        "id": "architecture/multi_tier_production_architectures_kb::arch-001",
+        "title": "Production 3-tier web architecture on AWS",
+        "domain": "architecture",
+        "service": "AWS EKS",
+        "category": "Baseline 3-Tier",
+        "tags": [
+          "architecture",
+          "aws-eks",
+          "multi-tier",
+          "microservices",
+          "multi-account",
+          "landing-zone",
+          "control-tower",
+          "scp",
+          "dr",
+          "rto",
+          "rpo"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "architecture",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+          "source_id": "arch-001"
+        },
+        "cleaned_file": "rag/corpus_cleaned/architecture/multi_tier_production_architectures_kb.cleaned.json",
+        "source_file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+        "original_content_hash": "2ccc43fdcaac8b6ea7be9de1514f83a84ddae75eaeb3d5e981b5653df4e0a1ee"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "architecture/multi_tier_production_architectures_kb::arch-002#0",
+      "parent_id": "architecture/multi_tier_production_architectures_kb::arch-002",
+      "title": "Production EKS topology for microservice workloads",
+      "domain": "architecture",
+      "service": "AWS EKS",
+      "content": "Production EKS topology for microservice workloads\n\nEKS managed control plane in 3 AZs; managed node groups (mix of On-Demand and Spot) provisioned by Karpenter; AWS VPC CNI for pod networking; AWS Load Balancer Controller for ALB/NLB ingress; ExternalDNS for Route 53; cert-manager for TLS; Argo CD for GitOps; OpenTelemetry Collector as DaemonSet; Falco for runtime detection; OPA Gatekeeper or Kyverno for policy. IRSA for workload IAM. NetworkPolicy default-deny per namespace. Secrets via External Secrets Operator from AWS Secrets Manager.\n\nDecision rules:\n- ONE production cluster per region per environment — multi-tenancy via namespaces, not multi-cluster, until ~500 services\n- USE Karpenter for node provisioning, not Cluster Autoscaler — better Spot diversification and bin-packing\n- GITOPS (Argo CD or Flux) is the only path to apply manifests in prod — kubectl apply by humans is forbidden\n- ENFORCE PodSecurityStandard `restricted` in every workload namespace; `baseline` only for kube-system\n- RUN admission policy (Kyverno or OPA Gatekeeper) blocking: privileged pods, hostPath, default ServiceAccount usage, missing resource requests\n\nTrade-offs:\n- Karpenter: faster, denser packing vs newer than Cluster Autoscaler\n- Argo CD vs Flux: Argo has a UI and is the de facto standard; Flux is leaner and more modular\n- AWS Load Balancer Controller (ALB per Ingress) vs nginx ingress (one ALB, host-based routing): ALB-per-Ingress isolates blast radius; nginx is cheaper at scale\n\nAnti-patterns:\n- One giant cluster for prod and non-prod — blast radius is unacceptable\n- Helm chart per-team without a central platform team — consistency and security policy drift\n- Skipping admission policy — security guardrails as code review only is unreliable",
+      "metadata": {
+        "id": "architecture/multi_tier_production_architectures_kb::arch-002",
+        "title": "Production EKS topology for microservice workloads",
+        "domain": "architecture",
+        "service": "AWS EKS",
+        "category": "Microservices on EKS",
+        "tags": [
+          "architecture",
+          "aws-eks",
+          "multi-tier",
+          "microservices",
+          "multi-account",
+          "landing-zone",
+          "control-tower",
+          "scp",
+          "dr",
+          "rto",
+          "rpo"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "architecture",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+          "source_id": "arch-002"
+        },
+        "cleaned_file": "rag/corpus_cleaned/architecture/multi_tier_production_architectures_kb.cleaned.json",
+        "source_file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+        "original_content_hash": "4ba97b79392bb21698820de55fe359ae6f48c4fad58dfd1683b2f84bb36d7095"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "architecture/multi_tier_production_architectures_kb::arch-003#0",
+      "parent_id": "architecture/multi_tier_production_architectures_kb::arch-003",
+      "title": "AWS landing zone with Organizations, Control Tower, and SCPs",
+      "domain": "architecture",
+      "service": "AWS CloudTrail",
+      "content": "AWS landing zone with Organizations, Control Tower, and SCPs\n\nA multi-account strategy is the strongest blast-radius control AWS offers. Use AWS Organizations with Control Tower to bootstrap: a Management account (billing, Organizations only — never run workloads here), Log Archive (immutable CloudTrail/Config logs), Audit (read-only security tooling), and per-team / per-environment workload accounts (dev/staging/prod separated). Service Control Policies (SCPs) enforce guardrails that even account admins cannot bypass.\n\nDecision rules:\n- ONE production account per business unit / per environment — not 'one prod account for everything'\n- MANAGEMENT account runs no workloads — only billing, Organizations, and Identity Center (SSO)\n- LOG ARCHIVE account is the centralized destination for CloudTrail (org trail), Config, and S3 access logs — immutable bucket policy with object lock\n- SCPs at the OU level enforce guardrails: deny disabling CloudTrail/Config, deny region usage outside approved list, deny IAM user creation, deny S3 public-access toggle\n- USE AWS Identity Center (SSO) with permission sets mapped to SAML/OIDC IdP groups — no IAM users in workload accounts\n\nTrade-offs:\n- More accounts: stronger isolation vs more accounts to manage — Control Tower and Account Factory automate the long tail\n- Strict SCPs: tight guardrails vs frustration when a legit need is blocked — use OUs to scope SCPs\n- Centralized logging: clean audit vs cross-account log shipping cost\n\nAnti-patterns:\n- Running workloads in the management account — privilege concentration disaster\n- One IAM user per developer per account — Identity Center exists for a reason\n- SCPs that allow * — provides no guardrail",
+      "metadata": {
+        "id": "architecture/multi_tier_production_architectures_kb::arch-003",
+        "title": "AWS landing zone with Organizations, Control Tower, and SCPs",
+        "domain": "architecture",
+        "service": "AWS CloudTrail",
+        "category": "Multi-Account Strategy",
+        "tags": [
+          "architecture",
+          "aws-cloudtrail",
+          "multi-tier",
+          "microservices",
+          "multi-account",
+          "landing-zone",
+          "control-tower",
+          "scp",
+          "dr",
+          "rto",
+          "rpo"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "architecture",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+          "source_id": "arch-003"
+        },
+        "cleaned_file": "rag/corpus_cleaned/architecture/multi_tier_production_architectures_kb.cleaned.json",
+        "source_file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+        "original_content_hash": "21e1b50bc6b244f5dc3fe4f431971c6ef42e83ac2badb161120cb2d3d21d4375"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "architecture/multi_tier_production_architectures_kb::arch-004#0",
+      "parent_id": "architecture/multi_tier_production_architectures_kb::arch-004",
+      "title": "RTO/RPO patterns: Backup, Pilot Light, Warm Standby, Multi-Region Active-Active",
+      "domain": "architecture",
+      "service": "AWS IAM",
+      "content": "RTO/RPO patterns: Backup, Pilot Light, Warm Standby, Multi-Region Active-Active\n\nDR strategy is a function of acceptable downtime (RTO) and acceptable data loss (RPO). The four canonical AWS DR strategies trade cost for recovery speed: Backup & Restore (RTO hours, cheapest), Pilot Light (RTO ~1h, core infra running, app dormant), Warm Standby (RTO minutes, scaled-down replica running), Multi-Region Active-Active (RTO seconds, expensive). Most workloads do not need active-active; matching DR to actual business RTO/RPO saves significant cost.\n\nDecision rules:\n- DEFINE RTO/RPO from the business owner — not from the engineering wishlist\n- BACKUP & RESTORE for non-critical workloads (RTO 4-24h, RPO hours): AWS Backup, cross-region copy\n- PILOT LIGHT for critical-but-not-tier-0 (RTO 1-4h, RPO minutes): keep VPC, RDS read-replica, IAM in DR region; spin up app on failover\n- WARM STANDBY for tier-1 (RTO 5-30m, RPO seconds): scaled-down full stack in DR region, scale up on failover\n- ACTIVE-ACTIVE for tier-0 (RTO seconds, RPO sub-second): Aurora Global / DynamoDB Global Tables, Route 53 latency routing\n- TEST DR quarterly with real failover — untested DR is not DR\n\nTrade-offs:\n- Active-active: lowest RTO vs highest cost (~2x) and data-consistency complexity (conflict resolution)\n- Pilot Light: cheap insurance vs requires automation that has been rehearsed\n- Cross-region backup: cheap vs RTO measured in hours — only acceptable for non-critical data\n\nAnti-patterns:\n- Single-region 'Multi-AZ is enough' for tier-0 — regional outages happen (us-east-1 has had several)\n- DR plan that has never been tested — first failover during a real incident is the worst time to find bugs\n- Active-active without conflict-resolution strategy — silent data corruption",
+      "metadata": {
+        "id": "architecture/multi_tier_production_architectures_kb::arch-004",
+        "title": "RTO/RPO patterns: Backup, Pilot Light, Warm Standby, Multi-Region Active-Active",
+        "domain": "architecture",
+        "service": "AWS IAM",
+        "category": "Disaster Recovery",
+        "tags": [
+          "architecture",
+          "aws-iam",
+          "multi-tier",
+          "microservices",
+          "multi-account",
+          "landing-zone",
+          "control-tower",
+          "scp",
+          "dr",
+          "rto",
+          "rpo"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "architecture",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+          "source_id": "arch-004"
+        },
+        "cleaned_file": "rag/corpus_cleaned/architecture/multi_tier_production_architectures_kb.cleaned.json",
+        "source_file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+        "original_content_hash": "4fae99038e3f626baf8c6e5c9b6c46c3bd3355a9572b897f680f922c5c1303c3"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "architecture/multi_tier_production_architectures_kb::arch-005#0",
+      "parent_id": "architecture/multi_tier_production_architectures_kb::arch-005",
+      "title": "Hybrid connectivity: Direct Connect, VPN, and Outposts",
+      "domain": "architecture",
+      "service": "Amazon VPC",
+      "content": "Hybrid connectivity: Direct Connect, VPN, and Outposts\n\nHybrid is common for regulated industries, large existing on-prem footprints, or data-sovereignty constraints. AWS Site-to-Site VPN over the public internet is fast to set up but limited to ~1.25 Gbps per tunnel and depends on internet. Direct Connect provides dedicated 1/10/100 Gbps with predictable latency but takes weeks to provision and requires colo presence. Use Direct Connect + VPN as backup. AWS Outposts extends the AWS control plane into your data center for true hybrid workloads.\n\nDecision rules:\n- USE Site-to-Site VPN for ≤1 Gbps, dev/staging hybrid, or as Direct Connect backup\n- USE Direct Connect for production hybrid: ≥1 Gbps sustained, latency-sensitive, or compliance prohibits internet path\n- ALWAYS pair Direct Connect with VPN backup — DX outages do happen\n- ATTACH DX/VPN to Transit Gateway, not directly to a VPN gateway — TGW scales to many VPCs\n- USE Outposts when latency-critical workloads must be on-prem AND you want the AWS control plane (rare; expensive)\n\nTrade-offs:\n- Direct Connect: predictable performance vs weeks to provision, monthly port fee\n- Multiple DX connections (different locations): true HA vs more cost\n- Outposts: AWS-native hybrid vs expensive, capacity-locked\n\nAnti-patterns:\n- Single Direct Connect with no VPN backup — single fiber cut takes the link down\n- Hybrid via internet VPN for production payment workloads — latency and reliability are not enough\n- VPN to a single VPN Gateway when scaling beyond 2-3 VPCs — TGW is the right primitive",
+      "metadata": {
+        "id": "architecture/multi_tier_production_architectures_kb::arch-005",
+        "title": "Hybrid connectivity: Direct Connect, VPN, and Outposts",
+        "domain": "architecture",
+        "service": "Amazon VPC",
+        "category": "Hybrid and Edge",
+        "tags": [
+          "architecture",
+          "amazon-vpc",
+          "multi-tier",
+          "microservices",
+          "multi-account",
+          "landing-zone",
+          "control-tower",
+          "scp",
+          "dr",
+          "rto",
+          "rpo"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "architecture",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+          "source_id": "arch-005"
+        },
+        "cleaned_file": "rag/corpus_cleaned/architecture/multi_tier_production_architectures_kb.cleaned.json",
+        "source_file": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+        "original_content_hash": "a00132e5ea19457d7474e27dcdcf0d3eea3bfe2b4d9a12ef406fa7f4cc655858"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

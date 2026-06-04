@@ -1,0 +1,47 @@
+{
+  "file_name": "rag/corpus/terraform/docker_local_stack_kb.json",
+  "source_file": "rag/corpus_cleaned/terraform/docker_local_stack_kb.cleaned.json",
+  "domain": "terraform",
+  "resource_type": "terraform",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "terraform/docker_local_stack_kb::terraform_docker_local_stack#0",
+      "parent_id": "terraform/docker_local_stack_kb::terraform_docker_local_stack",
+      "title": "Terraform Local Docker Provider Pattern",
+      "domain": "terraform",
+      "service": "AWS EKS",
+      "content": "Terraform Local Docker Provider Pattern\n\nMinimal Terraform configuration for a local Docker-based workload. Requires Terraform >= 1.5.0. Uses kreuzwerker/docker provider ~> 3.0. Accepts build_context string variable. Outputs a container_name placeholder.\n\nDecision rules:\n- Use for local development and testing environments managed via Terraform + Docker\n- Pin kreuzwerker/docker provider to ~> 3.0 for compatibility and stability\n\nTrade-offs:\n- Local state only — not suitable for team collaboration without a remote backend (S3 + DynamoDB)\n- Docker provider may not be available in all CI environments\n\nAnti-patterns:\n- Do not use this pattern for production workloads — use AWS ECS, EKS, or equivalent\n- Do not omit required_version — version constraints prevent accidental upgrades",
+      "metadata": {
+        "id": "terraform/docker_local_stack_kb::terraform_docker_local_stack",
+        "title": "Terraform Local Docker Provider Pattern",
+        "domain": "terraform",
+        "service": "AWS EKS",
+        "category": "terraform",
+        "tags": [
+          "terraform",
+          "infrastructure",
+          "provisioning",
+          "iac",
+          "aws-eks"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "terraform",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/terraform/docker_local_stack_kb.json",
+          "source_id": "terraform_docker_local_stack"
+        },
+        "cleaned_file": "rag/corpus_cleaned/terraform/docker_local_stack_kb.cleaned.json",
+        "source_file": "rag/corpus/terraform/docker_local_stack_kb.json",
+        "original_content_hash": "34b138a464513fc2ba6ba618eae89a905d691130d8e46cce675eb630e696e46b"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

@@ -26,6 +26,10 @@ frontend-React/node_modules
 #Source code des projets de test
 workspace/
 
+Rapport/
+rag/corpus/
+
+
 # Local databases
 devsecops.db
 

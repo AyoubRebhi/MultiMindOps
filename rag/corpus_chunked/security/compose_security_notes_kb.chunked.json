@@ -1,0 +1,44 @@
+{
+  "file_name": "rag/corpus/security/compose_security_notes_kb.json",
+  "source_file": "rag/corpus_cleaned/security/compose_security_notes_kb.cleaned.json",
+  "domain": "security",
+  "resource_type": "security",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "security/compose_security_notes_kb::security_compose_notes#0",
+      "parent_id": "security/compose_security_notes_kb::security_compose_notes",
+      "title": "Docker Compose Security Baseline Reminders",
+      "domain": "security",
+      "service": "Docker Compose",
+      "content": "Docker Compose Security Baseline Reminders\n\nSecurity reminders applied during Docker Compose generation: reference all secrets via environment variable substitution (${VAR}), limit published ports to those required externally, add persistent volumes only where genuinely needed.\n\nDecision rules:\n- Use ${VAR} syntax for all credentials — values come from .env file or Docker secrets\n- Only publish ports (host:container) for services that need external access\n- Add named volumes only for stateful services (databases, caches with persistence requirements)\n\nAnti-patterns:\n- Hardcoding passwords, tokens, or API keys directly in docker-compose.yml\n- Publishing all internal service ports to 0.0.0.0 on the host\n- Adding unnecessary volumes to stateless API containers",
+      "metadata": {
+        "id": "security/compose_security_notes_kb::security_compose_notes",
+        "title": "Docker Compose Security Baseline Reminders",
+        "domain": "security",
+        "service": "Docker Compose",
+        "category": "devsecops",
+        "tags": [
+          "security",
+          "docker-compose"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/security/compose_security_notes_kb.json",
+          "source_id": "security_compose_notes"
+        },
+        "cleaned_file": "rag/corpus_cleaned/security/compose_security_notes_kb.cleaned.json",
+        "source_file": "rag/corpus/security/compose_security_notes_kb.json",
+        "original_content_hash": "8d0c879e040715e4f997ddbc73705eb2436e9c34166d5c732f7cbefee7e31905"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

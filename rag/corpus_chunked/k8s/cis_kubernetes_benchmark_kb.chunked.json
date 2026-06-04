@@ -1,0 +1,283 @@
+{
+  "file_name": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+  "source_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+  "domain": "k8s",
+  "resource_type": "kubernetes",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 8,
+  "chunk_count": 8,
+  "chunks": [
+    {
+      "chunk_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_security_context#0",
+      "parent_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_security_context",
+      "title": "Mandatory SecurityContext for all pods (CIS 5.2)",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "content": "Mandatory SecurityContext for all pods (CIS 5.2)\n\nEvery Pod must define a restrictive SecurityContext. Pod-level: runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, fsGroup: 1001, seccompProfile.type: RuntimeDefault. Container-level: allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities.drop: [ALL]. Mount emptyDir for /tmp if read-only filesystem is set.\n\nDecision rules:\n- Apply both pod-level and container-level SecurityContext — they are complementary\n- Use seccompProfile.type: RuntimeDefault to restrict system calls\n- Mount emptyDir volumes at paths that require write access (e.g. /tmp)\n\nTrade-offs:\n- readOnlyRootFilesystem may break applications that write to the container filesystem — identify and mount emptyDir for those paths\n\nAnti-patterns:\n- Deploying pods without any SecurityContext\n- Setting allowPrivilegeEscalation: true or omitting it (defaults to true without explicit false)\n\nAWS Well-Architected alignment:\n- EKS enforces Pod Security Standards — set namespace labels pod-security.kubernetes.io/enforce: restricted",
+      "metadata": {
+        "id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_security_context",
+        "title": "Mandatory SecurityContext for all pods (CIS 5.2)",
+        "domain": "k8s",
+        "service": "AWS EKS",
+        "category": "kubernetes",
+        "tags": [
+          "k8s",
+          "kubernetes",
+          "orchestration",
+          "aws-eks"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "kubernetes",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+          "source_id": "cis_k8s_security_context"
+        },
+        "cleaned_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+        "original_content_hash": "413e23c42f0070b9dc6058cf597c81b533a6cc740fcbd54912c89845bea284fe"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_rbac_least_privilege#0",
+      "parent_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_rbac_least_privilege",
+      "title": "RBAC with least privilege (CIS 5.1)",
+      "domain": "k8s",
+      "service": "AWS IAM",
+      "content": "RBAC with least privilege (CIS 5.1)\n\nCreate a dedicated ServiceAccount per application with automountServiceAccountToken: false. Define a Role with only required verbs on required resources. Bind via RoleBinding. Do not grant access to secrets unless strictly necessary.\n\nDecision rules:\n- Create a dedicated ServiceAccount for each workload — never use the default ServiceAccount\n- Set automountServiceAccountToken: false on ServiceAccount to prevent token auto-mounting\n- Grant only required verbs (get, list) on required resources — never use wildcard (*)\n\nTrade-offs:\n- Fine-grained RBAC requires understanding of which API resources each workload actually accesses\n\nAnti-patterns:\n- Using the default ServiceAccount for application workloads\n- Granting cluster-admin or wildcard permissions to application ServiceAccounts\n- Adding secrets to the Role resource list without justification\n\nAWS Well-Architected alignment:\n- Map to EKS IAM Roles for Service Accounts (IRSA) for AWS API access from pods",
+      "metadata": {
+        "id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_rbac_least_privilege",
+        "title": "RBAC with least privilege (CIS 5.1)",
+        "domain": "k8s",
+        "service": "AWS IAM",
+        "category": "kubernetes",
+        "tags": [
+          "k8s",
+          "kubernetes",
+          "orchestration",
+          "aws-iam"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "kubernetes",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+          "source_id": "cis_k8s_rbac_least_privilege"
+        },
+        "cleaned_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+        "original_content_hash": "6ba8c4769c8f219c9381a386bad49d0ff3f3f252391f06d6b857b85a796f6755"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_network_policies#0",
+      "parent_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_network_policies",
+      "title": "Network isolation with default-deny NetworkPolicy (CIS 5.3)",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "content": "Network isolation with default-deny NetworkPolicy (CIS 5.3)\n\nApply a default-deny-all NetworkPolicy in each namespace (podSelector: {}, policyTypes: [Ingress, Egress]). Then add explicit allow policies per service. Example: allow Ingress from ingress-nginx namespace on port 8000 only for pods matching app=api.\n\nDecision rules:\n- Start with a default-deny-all policy in every namespace\n- Add explicit ingress and egress allow rules only for required traffic paths\n- Use namespaceSelector for cross-namespace traffic (e.g. allowing ingress controller)\n\nTrade-offs:\n- NetworkPolicy requires a CNI plugin that supports it (Calico, Cilium, Weave) — does not work with Flannel alone\n\nAnti-patterns:\n- Operating namespaces with no NetworkPolicy (all traffic allowed by default)\n- Using podSelector: {} in allow policies without scoping by policyTypes\n\nAWS Well-Architected alignment:\n- Use VPC CNI with Calico on EKS for NetworkPolicy enforcement\n- Complement with Security Groups for Pods on EKS for L4 controls",
+      "metadata": {
+        "id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_network_policies",
+        "title": "Network isolation with default-deny NetworkPolicy (CIS 5.3)",
+        "domain": "k8s",
+        "service": "AWS EKS",
+        "category": "kubernetes",
+        "tags": [
+          "k8s",
+          "kubernetes",
+          "orchestration",
+          "aws-eks"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "kubernetes",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+          "source_id": "cis_k8s_network_policies"
+        },
+        "cleaned_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+        "original_content_hash": "b1262ce667957daf401d5577de4acbf5c90f10c4dce0c65f6497291f5db60f96"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_secrets_management#0",
+      "parent_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_secrets_management",
+      "title": "Secrets management with External Secrets Operator (CIS 5.4)",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "content": "Secrets management with External Secrets Operator (CIS 5.4)\n\nUse External Secrets Operator (ESO) or Sealed Secrets instead of plain Kubernetes Secret manifests. ESO ExternalSecret references a SecretStore (e.g. vault-backend) and syncs secrets into a Kubernetes Secret. ConfigMaps should hold only non-sensitive configuration.\n\nDecision rules:\n- Never commit plain Kubernetes Secret manifests with base64-encoded values to version control\n- Use External Secrets Operator to sync from AWS Secrets Manager, Vault, or GCP Secret Manager\n- Use ConfigMaps exclusively for non-sensitive configuration (APP_ENV, LOG_LEVEL)\n\nTrade-offs:\n- ESO adds operational complexity — requires installing the controller and configuring SecretStore\n- Sealed Secrets is simpler but less flexible — secrets can only be decrypted by the cluster\n\nAnti-patterns:\n- Storing database URLs or passwords in ConfigMaps (not encrypted at rest)\n- Committing Kubernetes Secrets with real credentials to git repositories\n\nAWS Well-Architected alignment:\n- Use ESO with AWS Secrets Manager provider on EKS\n- Use Secrets Store CSI Driver with AWS SSM Parameter Store as an alternative",
+      "metadata": {
+        "id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_secrets_management",
+        "title": "Secrets management with External Secrets Operator (CIS 5.4)",
+        "domain": "k8s",
+        "service": "AWS EKS",
+        "category": "kubernetes",
+        "tags": [
+          "k8s",
+          "kubernetes",
+          "orchestration",
+          "aws-eks"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "kubernetes",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+          "source_id": "cis_k8s_secrets_management"
+        },
+        "cleaned_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+        "original_content_hash": "30ebcd32be1cdafc14154a26f1a381ba45613626a8175655724684458ef8bbb4"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_resource_limits#0",
+      "parent_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_resource_limits",
+      "title": "Mandatory resource requests and limits (CIS 5.2.4)",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "content": "Mandatory resource requests and limits (CIS 5.2.4)\n\nEvery container must define both resources.requests and resources.limits. Example: requests memory 128Mi cpu 100m, limits memory 512Mi cpu 500m. Without limits, a single pod can starve other workloads on the node.\n\nDecision rules:\n- Define both requests (scheduler hint) and limits (enforcement) for every container\n- Use LimitRange objects to enforce defaults for namespaces missing explicit resource declarations\n\nTrade-offs:\n- Limits that are too tight cause OOMKilled events or CPU throttling — profile workloads before setting values\n\nAnti-patterns:\n- Deploying containers with no resource limits to shared cluster nodes\n- Setting limits without requests — scheduler cannot make optimal placement decisions\n\nAWS Well-Architected alignment:\n- EKS node autoscaling (Karpenter) uses requests to pack pods onto nodes efficiently",
+      "metadata": {
+        "id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_resource_limits",
+        "title": "Mandatory resource requests and limits (CIS 5.2.4)",
+        "domain": "k8s",
+        "service": "AWS EKS",
+        "category": "kubernetes",
+        "tags": [
+          "k8s",
+          "kubernetes",
+          "orchestration",
+          "aws-eks"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "kubernetes",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+          "source_id": "cis_k8s_resource_limits"
+        },
+        "cleaned_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+        "original_content_hash": "b892db7c44fa91b1556d3f45ae5babdfd13e9ada5ed44b7e42954657a64dc9f1"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_health_probes#0",
+      "parent_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_health_probes",
+      "title": "Liveness and Readiness probes for workload health",
+      "domain": "k8s",
+      "service": "Kubernetes",
+      "content": "Liveness and Readiness probes for workload health\n\nDefine livenessProbe (restarts unhealthy pods: httpGet /health, initialDelaySeconds 15, periodSeconds 20, failureThreshold 3) and readinessProbe (removes unhealthy pods from Service endpoints: httpGet /ready, initialDelaySeconds 5, periodSeconds 10) for every container.\n\nDecision rules:\n- Use readinessProbe to control traffic routing — pod is only added to Service endpoints when ready\n- Use livenessProbe to restart pods stuck in an unrecoverable state\n- Set startupProbe for slow-starting applications to prevent premature liveness failures\n\nTrade-offs:\n- Overly aggressive liveness probes (short timeouts, low failureThreshold) cause unnecessary restarts\n- Missing readiness probes cause traffic to be sent to not-yet-ready pods\n\nAnti-patterns:\n- Using the same endpoint and thresholds for both liveness and readiness probes\n- Not defining any health probes — Kubernetes cannot detect application-level failures",
+      "metadata": {
+        "id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_health_probes",
+        "title": "Liveness and Readiness probes for workload health",
+        "domain": "k8s",
+        "service": "Kubernetes",
+        "category": "kubernetes",
+        "tags": [
+          "k8s",
+          "kubernetes",
+          "orchestration"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "kubernetes",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+          "source_id": "cis_k8s_health_probes"
+        },
+        "cleaned_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+        "original_content_hash": "7ba8601daf1ffa390534c9fa9ba7e8f765fbe44100a399c833398995ed56b080"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_pod_disruption_budget#0",
+      "parent_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_pod_disruption_budget",
+      "title": "Pod Disruption Budget for high availability",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "content": "Pod Disruption Budget for high availability\n\nA PodDisruptionBudget (PDB) limits voluntary disruptions (node drains, rolling updates). Example: minAvailable: 2 with selector app=api ensures at least 2 pods remain available during node maintenance.\n\nDecision rules:\n- Create a PDB for every production Deployment with more than 1 replica\n- Use minAvailable (absolute) or maxUnavailable (percentage) depending on SLO requirements\n\nTrade-offs:\n- PDB with minAvailable equal to replicas will block node drains — leave at least 1 pod drainable\n\nAnti-patterns:\n- Deploying multi-replica workloads without a PDB — all pods may be disrupted simultaneously\n- Setting minAvailable: 0 — defeats the purpose of the PDB\n\nAWS Well-Architected alignment:\n- PDB works with EKS Managed Node Groups during node version upgrades",
+      "metadata": {
+        "id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_pod_disruption_budget",
+        "title": "Pod Disruption Budget for high availability",
+        "domain": "k8s",
+        "service": "AWS EKS",
+        "category": "kubernetes",
+        "tags": [
+          "k8s",
+          "kubernetes",
+          "orchestration",
+          "aws-eks"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "kubernetes",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+          "source_id": "cis_k8s_pod_disruption_budget"
+        },
+        "cleaned_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+        "original_content_hash": "8326b04ba7e581e2619160cb7aa61478aff44954b990878ef09501b46cb40bdf"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_ingress_tls#0",
+      "parent_id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_ingress_tls",
+      "title": "Ingress with TLS termination",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "content": "Ingress with TLS termination\n\nConfigure Ingress with TLS using cert-manager (cluster-issuer: letsencrypt-prod). Annotations: ssl-redirect: true, force-ssl-redirect: true. TLS spec references a Secret containing the certificate. All HTTP traffic redirected to HTTPS at the ingress level.\n\nDecision rules:\n- Always terminate TLS at the Ingress — never expose plain HTTP to the internet\n- Use cert-manager with Let's Encrypt for automated certificate provisioning and renewal\n- Set nginx.ingress.kubernetes.io/ssl-redirect: true to enforce HTTPS\n\nTrade-offs:\n- Let's Encrypt rate limits apply — use staging issuer for testing\n- Certificate renewal requires outbound internet access from the cluster for ACME challenges\n\nAnti-patterns:\n- Exposing services over HTTP in production\n- Using self-signed certificates without a trust chain (causes browser/client warnings)\n\nAWS Well-Architected alignment:\n- Alternatively use AWS ALB Ingress Controller with ACM certificates on EKS",
+      "metadata": {
+        "id": "k8s/cis_kubernetes_benchmark_kb::cis_k8s_ingress_tls",
+        "title": "Ingress with TLS termination",
+        "domain": "k8s",
+        "service": "AWS EKS",
+        "category": "kubernetes",
+        "tags": [
+          "k8s",
+          "kubernetes",
+          "orchestration",
+          "aws-eks"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "kubernetes",
+        "chunk_hint": "end",
+        "source": {
+          "file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+          "source_id": "cis_k8s_ingress_tls"
+        },
+        "cleaned_file": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+        "original_content_hash": "3e9a0469b831cb6e8789d6cbbbc001cf557b91115cfcf3b3aea7a84d7d251e54"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "end"
+    }
+  ]
+}

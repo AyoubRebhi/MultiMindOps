@@ -1,0 +1,275 @@
+{
+  "file_name": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+  "source_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+  "domain": "devsecops",
+  "resource_type": "security",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 8,
+  "chunk_count": 8,
+  "chunks": [
+    {
+      "chunk_id": "devsecops/devsecops_best_practices_kb::devsecops_shift_left_policy_as_code#0",
+      "parent_id": "devsecops/devsecops_best_practices_kb::devsecops_shift_left_policy_as_code",
+      "title": "Shift-left security and Policy as Code",
+      "domain": "devsecops",
+      "service": "Trivy",
+      "content": "Shift-left security and Policy as Code\n\nIntegrate security at every SDLC phase: Plan (Threat Modeling), Code (SAST), Build (SCA, Trivy), Test (DAST), Release (SBOM, Snyk), Deploy (Config Audit), Monitor (Runtime Alerts). Use Policy as Code with OPA/Conftest to enforce rules declaratively — e.g. deny if Docker image has no USER or no HEALTHCHECK.\n\nDecision rules:\n- Apply security controls at the earliest feasible phase — finding issues in Code is 10x cheaper than in Production\n- Express security policies as code (OPA Rego, Conftest) so they are versioned, testable, and automated\n\nTrade-offs:\n- Shift-left adds tooling and process overhead in early phases — offset by significantly reducing costly late-stage remediations\n\nAnti-patterns:\n- Running security scans only in a pre-production gate — too late in the cycle\n- Manual security reviews without automated policy enforcement\n\nAWS Well-Architected alignment:\n- Use AWS Config Rules and Security Hub to enforce policies at the infrastructure layer",
+      "metadata": {
+        "id": "devsecops/devsecops_best_practices_kb::devsecops_shift_left_policy_as_code",
+        "title": "Shift-left security and Policy as Code",
+        "domain": "devsecops",
+        "service": "Trivy",
+        "category": "devsecops",
+        "tags": [
+          "devsecops",
+          "security",
+          "trivy"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+          "source_id": "devsecops_shift_left_policy_as_code"
+        },
+        "cleaned_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+        "source_file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+        "original_content_hash": "e6d5512a45d666e728d7521d3c55b32ca74e53df47b82da78b08a5ec24baa477"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "devsecops/devsecops_best_practices_kb::devsecops_sast_tools#0",
+      "parent_id": "devsecops/devsecops_best_practices_kb::devsecops_sast_tools",
+      "title": "SAST tools for static code security analysis",
+      "domain": "devsecops",
+      "service": "DevSecOps",
+      "content": "SAST tools for static code security analysis\n\nRecommended SAST tools by language: Semgrep (multi-language, OWASP + custom rules), Bandit (Python, B1xx-B7xx rules: bandit -r ./backend -ll -f json -o bandit-report.json), SpotBugs/FindSec-Bugs (Java), ESLint Security plugin (JS/TS), CodeQL (multi-language, taint tracking). Export results as SARIF for GitHub Security tab integration.\n\nDecision rules:\n- Run Semgrep with p/python and p/owasp-top-ten configs as the baseline for Python projects\n- Export SARIF format (semgrep --sarif > semgrep.sarif) for GitHub Security tab visibility\n- Add CodeQL for deeper taint-tracking analysis on critical codebases\n\nTrade-offs:\n- SAST tools generate false positives — tune rules and triage findings before making them pipeline blockers\n- CodeQL analysis is slower than Semgrep — run on schedule or PR, not every commit\n\nAnti-patterns:\n- Running SAST on test code only — scan production application code\n- Suppressing all SAST findings without documented risk acceptance\n\nAWS Well-Architected alignment:\n- Integrate Semgrep SARIF results with Amazon CodeGuru for unified findings",
+      "metadata": {
+        "id": "devsecops/devsecops_best_practices_kb::devsecops_sast_tools",
+        "title": "SAST tools for static code security analysis",
+        "domain": "devsecops",
+        "service": "DevSecOps",
+        "category": "devsecops",
+        "tags": [
+          "devsecops",
+          "security"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "security",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+          "source_id": "devsecops_sast_tools"
+        },
+        "cleaned_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+        "source_file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+        "original_content_hash": "335bef74162c76d7f73e08acff6a3cb3e024d85d9be3fc03e34f1bbff915ecd9"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "devsecops/devsecops_best_practices_kb::devsecops_secrets_management#0",
+      "parent_id": "devsecops/devsecops_best_practices_kb::devsecops_secrets_management",
+      "title": "Secrets management — scan and retrieval best practices",
+      "domain": "devsecops",
+      "service": "AWS Secrets Manager",
+      "content": "Secrets management — scan and retrieval best practices\n\nPrevent secrets from entering version control using pre-commit hooks with gitleaks (v8.18.0) and trufflehog (v3.63.0). For runtime secret retrieval in Python, use boto3 to call AWS Secrets Manager get_secret_value — never load secrets from environment variables or config files.\n\nDecision rules:\n- Install gitleaks pre-commit hook in every repository to block secret commits before they happen\n- Use AWS Secrets Manager or HashiCorp Vault for runtime secret retrieval — never pass secrets as env vars\n- Add trufflehog --only-verified to catch high-confidence secrets that evade simpler regex scanners\n\nTrade-offs:\n- Pre-commit hooks only protect developers who have installed them — enforce via CI/CD as a backstop\n\nAnti-patterns:\n- Storing secrets in .env files committed to git\n- Passing secrets as command-line arguments (visible in process list and shell history)\n- Loading secrets from environment variables injected at container startup without a vault\n\nAWS Well-Architected alignment:\n- Use AWS Secrets Manager with automatic rotation for database credentials\n- Use Secrets Manager resource policies to restrict secret access to specific IAM roles",
+      "metadata": {
+        "id": "devsecops/devsecops_best_practices_kb::devsecops_secrets_management",
+        "title": "Secrets management — scan and retrieval best practices",
+        "domain": "devsecops",
+        "service": "AWS Secrets Manager",
+        "category": "devsecops",
+        "tags": [
+          "devsecops",
+          "security",
+          "aws-secrets-manager"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "security",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+          "source_id": "devsecops_secrets_management"
+        },
+        "cleaned_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+        "source_file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+        "original_content_hash": "201d577eeb5fda50380265e6a762e728010728ac99e8e79063e7fa58cb13dc54"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "devsecops/devsecops_best_practices_kb::devsecops_sbom#0",
+      "parent_id": "devsecops/devsecops_best_practices_kb::devsecops_sbom",
+      "title": "SBOM generation and vulnerability analysis",
+      "domain": "devsecops",
+      "service": "Amazon S3",
+      "content": "SBOM generation and vulnerability analysis\n\nGenerate a Software Bill of Materials (SBOM) for every Docker image using Syft (syft myapp:latest -o spdx-json > sbom.spdx.json). Analyze the SBOM with Grype (grype sbom:./sbom.spdx.json --fail-on high). Alternatively use CycloneDX format (cyclonedx-py environment -o sbom.cyclonedx.json).\n\nDecision rules:\n- Generate SBOM in the build stage and store it as a CI artifact alongside the image\n- Use grype --fail-on high to block promotion of images with HIGH severity CVEs in dependencies\n- Prefer SPDX or CycloneDX formats for tooling interoperability\n\nTrade-offs:\n- SBOM generation adds ~30 seconds to the build — acceptable for the supply chain transparency gained\n\nAnti-patterns:\n- Deploying images without knowing their dependency inventory\n- Not re-scanning SBOMs after new CVEs are published — CVEs are discovered continuously\n\nAWS Well-Architected alignment:\n- Store SBOMs in Amazon S3 alongside image tags for traceability\n- Use Amazon Inspector for continuous CVE scanning of ECR images",
+      "metadata": {
+        "id": "devsecops/devsecops_best_practices_kb::devsecops_sbom",
+        "title": "SBOM generation and vulnerability analysis",
+        "domain": "devsecops",
+        "service": "Amazon S3",
+        "category": "devsecops",
+        "tags": [
+          "devsecops",
+          "security",
+          "amazon-s3"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "security",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+          "source_id": "devsecops_sbom"
+        },
+        "cleaned_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+        "source_file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+        "original_content_hash": "ed892de017aaa72d37610d596ecb36aa104d135789764e542a96ec46dd773f28"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "devsecops/devsecops_best_practices_kb::devsecops_container_registry_security#0",
+      "parent_id": "devsecops/devsecops_best_practices_kb::devsecops_container_registry_security",
+      "title": "Container image signing and verification with Cosign",
+      "domain": "devsecops",
+      "service": "Sigstore Cosign",
+      "content": "Container image signing and verification with Cosign\n\nSign container images with Cosign (Sigstore): cosign generate-key-pair, cosign sign --key cosign.key myregistry.io/myapp:1.0.0. Verify before deployment: cosign verify --key cosign.pub myregistry.io/myapp:1.0.0. Enforce signature verification in Kubernetes with Kyverno ClusterPolicy (verifyImages).\n\nDecision rules:\n- Sign every image pushed to production registry — signing proves the image came from a trusted CI pipeline\n- Use Kyverno ClusterPolicy with verifyImages to reject unsigned or untrusted images at admission time\n\nTrade-offs:\n- Cosign keyless signing (Fulcio + Rekor) is simpler but requires OIDC identity — good for GitHub Actions\n- Key-based signing requires secure storage of the private key (use KMS-backed keys)\n\nAnti-patterns:\n- Deploying images from public registries without verifying their provenance\n- Using mutable image tags (latest) in production — makes signature verification unreliable\n\nAWS Well-Architected alignment:\n- Use AWS Signer for ECR image signing as an alternative to Cosign on EKS",
+      "metadata": {
+        "id": "devsecops/devsecops_best_practices_kb::devsecops_container_registry_security",
+        "title": "Container image signing and verification with Cosign",
+        "domain": "devsecops",
+        "service": "Sigstore Cosign",
+        "category": "devsecops",
+        "tags": [
+          "devsecops",
+          "security",
+          "sigstore-cosign"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "security",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+          "source_id": "devsecops_container_registry_security"
+        },
+        "cleaned_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+        "source_file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+        "original_content_hash": "e246eb1f476072f2e6f9c38298fc40b3b102cb0eb79e8d13307076cdbf4690b5"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "devsecops/devsecops_best_practices_kb::devsecops_runtime_monitoring#0",
+      "parent_id": "devsecops/devsecops_best_practices_kb::devsecops_runtime_monitoring",
+      "title": "Runtime security monitoring with Falco",
+      "domain": "devsecops",
+      "service": "Falco",
+      "content": "Runtime security monitoring with Falco\n\nUse Falco for runtime behavioral detection in containers and Kubernetes. Define custom rules to detect unexpected outbound connections (condition: outbound and not proc.name in allowed_processes). Alerts on anomalies: unexpected shells, file system writes, privilege escalation, data exfiltration patterns.\n\nDecision rules:\n- Deploy Falco as a DaemonSet on every Kubernetes node for runtime visibility\n- Define an allowlist of expected processes and IPs — alert on any deviation\n- Route Falco alerts to SIEM (Splunk, Elasticsearch) or AWS Security Hub for centralized analysis\n\nTrade-offs:\n- Falco kernel module/eBPF probe adds small CPU overhead — use eBPF mode for lower overhead\n- Default Falco rules generate significant alert volume — tune and create suppression rules for known-good behavior\n\nAnti-patterns:\n- Relying solely on pre-deployment scans with no runtime security monitoring\n- Running Falco with default rules only without tuning — alert fatigue reduces effectiveness\n\nAWS Well-Architected alignment:\n- Use Amazon Security Lake and Amazon Detective for incident investigation of Falco alerts\n- GuardDuty EKS Runtime Monitoring is an AWS-managed alternative to Falco on EKS",
+      "metadata": {
+        "id": "devsecops/devsecops_best_practices_kb::devsecops_runtime_monitoring",
+        "title": "Runtime security monitoring with Falco",
+        "domain": "devsecops",
+        "service": "Falco",
+        "category": "devsecops",
+        "tags": [
+          "devsecops",
+          "security",
+          "falco"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "security",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+          "source_id": "devsecops_runtime_monitoring"
+        },
+        "cleaned_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+        "source_file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+        "original_content_hash": "68ea1686e6d482f0df364d1f7297c0674b4253941f7530e5548b58b720470b15"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "devsecops/devsecops_best_practices_kb::devsecops_threat_modeling_stride#0",
+      "parent_id": "devsecops/devsecops_best_practices_kb::devsecops_threat_modeling_stride",
+      "title": "Threat modeling with STRIDE for REST APIs",
+      "domain": "devsecops",
+      "service": "AWS CloudTrail",
+      "content": "Threat modeling with STRIDE for REST APIs\n\nApply STRIDE threat model to REST API design: Spoofing (mitigate: JWT/mTLS auth), Tampering (mitigate: HTTPS + request signing), Repudiation (mitigate: immutable audit logs via CloudTrail), Information Disclosure (mitigate: encryption + log filtering), Denial of Service (mitigate: rate limiting + WAF + circuit breakers), Elevation of Privilege (mitigate: RBAC + permission validation per request).\n\nDecision rules:\n- Run STRIDE analysis for every new API endpoint or significant feature change\n- Map each threat to a concrete control — do not leave any STRIDE category without a mitigation\n\nTrade-offs:\n- Threat modeling sessions add time to the design phase — run lightweight threat model reviews (1-2 hours) rather than exhaustive sessions\n\nAnti-patterns:\n- Skipping threat modeling and relying entirely on reactive vulnerability scanning\n- Treating threat modeling as a one-time exercise — repeat for significant architectural changes\n\nAWS Well-Architected alignment:\n- Use AWS Threat Composer as a structured threat modeling tool aligned with AWS services",
+      "metadata": {
+        "id": "devsecops/devsecops_best_practices_kb::devsecops_threat_modeling_stride",
+        "title": "Threat modeling with STRIDE for REST APIs",
+        "domain": "devsecops",
+        "service": "AWS CloudTrail",
+        "category": "devsecops",
+        "tags": [
+          "devsecops",
+          "security",
+          "aws-cloudtrail"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "security",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+          "source_id": "devsecops_threat_modeling_stride"
+        },
+        "cleaned_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+        "source_file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+        "original_content_hash": "8d6e2aa553447f6ca356efc3fff91800bcdf8c143ec4fcb8b4d7de2d7d9feb1a"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "devsecops/devsecops_best_practices_kb::devsecops_phase_checklist#0",
+      "parent_id": "devsecops/devsecops_best_practices_kb::devsecops_phase_checklist",
+      "title": "DevSecOps checklist by SDLC phase",
+      "domain": "devsecops",
+      "service": "AWS Secrets Manager",
+      "content": "DevSecOps checklist by SDLC phase\n\nPhase CODE: pre-commit hooks (secret scan, linting), threat modeling for new features, dependency pinning with hashes. Phase BUILD: SAST (Semgrep, Bandit, CodeQL), SCA (Safety, Snyk, OWASP Dependency-Check), Dockerfile lint (Hadolint), Docker image scan (Trivy, Grype), SBOM generation. Phase TEST: DAST (OWASP ZAP, Nuclei), auth/authz tests, input fuzzing. Phase DEPLOY: IaC scan (tfsec, Checkov), secrets via Secrets Manager, signed images (Cosign), policy enforcement (OPA/Kyverno). Phase MONITOR: runtime security (Falco), anomaly alerting (GuardDuty, Security Hub), credential rotation, privileged access audit.\n\nDecision rules:\n- Treat this checklist as a minimum — automate as many items as possible in CI/CD\n- Track checklist completion per release in a security runbook\n\nTrade-offs:\n- Automating all checklist items requires significant initial tooling investment — prioritize CODE and BUILD phases first\n\nAnti-patterns:\n- Running only one security phase (e.g. SAST only) and skipping others\n- Not reviewing checklist after a security incident — update it with lessons learned\n\nAWS Well-Architected alignment:\n- AWS Security Hub security score tracks many of these controls automatically across AWS services",
+      "metadata": {
+        "id": "devsecops/devsecops_best_practices_kb::devsecops_phase_checklist",
+        "title": "DevSecOps checklist by SDLC phase",
+        "domain": "devsecops",
+        "service": "AWS Secrets Manager",
+        "category": "devsecops",
+        "tags": [
+          "devsecops",
+          "security",
+          "aws-secrets-manager"
+        ],
+        "importance": "high",
+        "cloud_provider": "aws",
+        "resource_type": "security",
+        "chunk_hint": "end",
+        "source": {
+          "file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+          "source_id": "devsecops_phase_checklist"
+        },
+        "cleaned_file": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+        "source_file": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+        "original_content_hash": "ae3ab164934a635a1e505a3468b95eb64fc2a3821d609094cddbb4c383c2788e"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "end"
+    }
+  ]
+}

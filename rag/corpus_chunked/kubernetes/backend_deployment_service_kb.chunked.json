@@ -1,0 +1,44 @@
+{
+  "file_name": "rag/corpus/kubernetes/backend_deployment_service_kb.json",
+  "source_file": "rag/corpus_cleaned/kubernetes/backend_deployment_service_kb.cleaned.json",
+  "domain": "kubernetes",
+  "resource_type": "kubernetes",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "kubernetes/backend_deployment_service_kb::kubernetes_backend_deployment_service#0",
+      "parent_id": "kubernetes/backend_deployment_service_kb::kubernetes_backend_deployment_service",
+      "title": "Minimal Kubernetes Deployment and ClusterIP Service",
+      "domain": "kubernetes",
+      "service": "Kubernetes",
+      "content": "Minimal Kubernetes Deployment and ClusterIP Service\n\nMinimal Kubernetes Deployment and Service manifests for a backend container. Deployment (apps/v1): 1 replica, selector app=backend, container image backend:latest on containerPort 8080. Service (v1): ClusterIP type, selector app=backend, port 8080 -> targetPort 8080.\n\nDecision rules:\n- Use as a baseline template for any backend service Kubernetes deployment\n- Service type ClusterIP — accessible only within the cluster; add Ingress for external access\n\nTrade-offs:\n- Single replica with no HPA — not suitable for production traffic without scaling configuration\n- No resource requests/limits — must be added to prevent resource starvation\n- No SecurityContext — extend with runAsNonRoot, readOnlyRootFilesystem, capabilities drop ALL per CIS Kubernetes Benchmark\n\nAnti-patterns:\n- Do not use image:latest in production — pin to a specific tag or image digest\n- Do not deploy without resource limits to shared cluster namespaces",
+      "metadata": {
+        "id": "kubernetes/backend_deployment_service_kb::kubernetes_backend_deployment_service",
+        "title": "Minimal Kubernetes Deployment and ClusterIP Service",
+        "domain": "kubernetes",
+        "service": "Kubernetes",
+        "category": "kubernetes",
+        "tags": [
+          "kubernetes",
+          "orchestration"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "kubernetes",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/kubernetes/backend_deployment_service_kb.json",
+          "source_id": "kubernetes_backend_deployment_service"
+        },
+        "cleaned_file": "rag/corpus_cleaned/kubernetes/backend_deployment_service_kb.cleaned.json",
+        "source_file": "rag/corpus/kubernetes/backend_deployment_service_kb.json",
+        "original_content_hash": "b9353a3730f66fb1a81c39c0efc4e1148d8d091004906ce1ad1861b301ca0488"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

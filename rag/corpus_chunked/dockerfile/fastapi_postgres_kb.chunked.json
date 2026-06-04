@@ -1,0 +1,46 @@
+{
+  "file_name": "rag/corpus/dockerfile/fastapi_postgres_kb.json",
+  "source_file": "rag/corpus_cleaned/dockerfile/fastapi_postgres_kb.cleaned.json",
+  "domain": "dockerfile",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "dockerfile/fastapi_postgres_kb::dockerfile_fastapi_postgres#0",
+      "parent_id": "dockerfile/fastapi_postgres_kb::dockerfile_fastapi_postgres",
+      "title": "FastAPI PostgreSQL-backed Dockerfile",
+      "domain": "dockerfile",
+      "service": "Docker",
+      "content": "FastAPI PostgreSQL-backed Dockerfile\n\nFastAPI Dockerfile aligned with a PostgreSQL-backed service. Base image: python:3.11-slim. Installs pip requirements, sets ENV PORT=8000, exposes 8000. CMD uses ${PORT:-8000} for configurable port binding at runtime.\n\nDecision rules:\n- Use when framework=fastapi, project_type=api_backend, dependencies include postgres\n- Use PORT env variable to allow dynamic port assignment in orchestration environments\n\nTrade-offs:\n- No multi-stage build — simpler but larger final image than a distroless multi-stage variant\n- No non-root user — extend with USER directive before CMD for production security\n\nAnti-patterns:\n- Do not embed DATABASE_URL or credentials in the Dockerfile\n- Do not expose the database port inside the application container Dockerfile",
+      "metadata": {
+        "id": "dockerfile/fastapi_postgres_kb::dockerfile_fastapi_postgres",
+        "title": "FastAPI PostgreSQL-backed Dockerfile",
+        "domain": "dockerfile",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "dockerfile",
+          "docker",
+          "build",
+          "runtime"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/dockerfile/fastapi_postgres_kb.json",
+          "source_id": "dockerfile_fastapi_postgres"
+        },
+        "cleaned_file": "rag/corpus_cleaned/dockerfile/fastapi_postgres_kb.cleaned.json",
+        "source_file": "rag/corpus/dockerfile/fastapi_postgres_kb.json",
+        "original_content_hash": "ee9a8be6957a7b32355a7b280e0e8337ffd119c7b9e0458c36d3893bacb939b1"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

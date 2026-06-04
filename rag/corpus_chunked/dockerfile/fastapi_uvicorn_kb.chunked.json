@@ -1,0 +1,46 @@
+{
+  "file_name": "rag/corpus/dockerfile/fastapi_uvicorn_kb.json",
+  "source_file": "rag/corpus_cleaned/dockerfile/fastapi_uvicorn_kb.cleaned.json",
+  "domain": "dockerfile",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "dockerfile/fastapi_uvicorn_kb::dockerfile_fastapi_uvicorn#0",
+      "parent_id": "dockerfile/fastapi_uvicorn_kb::dockerfile_fastapi_uvicorn",
+      "title": "FastAPI Uvicorn Minimal Dockerfile",
+      "domain": "dockerfile",
+      "service": "Docker",
+      "content": "FastAPI Uvicorn Minimal Dockerfile\n\nMinimal Dockerfile for a FastAPI backend started with uvicorn. Base image: python:3.11-slim. WORKDIR /app. Copies requirements.txt first, runs pip install --no-cache-dir, then copies full source. Sets PYTHONUNBUFFERED=1, exposes port 8000. CMD: sh -c uvicorn backend.app.main:app --host 0.0.0.0 --port 8000.\n\nDecision rules:\n- Use when project_type=api_backend, framework=fastapi, runtime=pip\n- Use python:3.11-slim to keep image size minimal\n- Set PYTHONUNBUFFERED=1 so log output is streamed immediately to stdout\n\nTrade-offs:\n- No multi-stage build — image includes pip and build tools, larger than distroless variants\n- No non-root USER defined — extend with USER directive for production hardening\n\nAnti-patterns:\n- Do not hardcode secrets in ENV or ARG instructions inside the Dockerfile\n- Do not COPY . . before COPY requirements.txt — breaks Docker layer caching",
+      "metadata": {
+        "id": "dockerfile/fastapi_uvicorn_kb::dockerfile_fastapi_uvicorn",
+        "title": "FastAPI Uvicorn Minimal Dockerfile",
+        "domain": "dockerfile",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "dockerfile",
+          "docker",
+          "build",
+          "runtime"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/dockerfile/fastapi_uvicorn_kb.json",
+          "source_id": "dockerfile_fastapi_uvicorn"
+        },
+        "cleaned_file": "rag/corpus_cleaned/dockerfile/fastapi_uvicorn_kb.cleaned.json",
+        "source_file": "rag/corpus/dockerfile/fastapi_uvicorn_kb.json",
+        "original_content_hash": "e18d84118112191d719b59f1a7eed6b65483703925b498cc3491b8dbfca0a01a"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

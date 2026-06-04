@@ -1,0 +1,328 @@
+{
+  "file_name": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+  "source_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+  "domain": "docker",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 10,
+  "chunk_count": 10,
+  "chunks": [
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_non_root_containers#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_non_root_containers",
+      "title": "Run containers as non-root (CIS 4.1)",
+      "domain": "docker",
+      "service": "AWS EKS",
+      "content": "Run containers as non-root (CIS 4.1)\n\nNever run a container as root (UID 0). Create a dedicated user and group in the Dockerfile. Example: groupadd --gid 1001 appgroup && useradd --uid 1001 --gid appgroup --no-create-home appuser, then USER appuser before CMD.\n\nDecision rules:\n- Always add a non-root user in the Dockerfile before the CMD/ENTRYPOINT instruction\n- Use fixed UID/GID (e.g. 1001) to ensure consistent file ownership across image rebuilds\n\nTrade-offs:\n- Some applications require root for initialization — use gosu or tini as entrypoint wrappers to drop privileges after init\n\nAnti-patterns:\n- Running containers without a USER directive (defaults to root)\n- Using USER root explicitly in production images\n\nAWS Well-Architected alignment:\n- ECS task definitions should set user in containerDefinitions\n- EKS pod specs should set runAsNonRoot: true in securityContext",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_non_root_containers",
+        "title": "Run containers as non-root (CIS 4.1)",
+        "domain": "docker",
+        "service": "AWS EKS",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "aws-eks"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_non_root_containers"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "f10440f63b7dcb9fe0e0a5e8d94950add872ae62d3b5118d727a9905c0ce5033"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_readonly_filesystem#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_readonly_filesystem",
+      "title": "Read-only container filesystem (CIS 5.12)",
+      "domain": "docker",
+      "service": "AWS ECS",
+      "content": "Read-only container filesystem (CIS 5.12)\n\nMount the container filesystem as read-only to prevent unauthorized runtime modifications. In docker-compose: read_only: true with tmpfs mounts for /tmp and /var/run. CLI equivalent: docker run --read-only --tmpfs /tmp myapp:latest.\n\nDecision rules:\n- Enable read_only: true for all stateless services\n- Add tmpfs mounts for directories requiring write access at runtime (e.g. /tmp, /var/run)\n\nTrade-offs:\n- Application must not write to the container filesystem — may require refactoring logging or temp file paths\n\nAnti-patterns:\n- Running containers with writable root filesystem in production\n- Not providing tmpfs for required write paths when read-only is enabled\n\nAWS Well-Architected alignment:\n- Map to readOnlyRootFilesystem: true in ECS containerDefinitions\n- Map to readOnlyRootFilesystem: true in Kubernetes securityContext",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_readonly_filesystem",
+        "title": "Read-only container filesystem (CIS 5.12)",
+        "domain": "docker",
+        "service": "AWS ECS",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "aws-ecs"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_readonly_filesystem"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "7fbf1da0c854e93c24bc7bad2a055248e7a6db44aa3c83688cdaa69611f9cf0a"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_capabilities#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_capabilities",
+      "title": "Drop unnecessary Linux capabilities (CIS 5.3)",
+      "domain": "docker",
+      "service": "Docker",
+      "content": "Drop unnecessary Linux capabilities (CIS 5.3)\n\nStart by dropping all Linux capabilities (cap_drop: ALL), then add back only those strictly required (e.g. cap_add: NET_BIND_SERVICE if the service listens on a port below 1024).\n\nDecision rules:\n- Apply cap_drop: [ALL] as the baseline for every container\n- Add back only specific capabilities required by the application — document the reason\n\nTrade-offs:\n- Identifying required capabilities may take experimentation; run container with strace or auditd to detect capability use\n\nAnti-patterns:\n- Running containers without capability restrictions\n- Adding broad capabilities (SYS_ADMIN, NET_ADMIN) without justification",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_capabilities",
+        "title": "Drop unnecessary Linux capabilities (CIS 5.3)",
+        "domain": "docker",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "docker"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_capabilities"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "a3a43d85c8bfa0b57d6317b6e70f574dab817724991b54d90d8f39e0adf02ce8"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_resource_limits#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_resource_limits",
+      "title": "Enforce resource limits (CIS 5.10 / 5.11)",
+      "domain": "docker",
+      "service": "AWS ECS",
+      "content": "Enforce resource limits (CIS 5.10 / 5.11)\n\nAlways define memory and CPU limits to prevent a single container from causing Denial of Service. In docker-compose deploy.resources: limits memory 512m cpus 0.5, reservations memory 128m cpus 0.1.\n\nDecision rules:\n- Set both memory limits and CPU limits for all production containers\n- Define reservations (requests) in addition to limits to enable proper scheduling\n\nTrade-offs:\n- Limits that are too tight cause OOM kills or CPU throttling — profile the application before setting values\n\nAnti-patterns:\n- Deploying containers with no memory or CPU limits to shared hosts\n- Setting limits without reservations — scheduler cannot guarantee resource availability\n\nAWS Well-Architected alignment:\n- Map to memory and cpu in ECS task definition resource requirements\n- Map to resources.requests and resources.limits in Kubernetes pod spec",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_resource_limits",
+        "title": "Enforce resource limits (CIS 5.10 / 5.11)",
+        "domain": "docker",
+        "service": "AWS ECS",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "aws-ecs"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_resource_limits"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "de63b2af3ca0e0f138a26256985583916e1c1d8e740c9f0eb267430ff603a42c"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_no_privileged#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_no_privileged",
+      "title": "Disable privileged mode (CIS 5.4)",
+      "domain": "docker",
+      "service": "Docker",
+      "content": "Disable privileged mode (CIS 5.4)\n\nNever use privileged: true in production. Privileged containers have full access to the host kernel. Use security_opt: [no-new-privileges:true] to prevent privilege escalation.\n\nDecision rules:\n- Set security_opt: [no-new-privileges:true] on all containers\n- Reject any deployment manifest that sets privileged: true without explicit documented justification\n\nTrade-offs:\n- Some monitoring or networking tools require privileged mode — isolate them in dedicated namespaces with extra controls\n\nAnti-patterns:\n- Setting privileged: true for application containers\n- Using privileged mode as a workaround for missing capabilities",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_no_privileged",
+        "title": "Disable privileged mode (CIS 5.4)",
+        "domain": "docker",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "docker"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_no_privileged"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "b2d48df68ea93d581af9e92b09f1b7e4ca2e276eaa21e345bf7334955bc3b37b"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_seccomp_apparmor#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_seccomp_apparmor",
+      "title": "Apply Seccomp and AppArmor profiles (CIS 5.1 / 5.2)",
+      "domain": "docker",
+      "service": "Docker",
+      "content": "Apply Seccomp and AppArmor profiles (CIS 5.1 / 5.2)\n\nAttach a seccomp profile (seccomp:seccomp-profile.json) and AppArmor profile (apparmor:docker-default) via security_opt to restrict the system calls available to the container.\n\nDecision rules:\n- Use the docker-default AppArmor profile as a minimum baseline\n- Use the RuntimeDefault seccomp profile in Kubernetes (seccompProfile.type: RuntimeDefault)\n\nTrade-offs:\n- Custom seccomp profiles require profiling the application's syscall usage first\n- AppArmor is Linux-specific — not applicable on Windows containers\n\nAnti-patterns:\n- Running containers with unconfined seccomp (--security-opt seccomp=unconfined)\n- Disabling AppArmor profiles for production containers",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_seccomp_apparmor",
+        "title": "Apply Seccomp and AppArmor profiles (CIS 5.1 / 5.2)",
+        "domain": "docker",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "docker"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_seccomp_apparmor"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "2881eefed650778a874889c22283322d611840fcf9052bc93452c7b27bfa4e8c"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_minimal_base_images#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_minimal_base_images",
+      "title": "Use minimal base images to reduce attack surface",
+      "domain": "docker",
+      "service": "Trivy",
+      "content": "Use minimal base images to reduce attack surface\n\nPrefer distroless (no shell, no package manager) or alpine (~5 MB) base images. Distroless example: gcr.io/distroless/python3-debian12. Alpine example: python:3.11-alpine. Fewer packages means fewer CVEs.\n\nDecision rules:\n- Default to *-slim variants when distroless is not feasible\n- Use distroless for production runtime stages in multi-stage builds\n- Run image scanners after every build to detect new CVEs\n\nTrade-offs:\n- Distroless images have no shell — debugging requires ephemeral debug containers (kubectl debug)\n- Alpine uses musl libc — some Python packages may not have compatible wheels\n\nAnti-patterns:\n- Using ubuntu:latest or debian:latest as a base image for production containers\n- Not updating base images regularly — stale images accumulate CVEs\n\nAWS Well-Architected alignment:\n- ECR image scanning with Snyk/Trivy should be enabled for all repositories",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_minimal_base_images",
+        "title": "Use minimal base images to reduce attack surface",
+        "domain": "docker",
+        "service": "Trivy",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "trivy"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_minimal_base_images"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "3cf00d39048037d36787533acb1d1d9c68c3446c3d20032de5d7801a6a81d1db"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_image_scanning#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_image_scanning",
+      "title": "Scan images for vulnerabilities before deployment",
+      "domain": "docker",
+      "service": "Trivy",
+      "content": "Scan images for vulnerabilities before deployment\n\nUse vulnerability scanners on every image before pushing or deploying. Tools: Trivy (trivy image myapp:latest --severity CRITICAL,HIGH), Grype (grype myapp:latest), Docker Scout (docker scout cves myapp:latest).\n\nDecision rules:\n- Gate CI/CD pipeline on Trivy or Grype scan results — fail on CRITICAL severity\n- Scan both the application image and the base image separately\n\nTrade-offs:\n- Scanning adds 1-5 minutes to CI pipeline — acceptable for security assurance\n- Scanners may produce false positives — triage HIGH findings before blocking\n\nAnti-patterns:\n- Deploying images without any vulnerability scan\n- Ignoring CRITICAL CVEs in scanner output without documented risk acceptance\n\nAWS Well-Architected alignment:\n- Enable Amazon ECR enhanced scanning (Inspector-based) for automatic push-time scanning",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_image_scanning",
+        "title": "Scan images for vulnerabilities before deployment",
+        "domain": "docker",
+        "service": "Trivy",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "trivy"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_image_scanning"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "14afebeda236ddf27809520a17a53bec2361fcacceddd455a1e61209186ecb6b"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_no_secrets_in_images#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_no_secrets_in_images",
+      "title": "Never embed secrets in Docker images (CIS 4.10)",
+      "domain": "docker",
+      "service": "AWS ECS",
+      "content": "Never embed secrets in Docker images (CIS 4.10)\n\nDo not use ENV to set secrets (e.g. ENV API_KEY=sk-secret123). Use Docker BuildKit secrets (RUN --mount=type=secret,id=api_key) or inject secrets at runtime via environment variables from a vault or secrets manager.\n\nDecision rules:\n- Reject any Dockerfile with ENV instructions containing passwords, tokens, or API keys\n- Use RUN --mount=type=secret for secrets needed only during build time (e.g. pip install from private registry)\n\nTrade-offs:\n- BuildKit secret mounts require Docker BuildKit enabled (DOCKER_BUILDKIT=1)\n\nAnti-patterns:\n- ENV API_KEY=sk-secret123 in Dockerfile — secret is visible in image history\n- ARG SECRET=default_value — visible in build logs and image metadata\n\nAWS Well-Architected alignment:\n- Inject secrets from AWS Secrets Manager at container startup via ECS secrets configuration\n- Use Parameter Store or Secrets Manager references in ECS task definitions",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_no_secrets_in_images",
+        "title": "Never embed secrets in Docker images (CIS 4.10)",
+        "domain": "docker",
+        "service": "AWS ECS",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "aws-ecs"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_no_secrets_in_images"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "8c014c3eb3fccbca94e5b45e51548b96e8aba41d64a95d3f5819735a0b12fadb"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/cis_docker_benchmark_kb::cis_docker_dockerignore#0",
+      "parent_id": "docker/cis_docker_benchmark_kb::cis_docker_dockerignore",
+      "title": "Use .dockerignore to exclude sensitive files",
+      "domain": "docker",
+      "service": "Docker",
+      "content": "Use .dockerignore to exclude sensitive files\n\nA comprehensive .dockerignore prevents secrets and unnecessary files from being added to the build context. Should exclude: .env, .env.*, *.pem, *.key, *.p12, secrets/, .git/, __pycache__/, *.pyc, node_modules/, .DS_Store.\n\nDecision rules:\n- Always include a .dockerignore in every project with a Dockerfile\n- Exclude all secret files, credentials, and VCS metadata from the build context\n\nTrade-offs:\n- Over-aggressive .dockerignore may exclude files needed for the build — review carefully\n\nAnti-patterns:\n- Not having a .dockerignore — risks accidentally copying .env or private keys into the image\n- Copying the entire repository context without filtering out secrets",
+      "metadata": {
+        "id": "docker/cis_docker_benchmark_kb::cis_docker_dockerignore",
+        "title": "Use .dockerignore to exclude sensitive files",
+        "domain": "docker",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "docker"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "end",
+        "source": {
+          "file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+          "source_id": "cis_docker_dockerignore"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+        "original_content_hash": "0d70062e733414cd2ef5d1fafcdabdf6814c984e6c00d3d1a5ef81912f5b1a61"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "end"
+    }
+  ]
+}

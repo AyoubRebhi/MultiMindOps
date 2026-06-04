@@ -1,0 +1,44 @@
+{
+  "file_name": "rag/corpus/security/kubernetes_security_notes_kb.json",
+  "source_file": "rag/corpus_cleaned/security/kubernetes_security_notes_kb.cleaned.json",
+  "domain": "security",
+  "resource_type": "security",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "security/kubernetes_security_notes_kb::security_kubernetes_notes#0",
+      "parent_id": "security/kubernetes_security_notes_kb::security_kubernetes_notes",
+      "title": "Kubernetes Security Baseline Reminders",
+      "domain": "security",
+      "service": "Kubernetes",
+      "content": "Kubernetes Security Baseline Reminders\n\nSecurity reminders applied during Kubernetes manifest generation: avoid broad privileges in pods, prefer explicit container ports and label selectors, keep sensitive values out of plain Secret manifests committed to version control.\n\nDecision rules:\n- Never set privileged: true or allow broad RBAC permissions (* verbs on resources)\n- Always specify explicit containerPort values and label selectors in Deployment and Service\n- Use External Secrets Operator or Sealed Secrets — avoid committing base64-encoded secrets in plain Secret manifests\n\nAnti-patterns:\n- Using privileged: true in pod specs — grants full kernel access\n- Committing Kubernetes Secret manifests with base64-encoded sensitive values to git\n- Using wildcard RBAC verbs (verbs: [\"*\"]) or wildcard resources",
+      "metadata": {
+        "id": "security/kubernetes_security_notes_kb::security_kubernetes_notes",
+        "title": "Kubernetes Security Baseline Reminders",
+        "domain": "security",
+        "service": "Kubernetes",
+        "category": "kubernetes",
+        "tags": [
+          "security",
+          "kubernetes"
+        ],
+        "importance": "high",
+        "cloud_provider": "multi",
+        "resource_type": "security",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/security/kubernetes_security_notes_kb.json",
+          "source_id": "security_kubernetes_notes"
+        },
+        "cleaned_file": "rag/corpus_cleaned/security/kubernetes_security_notes_kb.cleaned.json",
+        "source_file": "rag/corpus/security/kubernetes_security_notes_kb.json",
+        "original_content_hash": "c4809b05ea03818de56e3c695e9a644b4572fc50e38f9a8caa2e3c0c8d98be6e"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}

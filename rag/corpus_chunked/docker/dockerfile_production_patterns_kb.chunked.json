@@ -1,0 +1,170 @@
+{
+  "file_name": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+  "source_file": "rag/corpus_cleaned/docker/dockerfile_production_patterns_kb.cleaned.json",
+  "domain": "docker",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 5,
+  "chunk_count": 5,
+  "chunks": [
+    {
+      "chunk_id": "docker/dockerfile_production_patterns_kb::dockerfile_python_fastapi_multistage#0",
+      "parent_id": "docker/dockerfile_production_patterns_kb::dockerfile_python_fastapi_multistage",
+      "title": "Python FastAPI multi-stage Dockerfile with non-root user and health check",
+      "domain": "docker",
+      "service": "AWS ECS",
+      "content": "Python FastAPI multi-stage Dockerfile with non-root user and health check\n\nTwo-stage Python production Dockerfile: builder stage (python:3.11-slim) installs packages with pip install --no-cache-dir --user, runtime stage (python:3.11-slim) creates non-root appuser (UID 1001), copies /root/.local from builder, sets PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1, adds HEALTHCHECK with httpx, exposes 8000. CMD: uvicorn with --workers 1 --no-access-log.\n\nDecision rules:\n- Use --user flag in pip install to install to /root/.local, then copy to the runtime user's home\n- Set PYTHONDONTWRITEBYTECODE=1 to skip .pyc file generation in the runtime image\n- Add HEALTHCHECK with initialDelaySeconds=40s to accommodate application startup time\n\nTrade-offs:\n- Runtime stage still uses python:3.11-slim (not distroless) to allow httpx for health check — use distroless if health check is done via external probe\n\nAnti-patterns:\n- Installing dependencies in the runtime stage — defeats the multi-stage cache benefit\n- Running uvicorn with multiple workers behind a container orchestrator — use 1 worker per container and scale horizontally\n\nAWS Well-Architected alignment:\n- Map HEALTHCHECK to ECS container health check for load balancer target group deregistration",
+      "metadata": {
+        "id": "docker/dockerfile_production_patterns_kb::dockerfile_python_fastapi_multistage",
+        "title": "Python FastAPI multi-stage Dockerfile with non-root user and health check",
+        "domain": "docker",
+        "service": "AWS ECS",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "aws-ecs"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+          "source_id": "dockerfile_python_fastapi_multistage"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/dockerfile_production_patterns_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+        "original_content_hash": "0cac784a078de5d595dcba0e5f3edfb81cbe7deb3a85118fd651aae4c46ed2c6"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    },
+    {
+      "chunk_id": "docker/dockerfile_production_patterns_kb::dockerfile_nodejs_multistage#0",
+      "parent_id": "docker/dockerfile_production_patterns_kb::dockerfile_nodejs_multistage",
+      "title": "Node.js multi-stage Dockerfile with npm ci and non-root user",
+      "domain": "docker",
+      "service": "Docker",
+      "content": "Node.js multi-stage Dockerfile with npm ci and non-root user\n\nTwo-stage Node.js Dockerfile: builder stage (node:20-alpine) runs npm ci --only=production and npm run build, runtime stage (node:20-alpine) creates non-root appuser (UID 1001), copies dist and node_modules with --chown, adds HEALTHCHECK with wget, exposes 3000. CMD: node dist/server.js.\n\nDecision rules:\n- Use npm ci (not npm install) in builder stage — deterministic install from package-lock.json\n- Use --only=production in npm ci to exclude devDependencies from the runtime image\n- Use alpine variant to minimize image size\n\nTrade-offs:\n- Alpine uses musl libc — some native Node.js addons may have compatibility issues; use debian-slim variants if needed\n\nAnti-patterns:\n- Using npm install instead of npm ci — non-deterministic and slower\n- Copying node_modules from host into the image — includes devDependencies and platform-specific binaries",
+      "metadata": {
+        "id": "docker/dockerfile_production_patterns_kb::dockerfile_nodejs_multistage",
+        "title": "Node.js multi-stage Dockerfile with npm ci and non-root user",
+        "domain": "docker",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "docker"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+          "source_id": "dockerfile_nodejs_multistage"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/dockerfile_production_patterns_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+        "original_content_hash": "13148ca9d73acf561d20db69e05033508b5a5a10f8b15a420cb36ccd4690b4ac"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/dockerfile_production_patterns_kb::dockerfile_java_spring_boot_layers#0",
+      "parent_id": "docker/dockerfile_production_patterns_kb::dockerfile_java_spring_boot_layers",
+      "title": "Java Spring Boot multi-stage Dockerfile with layer extraction",
+      "domain": "docker",
+      "service": "AWS EKS",
+      "content": "Java Spring Boot multi-stage Dockerfile with layer extraction\n\nTwo-stage Spring Boot Dockerfile: builder stage (maven:3.9-eclipse-temurin-17) runs mvn dependency:go-offline -B to cache deps, then mvn package -DskipTests -B. Runtime stage (eclipse-temurin:17-jre-alpine) creates non-root appuser, runs java -Djarmode=layertools -jar app.jar extract to split JAR into layers for better Docker caching, adds HEALTHCHECK with wget on /actuator/health. JVM options: -XX:MaxRAMPercentage=75.0, -XX:+UseContainerSupport.\n\nDecision rules:\n- Run mvn dependency:go-offline before copying src — creates a cacheable layer for Maven dependencies\n- Use -Djarmode=layertools to extract Spring Boot layers for optimized Docker caching on partial rebuilds\n- Use -XX:UseContainerSupport and -XX:MaxRAMPercentage=75.0 for proper JVM memory management in containers\n\nTrade-offs:\n- Layer extraction increases build steps but significantly reduces rebuild time when only application code changes\n\nAnti-patterns:\n- Copying all Maven dependencies into the final image — use the JRE runtime stage only\n- Not setting -XX:UseContainerSupport — JVM may use host memory limits instead of container limits, causing OOMKills\n\nAWS Well-Architected alignment:\n- Set JVM MaxRAMPercentage to leave headroom for the container memory limit overhead in ECS/EKS",
+      "metadata": {
+        "id": "docker/dockerfile_production_patterns_kb::dockerfile_java_spring_boot_layers",
+        "title": "Java Spring Boot multi-stage Dockerfile with layer extraction",
+        "domain": "docker",
+        "service": "AWS EKS",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "aws-eks"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+          "source_id": "dockerfile_java_spring_boot_layers"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/dockerfile_production_patterns_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+        "original_content_hash": "4d7ad486a11a184f78f756ee7ac29b602e4f13d5264e09aae3449caea6ccb0bd"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/dockerfile_production_patterns_kb::dockerfile_dockerignore_template#0",
+      "parent_id": "docker/dockerfile_production_patterns_kb::dockerfile_dockerignore_template",
+      "title": "Comprehensive .dockerignore template",
+      "domain": "docker",
+      "service": "Docker",
+      "content": "Comprehensive .dockerignore template\n\nExclude from Docker build context: version control (.git/, .gitignore, .gitattributes), secrets (.env, .env.*, *.pem, *.key, *.p12, *.pfx, secrets/), Python artifacts (__pycache__/, *.pyc, .venv/, dist/, .pytest_cache/, .mypy_cache/, htmlcov/), Node artifacts (node_modules/, npm-debug.log, .npm/), Docker files (Dockerfile*, docker-compose*, .dockerignore), IDE files (.idea/, .vscode/, .DS_Store), CI/CD files (.github/, Jenkinsfile), docs (docs/, *.md), tests (tests/, test/, spec/).\n\nDecision rules:\n- Always include a .dockerignore in every project that has a Dockerfile\n- Exclude .env* patterns to prevent accidental secret inclusion in build context\n- Exclude tests/ to keep production images smaller\n\nTrade-offs:\n- Excluding Dockerfile and docker-compose files from context is safe but may complicate multi-stage builds that copy compose files — adjust as needed\n\nAnti-patterns:\n- Not having a .dockerignore — entire repository including secrets is sent to Docker daemon\n- Using COPY . . without a .dockerignore",
+      "metadata": {
+        "id": "docker/dockerfile_production_patterns_kb::dockerfile_dockerignore_template",
+        "title": "Comprehensive .dockerignore template",
+        "domain": "docker",
+        "service": "Docker",
+        "category": "docker",
+        "tags": [
+          "docker"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "continue",
+        "source": {
+          "file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+          "source_id": "dockerfile_dockerignore_template"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/dockerfile_production_patterns_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+        "original_content_hash": "625ea5f138eadfa38ee994c79727e8cbb34d26bb0160919128f664804a2c5c9e"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "continue"
+    },
+    {
+      "chunk_id": "docker/dockerfile_production_patterns_kb::dockerfile_cache_optimization#0",
+      "parent_id": "docker/dockerfile_production_patterns_kb::dockerfile_cache_optimization",
+      "title": "Docker layer cache optimization strategy",
+      "domain": "docker",
+      "service": "GitHub Actions",
+      "content": "Docker layer cache optimization strategy\n\nOptimize Docker build cache by separating frequently changing layers from stable layers. Pattern: COPY requirements.txt . (stable — cache hit), RUN pip install -r requirements.txt (cached unless requirements change), COPY . . (frequently changing — always invalidates). The wrong pattern copies all source before installing, invalidating the pip install cache on every code change.\n\nDecision rules:\n- Always copy dependency manifests (requirements.txt, package.json, pom.xml) before copying source code\n- Place COPY . . as late as possible in the Dockerfile to maximize cache reuse of earlier layers\n\nTrade-offs:\n- Separate dependency and source COPY instructions add a line to the Dockerfile but dramatically reduce CI build times\n\nAnti-patterns:\n- COPY . . followed by RUN pip install — invalidates pip cache on every code change\n- Combining dependency installation and source copy in a single RUN — prevents cache layering\n\nAWS Well-Architected alignment:\n- Use GitHub Actions cache with type=gha for Docker BuildKit layer caching in CI (cache-from/cache-to gha)",
+      "metadata": {
+        "id": "docker/dockerfile_production_patterns_kb::dockerfile_cache_optimization",
+        "title": "Docker layer cache optimization strategy",
+        "domain": "docker",
+        "service": "GitHub Actions",
+        "category": "docker",
+        "tags": [
+          "docker",
+          "github-actions"
+        ],
+        "importance": "medium",
+        "cloud_provider": "aws",
+        "resource_type": "docker",
+        "chunk_hint": "end",
+        "source": {
+          "file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+          "source_id": "dockerfile_cache_optimization"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker/dockerfile_production_patterns_kb.cleaned.json",
+        "source_file": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+        "original_content_hash": "ae452cd609070bc8819be72966b5fca7f11104814bb3d23417055b1041b834c5"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "end"
+    }
+  ]
+}

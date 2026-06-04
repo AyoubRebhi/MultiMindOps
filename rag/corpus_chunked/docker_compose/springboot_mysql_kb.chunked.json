@@ -1,0 +1,46 @@
+{
+  "file_name": "rag/corpus/docker_compose/springboot_mysql_kb.json",
+  "source_file": "rag/corpus_cleaned/docker_compose/springboot_mysql_kb.cleaned.json",
+  "domain": "docker_compose",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/chunk_corpus.py",
+  "chunk_model": "gpt-4.1-mini",
+  "entry_count": 1,
+  "chunk_count": 1,
+  "chunks": [
+    {
+      "chunk_id": "docker_compose/springboot_mysql_kb::compose_springboot_mysql#0",
+      "parent_id": "docker_compose/springboot_mysql_kb::compose_springboot_mysql",
+      "title": "Spring Boot + MySQL Docker Compose",
+      "domain": "docker_compose",
+      "service": "Docker Compose",
+      "content": "Spring Boot + MySQL Docker Compose\n\nCompose pattern for Spring Boot backend (port 8080) with MySQL 8.0 database (port 3306). Both services receive MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, MYSQL_ROOT_PASSWORD from environment. Backend depends_on db.\n\nDecision rules:\n- Use when language=java, framework=spring_boot, dependencies include mysql\n- MYSQL_ROOT_PASSWORD is required for MySQL 8.0 container initialization even when a regular user is defined\n\nTrade-offs:\n- No persistent volume — MySQL data is lost on container removal; add a named volume for durability\n- No healthcheck on db — Spring Boot may attempt JDBC connections before MySQL is accepting them\n\nAnti-patterns:\n- Do not hardcode MYSQL_ROOT_PASSWORD or MYSQL_PASSWORD in the compose file\n- Do not expose port 3306 to 0.0.0.0 in internet-facing environments",
+      "metadata": {
+        "id": "docker_compose/springboot_mysql_kb::compose_springboot_mysql",
+        "title": "Spring Boot + MySQL Docker Compose",
+        "domain": "docker_compose",
+        "service": "Docker Compose",
+        "category": "docker",
+        "tags": [
+          "docker-compose",
+          "docker",
+          "compose",
+          "local-development"
+        ],
+        "importance": "medium",
+        "cloud_provider": "multi",
+        "resource_type": "docker",
+        "chunk_hint": "start",
+        "source": {
+          "file": "rag/corpus/docker_compose/springboot_mysql_kb.json",
+          "source_id": "compose_springboot_mysql"
+        },
+        "cleaned_file": "rag/corpus_cleaned/docker_compose/springboot_mysql_kb.cleaned.json",
+        "source_file": "rag/corpus/docker_compose/springboot_mysql_kb.json",
+        "original_content_hash": "8d989a40183c5856030198c986fcc6fd5421ca336cb554fa8436a96dc5ebecce"
+      },
+      "chunk_index": 0,
+      "chunk_hint": "start"
+    }
+  ]
+}
