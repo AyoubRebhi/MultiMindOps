@@ -1,0 +1,164 @@
+{
+  "file_name": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+  "domain": "cloud",
+  "resource_type": "architecture",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "AWS Well-Architected Framework — Security Pillar",
+  "entry_count": 7,
+  "cleaned_entries": [
+    {
+      "id": "cloud/aws_well_architected_security_kb::aws_iam_least_privilege",
+      "title": "IAM least privilege and access analysis",
+      "domain": "cloud",
+      "service": "AWS IAM",
+      "category": "cloud",
+      "content": "IAM least privilege and access analysis\n\nIAM policies should grant only the minimum actions required. Example: allow s3:GetObject and s3:ListBucket on specific bucket ARN only. Use IAM Access Analyzer to find unused permissions: aws accessanalyzer create-analyzer --type ACCOUNT. Generate policies from CloudTrail activity: aws iam generate-service-last-accessed-details.\n\nDecision rules:\n- Start with deny-all and add only required actions on specific resources (not Action: '*')\n- Run IAM Access Analyzer to detect overly broad permissions quarterly\n- Use IAM Access Advisor to remove permissions unused for 90+ days\n\nTrade-offs:\n- Fine-grained IAM policies require more maintenance as application requirements change\n\nAnti-patterns:\n- Action: '*' or Resource: '*' in production IAM policies\n- Using the AWS managed AdministratorAccess policy for application roles\n- Long-lived IAM access keys — use IAM roles and temporary credentials\n\nAWS Well-Architected alignment:\n- Enable IAM Access Analyzer for every AWS account\n- Use AWS Organizations SCPs to prevent privilege escalation across accounts",
+      "tags": [
+        "cloud",
+        "aws",
+        "architecture",
+        "aws-iam"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "architecture",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+        "source_id": "aws_iam_least_privilege"
+      }
+    },
+    {
+      "id": "cloud/aws_well_architected_security_kb::aws_kms_encryption",
+      "title": "Encryption at rest and in transit with KMS",
+      "domain": "cloud",
+      "service": "AWS KMS",
+      "category": "cloud",
+      "content": "Encryption at rest and in transit with KMS\n\nCreate dedicated KMS keys per environment with enable_key_rotation=true and deletion_window_in_days=30. Apply SSE-KMS to S3 buckets with bucket_key_enabled=true for cost optimization. Enforce TLS 1.2+ for all data in transit.\n\nDecision rules:\n- Create one KMS key per environment (dev/staging/prod) — do not share keys across environments\n- Enable automatic key rotation (enable_key_rotation=true) on all KMS keys\n- Enable bucket_key_enabled=true on S3 SSE-KMS to reduce KMS API call costs\n\nTrade-offs:\n- SSE-KMS adds latency compared to SSE-S3 — acceptable for sensitive data, consider SSE-S3 for high-throughput non-sensitive data\n\nAnti-patterns:\n- Using the AWS-managed key (aws/s3) instead of a customer-managed KMS key — no key rotation control\n- Transmitting data over HTTP in production — enforce TLS via bucket policies and ALB listeners\n\nAWS Well-Architected alignment:\n- Use aws_kms_key with deletion_window_in_days >= 7 and enable_key_rotation = true\n- Apply aws_s3_bucket_server_side_encryption_configuration with sse_algorithm = aws:kms",
+      "tags": [
+        "cloud",
+        "aws",
+        "architecture",
+        "aws-kms"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "architecture",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+        "source_id": "aws_kms_encryption"
+      }
+    },
+    {
+      "id": "cloud/aws_well_architected_security_kb::aws_vpc_multi_layer",
+      "title": "VPC multi-layer architecture",
+      "domain": "cloud",
+      "service": "Amazon VPC",
+      "category": "cloud",
+      "content": "VPC multi-layer architecture\n\nThree-tier VPC: public subnets (ALB only, map_public_ip_on_launch=false), private app subnets (ECS/EKS), private data subnets (RDS). Use at least 2 AZs. Route private subnets through NAT Gateway. Use VPC Endpoints for S3 and DynamoDB to avoid NAT Gateway costs.\n\nDecision rules:\n- Place ALB in public subnets, application workloads in private app subnets, databases in private data subnets\n- Never assign public IPs to EC2, ECS tasks, or RDS instances directly\n- Use VPC Endpoints (Gateway type for S3/DynamoDB, Interface for other services) to keep traffic on the AWS network\n\nTrade-offs:\n- NAT Gateway costs ~$35/month per AZ — use VPC Endpoints to reduce egress costs for high-volume AWS API traffic\n\nAnti-patterns:\n- Placing RDS or ElastiCache in public subnets\n- Using a single NAT Gateway for multi-AZ deployments — creates an availability bottleneck\n\nAWS Well-Architected alignment:\n- Use aws_vpc_endpoint for S3 and DynamoDB (Gateway type — free)\n- Deploy NAT Gateways in each AZ for high-availability outbound internet access from private subnets",
+      "tags": [
+        "cloud",
+        "aws",
+        "architecture",
+        "amazon-vpc"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "architecture",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+        "source_id": "aws_vpc_multi_layer"
+      }
+    },
+    {
+      "id": "cloud/aws_well_architected_security_kb::aws_cloudtrail_audit",
+      "title": "CloudTrail for complete audit logging",
+      "domain": "cloud",
+      "service": "AWS CloudTrail",
+      "category": "cloud",
+      "content": "CloudTrail for complete audit logging\n\nConfigure CloudTrail with is_multi_region_trail=true, include_global_service_events=true, enable_log_file_validation=true, KMS encryption, and S3 data event logging. Delivers comprehensive audit trail of all API activity across all regions.\n\nDecision rules:\n- Enable a multi-region trail — a single-region trail misses global service events (IAM, STS)\n- Enable log file validation to detect tampering of delivered log files\n- Encrypt CloudTrail logs with a dedicated KMS key (separate from application keys)\n\nTrade-offs:\n- CloudTrail logs for S3 data events generate high volume — filter to specific buckets to control costs\n\nAnti-patterns:\n- Disabling CloudTrail or limiting it to a single region\n- Storing CloudTrail logs in the same account and bucket without separate S3 access controls — logs could be tampered by a compromised account\n\nAWS Well-Architected alignment:\n- Use a dedicated Log Archive account in AWS Organizations for CloudTrail logs\n- Enable AWS Config to detect CloudTrail being disabled (cloud-trail-enabled rule)",
+      "tags": [
+        "cloud",
+        "aws",
+        "architecture",
+        "aws-cloudtrail"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "architecture",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+        "source_id": "aws_cloudtrail_audit"
+      }
+    },
+    {
+      "id": "cloud/aws_well_architected_security_kb::aws_guardduty_threat_detection",
+      "title": "GuardDuty for automated threat detection",
+      "domain": "cloud",
+      "service": "Amazon GuardDuty",
+      "category": "cloud",
+      "content": "GuardDuty for automated threat detection\n\nEnable GuardDuty with S3 log analysis, Kubernetes audit log analysis, and EBS malware protection. GuardDuty uses ML and threat intelligence to detect anomalous API calls, crypto mining, compromised credentials, and lateral movement.\n\nDecision rules:\n- Enable GuardDuty in every AWS account and every region\n- Enable all three data sources: s3_logs, kubernetes audit_logs, malware_protection for EBS\n- Set up SNS notifications or EventBridge rules to alert on HIGH/CRITICAL findings\n\nTrade-offs:\n- GuardDuty pricing is based on data volume analyzed — S3 data events can be costly for high-traffic buckets\n\nAnti-patterns:\n- Not enabling GuardDuty — leaves the account without automated threat detection\n- Enabling GuardDuty without acting on findings — security theater\n\nAWS Well-Architected alignment:\n- Use AWS Security Hub to aggregate GuardDuty findings with other security services\n- Enable GuardDuty at the AWS Organizations level via delegated administrator",
+      "tags": [
+        "cloud",
+        "aws",
+        "architecture",
+        "amazon-guardduty"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "architecture",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+        "source_id": "aws_guardduty_threat_detection"
+      }
+    },
+    {
+      "id": "cloud/aws_well_architected_security_kb::aws_waf_api_protection",
+      "title": "WAF for public API protection",
+      "domain": "cloud",
+      "service": "AWS WAF",
+      "category": "cloud",
+      "content": "WAF for public API protection\n\nAttach AWS WAFv2 WebACL to ALB or API Gateway. Configure rate limiting rule (2000 requests per 5 minutes per IP) and AWSManagedRulesCommonRuleSet (OWASP Top 10 protections). Enable CloudWatch metrics and sampled request logging for visibility.\n\nDecision rules:\n- Attach WAF to every public-facing ALB or API Gateway endpoint\n- Start with AWSManagedRulesCommonRuleSet and add custom rules for application-specific needs\n- Set rate_based_statement limit at 2000/5-min as a starting baseline — tune based on traffic patterns\n\nTrade-offs:\n- WAF managed rules may produce false positives for legitimate traffic — use Count mode before switching to Block\n- WAF adds latency (~1ms) — negligible for most workloads\n\nAnti-patterns:\n- Exposing ALBs or API Gateways to the internet without WAF\n- Using WAF in Count mode permanently — rules do not block malicious traffic\n\nAWS Well-Architected alignment:\n- Use AWS Shield Standard (included) for DDoS protection at L3/L4\n- Add AWS Shield Advanced for volumetric DDoS protection on critical endpoints",
+      "tags": [
+        "cloud",
+        "aws",
+        "architecture",
+        "aws-waf"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "architecture",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+        "source_id": "aws_waf_api_protection"
+      }
+    },
+    {
+      "id": "cloud/aws_well_architected_security_kb::aws_security_checklist",
+      "title": "AWS Security Baseline Checklist",
+      "domain": "cloud",
+      "service": "AWS Lambda",
+      "category": "cloud",
+      "content": "AWS Security Baseline Checklist\n\nMinimum security baseline for all AWS accounts: MFA on all IAM users (especially root), no root access keys, automatic KMS key rotation, S3 bucket versioning and public access block, CloudTrail enabled all regions, GuardDuty enabled, Security Hub with CIS standards, Config Rules configured, VPC Flow Logs enabled, TLS 1.2+ enforced, secrets in Secrets Manager (not env vars).\n\nDecision rules:\n- Enforce this checklist for every new AWS account before deploying any workloads\n- Use AWS Security Hub CIS AWS Foundations Benchmark to track compliance automatically\n\nAnti-patterns:\n- Storing secrets in EC2 userdata, Lambda environment variables, or SSM Parameter Store Standard (not encrypted by default)\n- Not enabling MFA on AWS root account — single point of compromise for entire account\n\nAWS Well-Architected alignment:\n- Use AWS Organizations SCPs to enforce this baseline across all member accounts\n- Use AWS Config conformance packs (Operational Best Practices for CIS) for automated compliance",
+      "tags": [
+        "cloud",
+        "aws",
+        "architecture",
+        "aws-lambda"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "architecture",
+      "chunk_hint": "end",
+      "source": {
+        "file": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+        "source_id": "aws_security_checklist"
+      }
+    }
+  ]
+}

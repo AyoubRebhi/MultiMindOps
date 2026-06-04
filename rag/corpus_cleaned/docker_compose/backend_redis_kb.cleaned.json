@@ -1,0 +1,32 @@
+{
+  "file_name": "rag/corpus/docker_compose/backend_redis_kb.json",
+  "domain": "docker_compose",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Docker Compose — Backend with Redis",
+  "entry_count": 1,
+  "cleaned_entries": [
+    {
+      "id": "docker_compose/backend_redis_kb::compose_backend_redis",
+      "title": "Generic Backend + Redis Docker Compose",
+      "domain": "docker_compose",
+      "service": "Docker Compose",
+      "category": "docker",
+      "content": "Generic Backend + Redis Docker Compose\n\nCompose pattern for a generic backend service with Redis 7. Backend receives REDIS_URL from environment and depends_on redis. Redis uses redis:7 official image and publishes port 6379. REDIS_URL format for this compose: redis://redis:6379.\n\nDecision rules:\n- Use when the backend requires Redis for caching, rate limiting, queuing, or session storage\n- Set REDIS_URL to redis://redis:6379 to use the compose service name as hostname\n\nTrade-offs:\n- No Redis persistence (no appendonly or named volume) — data lost on container restart\n- No Redis authentication — add requirepass via command: redis-server --requirepass ... for non-dev environments\n\nAnti-patterns:\n- Do not run Redis without authentication in staging or production\n- Do not expose port 6379 to external networks",
+      "tags": [
+        "docker-compose",
+        "docker",
+        "compose",
+        "local-development"
+      ],
+      "importance": "medium",
+      "cloud_provider": "multi",
+      "resource_type": "docker",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/docker_compose/backend_redis_kb.json",
+        "source_id": "compose_backend_redis"
+      }
+    }
+  ]
+}

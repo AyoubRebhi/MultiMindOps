@@ -1,0 +1,32 @@
+{
+  "file_name": "rag/corpus/env_example/backend_external_api_kb.json",
+  "domain": "env_example",
+  "resource_type": "security",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Env Example — Backend External API",
+  "entry_count": 1,
+  "cleaned_entries": [
+    {
+      "id": "env_example/backend_external_api_kb::env_backend_external_api",
+      "title": "Generic External API .env.example Template",
+      "domain": "env_example",
+      "service": "Docker",
+      "category": "secrets",
+      "content": "Generic External API .env.example Template\n\nSafe .env.example for backend services integrating with external APIs. Empty placeholders for API_BASE_URL (base URL of the external service) and API_KEY (authentication token). Generic template applicable to any third-party REST API.\n\nDecision rules:\n- Use API_BASE_URL to allow URL switching between sandbox and production endpoints\n- Prefer bearer token (API_KEY) over username/password credentials for API authentication\n\nAnti-patterns:\n- Never hardcode API keys in source code or Dockerfiles\n- Do not reuse a single API key across multiple services — provision separate keys per service",
+      "tags": [
+        "env-example",
+        "secrets",
+        "configuration",
+        "docker"
+      ],
+      "importance": "medium",
+      "cloud_provider": "multi",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/env_example/backend_external_api_kb.json",
+        "source_id": "env_backend_external_api"
+      }
+    }
+  ]
+}

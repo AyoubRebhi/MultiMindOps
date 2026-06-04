@@ -1,0 +1,196 @@
+{
+  "file_name": "rag/corpus/cost/aws_cost_optimization_kb.json",
+  "domain": "cost",
+  "resource_type": "cost",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "AWS Cost Optimization — Decision Intelligence Knowledge Base",
+  "entry_count": 6,
+  "cleaned_entries": [
+    {
+      "id": "cost/aws_cost_optimization_kb::cost-001",
+      "title": "Right-sizing EC2, ECS, and EKS workloads",
+      "domain": "cost",
+      "service": "AWS EKS",
+      "category": "Compute — Right-Sizing",
+      "content": "Right-sizing EC2, ECS, and EKS workloads\n\nMost cloud overspend lives in over-provisioned compute. AWS Compute Optimizer analyzes 14 days of CloudWatch metrics and recommends instance family/size changes; for EKS, the equivalent is Vertical Pod Autoscaler (VPA) in recommendation mode plus Goldilocks. Right-sizing should be a continuous process tied to the deploy pipeline, not a quarterly cleanup.\n\nDecision rules:\n- ENABLE Compute Optimizer org-wide; review recommendations monthly with the FinOps owner\n- TARGET 60-70% average CPU and memory utilization for steady-state workloads — below 40% means oversized\n- USE VPA in recommendation mode in EKS to size pod requests; do not run VPA in auto mode with HPA on the same metric\n- CHOOSE Graviton (ARM) instance families for any workload that builds for ARM — typically 20-40% cheaper at equal or better performance\n- PIN container CPU/memory requests to actual P95 + headroom — overprovisioned requests waste cluster capacity even with HPA\n\nTrade-offs:\n- Aggressive right-sizing: lower cost vs less burst headroom — pair with autoscaling\n- Graviton: cheap and fast but requires multi-arch container images (buildx) and dependency support\n- Tight pod requests: better bin-packing vs more frequent OOMKills if P95 was misestimated\n\nAnti-patterns:\n- Sizing for peak load 24/7 instead of using autoscaling\n- Copy-pasting `m5.2xlarge` everywhere because it 'feels right'\n- Setting Kubernetes requests = limits at high values to 'guarantee' performance — wastes cluster capacity\n- Ignoring Compute Optimizer recommendations because the savings 'look small' — they compound across hundreds of instances",
+      "tags": [
+        "cost",
+        "finops",
+        "optimization",
+        "aws-eks",
+        "aws",
+        "spot",
+        "savings-plans",
+        "autoscaling",
+        "right-sizing",
+        "nat",
+        "data-transfer",
+        "eks",
+        "rds"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "cost",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/cost/aws_cost_optimization_kb.json",
+        "source_id": "cost-001"
+      }
+    },
+    {
+      "id": "cost/aws_cost_optimization_kb::cost-002",
+      "title": "Spot instances and mixed-instance autoscaling for stateless workloads",
+      "domain": "cost",
+      "service": "AWS EKS",
+      "category": "Compute — Spot and Mixed Capacity",
+      "content": "Spot instances and mixed-instance autoscaling for stateless workloads\n\nSpot instances run on AWS spare capacity at 60-90% discount with a 2-minute interruption notice. They are the right primitive for stateless, fault-tolerant, horizontally scalable workloads (web servers, batch jobs, CI runners, EKS worker nodes). Modern tooling (Karpenter, EKS managed node groups with Spot, EC2 Auto Scaling mixed-instances policy) makes Spot adoption nearly turnkey.\n\nDecision rules:\n- USE Spot for all stateless workloads with replicas ≥ 2 — web tier, async workers, batch, CI/CD\n- DIVERSIFY across instance families and AZs (Karpenter does this automatically) — reduces correlated interruption risk\n- USE On-Demand for: stateful pods (databases, leader pods), pods with long startup time (>10 min), and a small baseline (10-30%) for stability\n- HANDLE the 2-minute interrupt with PodDisruptionBudgets, graceful shutdown, and AWS Node Termination Handler\n- PREFER Karpenter over Cluster Autoscaler in EKS — bin-packs better, supports Spot natively, faster scale-up\n\nTrade-offs:\n- Spot: 60-90% savings vs interruption risk — diversification mitigates but does not eliminate\n- Karpenter: best-in-class but relatively young — operationally simpler than Cluster Autoscaler at scale\n- 100% Spot: maximum savings vs higher operational risk — keep ~10-20% On-Demand baseline\n\nAnti-patterns:\n- Running stateful pods (Postgres, Kafka, Redis) on Spot without explicit handling\n- Concentrating all Spot capacity on one instance type — single price spike kills the whole fleet\n- Skipping graceful shutdown handlers — connections drop mid-request on interrupt\n- Using Spot for pods with 5+ minute warmup (JVM apps without CRaC, ML model loading) — interrupts faster than they start",
+      "tags": [
+        "cost",
+        "finops",
+        "optimization",
+        "aws-eks",
+        "aws",
+        "spot",
+        "savings-plans",
+        "autoscaling",
+        "right-sizing",
+        "nat",
+        "data-transfer",
+        "eks",
+        "rds"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "cost",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/cost/aws_cost_optimization_kb.json",
+        "source_id": "cost-002"
+      }
+    },
+    {
+      "id": "cost/aws_cost_optimization_kb::cost-003",
+      "title": "Savings Plans vs Reserved Instances vs On-Demand mix",
+      "domain": "cost",
+      "service": "AWS EKS",
+      "category": "Commitments — Savings Plans and Reserved Instances",
+      "content": "Savings Plans vs Reserved Instances vs On-Demand mix\n\nSavings Plans (Compute, EC2 Instance, SageMaker) provide 40-72% discount in exchange for a 1- or 3-year hourly $ commitment. They are more flexible than RIs (apply across regions, instance families, and Lambda/Fargate). For most workloads, the right strategy is: cover steady-state baseline with Compute Savings Plans, run elastic capacity on Spot/On-Demand, and avoid 3-year commitments unless headcount and architecture are very stable.\n\nDecision rules:\n- COMMIT (Compute Savings Plan, 1-year, no upfront) to cover the baseline visible in 90 days of usage — typically 40-60% of total compute spend\n- PREFER 1-year over 3-year unless usage has been stable for ≥1 year; 3-year forfeits ~10% extra discount but locks in architecture\n- PREFER Compute Savings Plans over EC2 Instance Savings Plans — flexibility across families/regions/Fargate is worth the slightly lower discount\n- STACK: Savings Plan covers baseline → Spot covers elastic → On-Demand covers the unpredictable peak\n- REVIEW commitment coverage monthly via Cost Explorer — under-utilization means you over-committed, target 95-100% coverage\n\nTrade-offs:\n- 3-year commitment: ~28% extra discount vs locked architecture for 3 years\n- All Upfront: best discount vs cash-flow impact and worse if you cancel/migrate\n- EC2 Instance SP: highest discount but locks family/region — only for very stable workloads\n\nAnti-patterns:\n- Buying RIs/Savings Plans before establishing a steady-state baseline — over-committing locks in waste\n- Running 100% On-Demand 'because we might change architecture' — leaving 30-50% savings on the table\n- Ignoring Savings Plan utilization — under-utilization means you are paying for compute you are not using",
+      "tags": [
+        "cost",
+        "finops",
+        "optimization",
+        "aws-eks",
+        "aws",
+        "spot",
+        "savings-plans",
+        "autoscaling",
+        "right-sizing",
+        "nat",
+        "data-transfer",
+        "eks",
+        "rds"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "cost",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/cost/aws_cost_optimization_kb.json",
+        "source_id": "cost-003"
+      }
+    },
+    {
+      "id": "cost/aws_cost_optimization_kb::cost-004",
+      "title": "NAT Gateway and inter-AZ data transfer cost minimization",
+      "domain": "cost",
+      "service": "Amazon VPC",
+      "category": "Network — NAT and Data Transfer",
+      "content": "NAT Gateway and inter-AZ data transfer cost minimization\n\nNetwork cost is the most-missed line item. NAT Gateways charge $0.045/hour PLUS $0.045/GB processed, which often exceeds compute cost for chatty workloads. Inter-AZ transfer is $0.01/GB each way. S3 traffic via NAT is the canonical unnecessary cost — VPC endpoints make it free.\n\nDecision rules:\n- DEPLOY S3 and DynamoDB Gateway Endpoints in every VPC — free, eliminates NAT charges for S3/DynamoDB traffic\n- DEPLOY Interface Endpoints for high-volume AWS services (ECR, CloudWatch Logs, Secrets Manager) — pays for itself above ~50GB/month\n- MINIMIZE inter-AZ chatter — co-locate tightly-coupled services in the same AZ where availability allows (use topology-aware routing in EKS)\n- USE VPC Flow Logs + Athena to find top NAT talkers — usually a misconfigured logging or monitoring agent\n- AVOID single-AZ NAT for HA — but consider one NAT per AZ to avoid cross-AZ NAT charges (each AZ → its own NAT)\n\nTrade-offs:\n- Per-AZ NAT: avoids cross-AZ charges but multiplies hourly fee — usually worth it\n- Topology-aware routing: lower cost vs reduced AZ failure tolerance — measure both\n- Interface endpoints: ~$7/month/AZ each, breaks even at moderate volume\n\nAnti-patterns:\n- All EKS pods in AZ-a calling RDS primary in AZ-b — pays inter-AZ for every read\n- S3 backups over NAT instead of via Gateway Endpoint — pure waste\n- CloudWatch Logs agent shipping logs over NAT — set up the interface endpoint\n- Ignoring data-transfer line item in Cost Explorer — usually 10-30% of total bill",
+      "tags": [
+        "cost",
+        "finops",
+        "optimization",
+        "amazon-vpc",
+        "aws",
+        "spot",
+        "savings-plans",
+        "autoscaling",
+        "right-sizing",
+        "nat",
+        "data-transfer",
+        "eks",
+        "rds"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "cost",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/cost/aws_cost_optimization_kb.json",
+        "source_id": "cost-004"
+      }
+    },
+    {
+      "id": "cost/aws_cost_optimization_kb::cost-005",
+      "title": "S3 storage tiering, EBS gp3, and RDS sizing",
+      "domain": "cost",
+      "service": "Amazon S3",
+      "category": "Storage and Database",
+      "content": "S3 storage tiering, EBS gp3, and RDS sizing\n\nStorage cost compounds silently. S3 Intelligent-Tiering moves objects between access tiers automatically and is the safe default for unknown access patterns. EBS gp3 is cheaper than gp2 at equal or better performance and should be the default. RDS instances are commonly over-provisioned for IOPS and storage; Aurora Serverless v2 is the right answer for spiky workloads.\n\nDecision rules:\n- USE S3 Intelligent-Tiering as the default storage class for any bucket with mixed/unknown access patterns\n- USE S3 Glacier Instant Retrieval for compliance archives accessed <1x/quarter; Glacier Deep Archive for never-accessed (>180-day retrieval ok)\n- MIGRATE all gp2 EBS volumes to gp3 — same or better perf, ~20% cheaper, no downtime\n- USE Aurora Serverless v2 for variable workloads (dev, staging, low-traffic prod); Aurora provisioned for steady high traffic\n- ENABLE S3 lifecycle rules to transition logs and backups to cheaper tiers after 30/90/365 days\n- RIGHT-SIZE RDS via CloudWatch + Performance Insights — most RDS instances are oversized 2-3x\n\nTrade-offs:\n- Intelligent-Tiering: ~$0.0025/1000 objects monitoring fee — not worth it for objects <128KB; for large objects nearly free\n- Aurora Serverless v2: scales to zero (in v2, near-zero) vs cold-start latency and per-ACU cost\n- Glacier tiers: huge savings vs retrieval cost and latency\n\nAnti-patterns:\n- Storing log files in S3 Standard forever — lifecycle them to Glacier or delete\n- Provisioned IOPS (io1/io2) on RDS without measured need — gp3 is often sufficient\n- Standalone EBS snapshots without lifecycle policy — unbounded growth\n- Sizing RDS from the dev guess instead of from CloudWatch — typically 2-3x oversized",
+      "tags": [
+        "cost",
+        "finops",
+        "optimization",
+        "amazon-s3",
+        "aws",
+        "spot",
+        "savings-plans",
+        "autoscaling",
+        "right-sizing",
+        "nat",
+        "data-transfer",
+        "eks",
+        "rds"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "cost",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/cost/aws_cost_optimization_kb.json",
+        "source_id": "cost-005"
+      }
+    },
+    {
+      "id": "cost/aws_cost_optimization_kb::cost-006",
+      "title": "Cost-efficient EKS: Karpenter, bin-packing, and resource requests",
+      "domain": "cost",
+      "service": "AWS EKS",
+      "category": "Kubernetes — EKS Cost Controls",
+      "content": "Cost-efficient EKS: Karpenter, bin-packing, and resource requests\n\nEKS cost is dominated by the worker nodes, not the control plane. The biggest wins come from (1) accurate pod resource requests so the scheduler bin-packs efficiently, (2) Karpenter for just-in-time, right-sized, Spot-aware node provisioning, and (3) HPA on application metrics, not just CPU.\n\nDecision rules:\n- USE Karpenter as the default node provisioner — bin-packs better than Cluster Autoscaler and supports diverse Spot pools\n- MEASURE pod requests with VPA recommendation mode for 7+ days before committing — initial guesses are usually 2x off\n- RUN HPA on the metric the user cares about (RPS, queue depth) via KEDA, not just CPU\n- ENABLE pod priority classes — system pods (CoreDNS, CNI) at high priority, batch jobs at low\n- USE Fargate for batch / CI / one-off pods — no node management, pay per pod-second; not for steady traffic\n\nTrade-offs:\n- Karpenter: faster scale-up and better bin-packing vs newer than Cluster Autoscaler\n- KEDA: scales on real signals vs another component to operate\n- Fargate: zero ops vs ~20-30% premium over equivalent EC2\n\nAnti-patterns:\n- Running EKS on a single node group of m5.xlarge — no diversity, no bin-packing flexibility\n- Setting requests=limits at 4x the actual usage to 'be safe' — destroys cluster economics\n- HPA on CPU when the app is I/O bound — pod count grows but throughput does not\n- Using Fargate for steady high-traffic workloads — pays the premium without needing the on-demand flexibility",
+      "tags": [
+        "cost",
+        "finops",
+        "optimization",
+        "aws-eks",
+        "aws",
+        "spot",
+        "savings-plans",
+        "autoscaling",
+        "right-sizing",
+        "nat",
+        "data-transfer",
+        "eks",
+        "rds"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "cost",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/cost/aws_cost_optimization_kb.json",
+        "source_id": "cost-006"
+      }
+    }
+  ]
+}

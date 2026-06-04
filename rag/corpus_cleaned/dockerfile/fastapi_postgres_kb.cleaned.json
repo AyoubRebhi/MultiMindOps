@@ -1,0 +1,32 @@
+{
+  "file_name": "rag/corpus/dockerfile/fastapi_postgres_kb.json",
+  "domain": "dockerfile",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Dockerfile — FastAPI with PostgreSQL",
+  "entry_count": 1,
+  "cleaned_entries": [
+    {
+      "id": "dockerfile/fastapi_postgres_kb::dockerfile_fastapi_postgres",
+      "title": "FastAPI PostgreSQL-backed Dockerfile",
+      "domain": "dockerfile",
+      "service": "Docker",
+      "category": "docker",
+      "content": "FastAPI PostgreSQL-backed Dockerfile\n\nFastAPI Dockerfile aligned with a PostgreSQL-backed service. Base image: python:3.11-slim. Installs pip requirements, sets ENV PORT=8000, exposes 8000. CMD uses ${PORT:-8000} for configurable port binding at runtime.\n\nDecision rules:\n- Use when framework=fastapi, project_type=api_backend, dependencies include postgres\n- Use PORT env variable to allow dynamic port assignment in orchestration environments\n\nTrade-offs:\n- No multi-stage build — simpler but larger final image than a distroless multi-stage variant\n- No non-root user — extend with USER directive before CMD for production security\n\nAnti-patterns:\n- Do not embed DATABASE_URL or credentials in the Dockerfile\n- Do not expose the database port inside the application container Dockerfile",
+      "tags": [
+        "dockerfile",
+        "docker",
+        "build",
+        "runtime"
+      ],
+      "importance": "medium",
+      "cloud_provider": "multi",
+      "resource_type": "docker",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/dockerfile/fastapi_postgres_kb.json",
+        "source_id": "dockerfile_fastapi_postgres"
+      }
+    }
+  ]
+}

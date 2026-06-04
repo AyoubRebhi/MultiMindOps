@@ -1,0 +1,331 @@
+{
+  "generated_by": "rag/tools/clean_corpus.py",
+  "schema": [
+    "id",
+    "title",
+    "domain",
+    "service",
+    "category",
+    "content",
+    "tags",
+    "importance",
+    "cloud_provider",
+    "resource_type",
+    "chunk_hint",
+    "source"
+  ],
+  "totals": {
+    "source_files_processed": 43,
+    "kb_files": 39,
+    "tf_files": 3,
+    "index_files": 1,
+    "cleaned_entries": 179,
+    "dropped_incomplete": 0,
+    "dropped_duplicate": 0
+  },
+  "distributions": {
+    "by_domain": {
+      "architecture": 5,
+      "cloud": 17,
+      "cost": 6,
+      "devsecops": 8,
+      "docker": 15,
+      "docker_compose": 4,
+      "dockerfile": 6,
+      "env_example": 3,
+      "iam": 8,
+      "incidents": 6,
+      "k8s": 13,
+      "kubernetes": 27,
+      "networking": 6,
+      "observability": 5,
+      "secrets": 5,
+      "security": 4,
+      "supply_chain": 5,
+      "terraform": 36
+    },
+    "by_resource_type": {
+      "architecture": 22,
+      "cost": 6,
+      "security": 42,
+      "docker": 25,
+      "kubernetes": 40,
+      "observability": 5,
+      "terraform": 39
+    },
+    "by_cloud_provider": {
+      "aws": 145,
+      "multi": 34
+    },
+    "by_importance": {
+      "high": 78,
+      "medium": 95,
+      "critical": 6
+    },
+    "by_chunk_hint": {
+      "start": 89,
+      "continue": 72,
+      "end": 18
+    }
+  },
+  "files": [
+    {
+      "output": "rag/corpus_cleaned/architecture/multi_tier_production_architectures_kb.cleaned.json",
+      "source": "rag/corpus/architecture/multi_tier_production_architectures_kb.json",
+      "domain": "architecture",
+      "entry_count": 5
+    },
+    {
+      "output": "rag/corpus_cleaned/cloud/aws_infrastructure_patterns_kb.cleaned.json",
+      "source": "rag/corpus/cloud/aws_infrastructure_patterns_kb.json",
+      "domain": "cloud",
+      "entry_count": 10
+    },
+    {
+      "output": "rag/corpus_cleaned/cloud/aws_well_architected_security_kb.cleaned.json",
+      "source": "rag/corpus/cloud/aws_well_architected_security_kb.json",
+      "domain": "cloud",
+      "entry_count": 7
+    },
+    {
+      "output": "rag/corpus_cleaned/cost/aws_cost_optimization_kb.cleaned.json",
+      "source": "rag/corpus/cost/aws_cost_optimization_kb.json",
+      "domain": "cost",
+      "entry_count": 6
+    },
+    {
+      "output": "rag/corpus_cleaned/devsecops/devsecops_best_practices_kb.cleaned.json",
+      "source": "rag/corpus/devsecops/devsecops_best_practices_kb.json",
+      "domain": "devsecops",
+      "entry_count": 8
+    },
+    {
+      "output": "rag/corpus_cleaned/docker/cis_docker_benchmark_kb.cleaned.json",
+      "source": "rag/corpus/docker/cis_docker_benchmark_kb.json",
+      "domain": "docker",
+      "entry_count": 10
+    },
+    {
+      "output": "rag/corpus_cleaned/docker/dockerfile_production_patterns_kb.cleaned.json",
+      "source": "rag/corpus/docker/dockerfile_production_patterns_kb.json",
+      "domain": "docker",
+      "entry_count": 5
+    },
+    {
+      "output": "rag/corpus_cleaned/docker_compose/backend_redis_kb.cleaned.json",
+      "source": "rag/corpus/docker_compose/backend_redis_kb.json",
+      "domain": "docker_compose",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/docker_compose/fastapi_postgres_kb.cleaned.json",
+      "source": "rag/corpus/docker_compose/fastapi_postgres_kb.json",
+      "domain": "docker_compose",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/docker_compose/fastapi_streamlit_postgres_kb.cleaned.json",
+      "source": "rag/corpus/docker_compose/fastapi_streamlit_postgres_kb.json",
+      "domain": "docker_compose",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/docker_compose/springboot_mysql_kb.cleaned.json",
+      "source": "rag/corpus/docker_compose/springboot_mysql_kb.json",
+      "domain": "docker_compose",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/dockerfile/fastapi_postgres_kb.cleaned.json",
+      "source": "rag/corpus/dockerfile/fastapi_postgres_kb.json",
+      "domain": "dockerfile",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/dockerfile/fastapi_uvicorn_kb.cleaned.json",
+      "source": "rag/corpus/dockerfile/fastapi_uvicorn_kb.json",
+      "domain": "dockerfile",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/dockerfile/python_simple_kb.cleaned.json",
+      "source": "rag/corpus/dockerfile/python_simple_kb.json",
+      "domain": "dockerfile",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/dockerfile/spring_boot_maven_kb.cleaned.json",
+      "source": "rag/corpus/dockerfile/spring_boot_maven_kb.json",
+      "domain": "dockerfile",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/dockerfile/spring_boot_mysql_kb.cleaned.json",
+      "source": "rag/corpus/dockerfile/spring_boot_mysql_kb.json",
+      "domain": "dockerfile",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/dockerfile/streamlit_frontend_kb.cleaned.json",
+      "source": "rag/corpus/dockerfile/streamlit_frontend_kb.json",
+      "domain": "dockerfile",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/env_example/backend_external_api_kb.cleaned.json",
+      "source": "rag/corpus/env_example/backend_external_api_kb.json",
+      "domain": "env_example",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/env_example/fastapi_postgres_kb.cleaned.json",
+      "source": "rag/corpus/env_example/fastapi_postgres_kb.json",
+      "domain": "env_example",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/env_example/springboot_mysql_kb.cleaned.json",
+      "source": "rag/corpus/env_example/springboot_mysql_kb.json",
+      "domain": "env_example",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/iam/aws_iam_decision_intelligence_kb.cleaned.json",
+      "source": "rag/corpus/iam/aws_iam_decision_intelligence_kb.json",
+      "domain": "iam",
+      "entry_count": 5
+    },
+    {
+      "output": "rag/corpus_cleaned/incidents/devsecops_failure_modes_kb.cleaned.json",
+      "source": "rag/corpus/incidents/devsecops_failure_modes_kb.json",
+      "domain": "incidents",
+      "entry_count": 6
+    },
+    {
+      "output": "rag/corpus_cleaned/k8s/cis_kubernetes_benchmark_kb.cleaned.json",
+      "source": "rag/corpus/k8s/cis_kubernetes_benchmark_kb.json",
+      "domain": "k8s",
+      "entry_count": 8
+    },
+    {
+      "output": "rag/corpus_cleaned/k8s/kubernetes_deployment_patterns_kb.cleaned.json",
+      "source": "rag/corpus/k8s/kubernetes_deployment_patterns_kb.json",
+      "domain": "k8s",
+      "entry_count": 5
+    },
+    {
+      "output": "rag/corpus_cleaned/kubernetes/backend_deployment_service_kb.cleaned.json",
+      "source": "rag/corpus/kubernetes/backend_deployment_service_kb.json",
+      "domain": "kubernetes",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/kubernetes/eks_decision_intelligence_kb.cleaned.json",
+      "source": "rag/corpus/kubernetes/eks_decision_intelligence_kb.json",
+      "domain": "kubernetes",
+      "entry_count": 26
+    },
+    {
+      "output": "rag/corpus_cleaned/networking/zero_trust_networking_kb.cleaned.json",
+      "source": "rag/corpus/networking/zero_trust_networking_kb.json",
+      "domain": "networking",
+      "entry_count": 6
+    },
+    {
+      "output": "rag/corpus_cleaned/observability/observability_patterns_kb.cleaned.json",
+      "source": "rag/corpus/observability/observability_patterns_kb.json",
+      "domain": "observability",
+      "entry_count": 5
+    },
+    {
+      "output": "rag/corpus_cleaned/secrets/secrets_management_kb.cleaned.json",
+      "source": "rag/corpus/secrets/secrets_management_kb.json",
+      "domain": "secrets",
+      "entry_count": 5
+    },
+    {
+      "output": "rag/corpus_cleaned/security/compose_security_notes_kb.cleaned.json",
+      "source": "rag/corpus/security/compose_security_notes_kb.json",
+      "domain": "security",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/security/docker_security_notes_kb.cleaned.json",
+      "source": "rag/corpus/security/docker_security_notes_kb.json",
+      "domain": "security",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/security/kubernetes_security_notes_kb.cleaned.json",
+      "source": "rag/corpus/security/kubernetes_security_notes_kb.json",
+      "domain": "security",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/security/terraform_security_notes_kb.cleaned.json",
+      "source": "rag/corpus/security/terraform_security_notes_kb.json",
+      "domain": "security",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/supply_chain/supply_chain_security_kb.cleaned.json",
+      "source": "rag/corpus/supply_chain/supply_chain_security_kb.json",
+      "domain": "supply_chain",
+      "entry_count": 5
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/aws_infra_kb_index.cleaned.json",
+      "source": "rag/corpus/terraform/aws_infra_kb_index.json",
+      "domain": "terraform",
+      "entry_count": 0
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/core_terraform_concepts_kb.cleaned.json",
+      "source": "rag/corpus/terraform/core_terraform_concepts_kb.json",
+      "domain": "terraform",
+      "entry_count": 7
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/docker_local_stack_kb.cleaned.json",
+      "source": "rag/corpus/terraform/docker_local_stack_kb.json",
+      "domain": "terraform",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/production_best_practices_kb.cleaned.json",
+      "source": "rag/corpus/terraform/production_best_practices_kb.json",
+      "domain": "terraform",
+      "entry_count": 8
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/terraform_architecture_patterns_kb.cleaned.json",
+      "source": "rag/corpus/terraform/terraform_architecture_patterns_kb.json",
+      "domain": "terraform",
+      "entry_count": 8
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/terraform_security_best_practices_kb.cleaned.json",
+      "source": "rag/corpus/terraform/terraform_security_best_practices_kb.json",
+      "domain": "terraform",
+      "entry_count": 9
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/state_backend_s3.cleaned.json",
+      "source": "rag/corpus/terraform/state_backend_s3.tf",
+      "domain": "terraform",
+      "entry_count": 1
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/aws_iam_roles.cleaned.json",
+      "source": "rag/corpus/terraform/aws_iam_roles.tf",
+      "domain": "iam",
+      "entry_count": 3
+    },
+    {
+      "output": "rag/corpus_cleaned/terraform/aws_vpc_complete.cleaned.json",
+      "source": "rag/corpus/terraform/aws_vpc_complete.tf",
+      "domain": "terraform",
+      "entry_count": 2
+    }
+  ]
+}

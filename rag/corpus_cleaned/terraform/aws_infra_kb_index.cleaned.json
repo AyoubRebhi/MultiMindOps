@@ -1,0 +1,141 @@
+{
+  "file_name": "rag/corpus/terraform/aws_infra_kb_index.json",
+  "domain": "terraform",
+  "resource_type": "other",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "note": "Master index / Qdrant ingestion schema — intentionally NOT converted into embeddable chunks (it is corpus metadata, not knowledge). Its query_examples are preserved as a retrieval evaluation set in evaluation_queries.json.",
+  "entry_count": 0,
+  "evaluation_queries": [
+    {
+      "user_query": "Should I use EKS or ECS for my containerized microservices application?",
+      "relevant_entry_ids": [
+        "eks-015",
+        "aws-compute-001",
+        "aws-compute-002",
+        "arch-002"
+      ]
+    },
+    {
+      "user_query": "My application is a simple REST API with low traffic, what should I deploy it on?",
+      "relevant_entry_ids": [
+        "eks-015",
+        "eks-009",
+        "arch-005"
+      ]
+    },
+    {
+      "user_query": "How should I scale my Kubernetes pods based on SQS queue depth?",
+      "relevant_entry_ids": [
+        "eks-010",
+        "eks-018",
+        "eks-019"
+      ]
+    },
+    {
+      "user_query": "What is the safest way to deploy a new version without downtime on EKS?",
+      "relevant_entry_ids": [
+        "eks-012",
+        "eks-013",
+        "eks-014",
+        "eks-002"
+      ]
+    },
+    {
+      "user_query": "How do I give my Kubernetes pod access to an S3 bucket without hardcoded credentials?",
+      "relevant_entry_ids": [
+        "eks-017",
+        "eks-005",
+        "aws-iam-001"
+      ]
+    },
+    {
+      "user_query": "Should I run my PostgreSQL database inside Kubernetes or use RDS?",
+      "relevant_entry_ids": [
+        "eks-008",
+        "eks-006",
+        "aws-storage-001"
+      ]
+    },
+    {
+      "user_query": "How should I expose my internal API services on EKS?",
+      "relevant_entry_ids": [
+        "eks-003",
+        "eks-004",
+        "eks-016"
+      ]
+    },
+    {
+      "user_query": "What autoscaler should I use for my EKS cluster, Karpenter or Cluster Autoscaler?",
+      "relevant_entry_ids": [
+        "eks-019",
+        "eks-018",
+        "eks-020"
+      ]
+    },
+    {
+      "user_query": "How do I secure my EKS cluster against container escape and privilege escalation?",
+      "relevant_entry_ids": [
+        "eks-026",
+        "eks-024",
+        "eks-025"
+      ]
+    },
+    {
+      "user_query": "My application has batch ML training jobs that run for 4 hours, what platform should I use?",
+      "relevant_entry_ids": [
+        "eks-011",
+        "eks-015",
+        "eks-008"
+      ]
+    },
+    {
+      "user_query": "How should I design the VPC for a production workload?",
+      "relevant_entry_ids": [
+        "aws-vpc-001",
+        "aws-vpc-002",
+        "aws-vpc-003"
+      ]
+    },
+    {
+      "user_query": "What Terraform state strategy should I use for multiple environments?",
+      "relevant_entry_ids": [
+        "tf-004",
+        "tf-007",
+        "prod-001"
+      ]
+    },
+    {
+      "user_query": "How do I manage secrets in my AWS infrastructure?",
+      "relevant_entry_ids": [
+        "prod-003",
+        "aws-iam-001"
+      ]
+    },
+    {
+      "user_query": "My application has spiky traffic and short-lived jobs, what compute should I use?",
+      "relevant_entry_ids": [
+        "aws-compute-001",
+        "arch-005",
+        "arch-008"
+      ]
+    },
+    {
+      "user_query": "What is the best DR strategy for my RDS database?",
+      "relevant_entry_ids": [
+        "prod-007",
+        "aws-storage-001"
+      ]
+    },
+    {
+      "user_query": "How should I structure Terraform for a team of 30 engineers?",
+      "relevant_entry_ids": [
+        "arch-002",
+        "arch-003",
+        "arch-007",
+        "prod-001",
+        "prod-002"
+      ]
+    }
+  ],
+  "cleaned_entries": []
+}

@@ -1,0 +1,155 @@
+{
+  "file_name": "rag/corpus/iam/aws_iam_decision_intelligence_kb.json",
+  "domain": "iam",
+  "resource_type": "security",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "AWS IAM — Decision Intelligence Knowledge Base",
+  "entry_count": 5,
+  "cleaned_entries": [
+    {
+      "id": "iam/aws_iam_decision_intelligence_kb::iam-001",
+      "title": "Users vs Roles vs Federated Identity",
+      "domain": "iam",
+      "service": "AWS EKS",
+      "category": "IAM Foundations — Identity Model",
+      "content": "Users vs Roles vs Federated Identity\n\nIAM users are long-lived credentials and should be the exception, not the rule. Roles are short-lived assumed credentials issued by STS and are the correct primitive for workloads, cross-account access, and human SSO. Federated identity (IAM Identity Center / SSO with SAML or OIDC) replaces IAM users for human access. The identity model decides everything downstream: rotation, audit, blast radius.\n\nDecision rules:\n- USE IAM Identity Center (SSO) for all human access — federated, MFA-enforced, group-mapped, no static keys\n- USE IAM roles for all workloads (EC2 instance profile, ECS task role, EKS IRSA, Lambda execution role)\n- AVOID creating IAM users except for: (a) emergency break-glass, (b) third-party tools that cannot federate\n- ROTATE any unavoidable IAM access keys every 90 days max; alert on keys older than 180 days\n- REQUIRE MFA on all IAM users and on the root account; root credentials must be vaulted and never used for daily ops\n\nTrade-offs:\n- Roles + STS: ephemeral and audited but require trust-policy management and assume-role boilerplate\n- IAM Identity Center: centralized but adds a dependency on AWS Organizations and SSO config\n- Long-lived users: simple but high blast radius on credential leak\n\nAnti-patterns:\n- Embedding IAM access keys in CI variables or Dockerfiles — use OIDC federation to AWS instead\n- Sharing IAM users between humans — destroys audit trail\n- Using the root account for any operation other than billing and account-level setup\n- Creating one IAM role per service AND attaching AdministratorAccess as a 'temporary' fix",
+      "tags": [
+        "iam",
+        "security",
+        "identity",
+        "access-control",
+        "aws-eks",
+        "aws",
+        "rbac",
+        "least-privilege",
+        "irsa",
+        "sts",
+        "cross-account"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/iam/aws_iam_decision_intelligence_kb.json",
+        "source_id": "iam-001"
+      }
+    },
+    {
+      "id": "iam/aws_iam_decision_intelligence_kb::iam-002",
+      "title": "Writing least-privilege policies that survive review",
+      "domain": "iam",
+      "service": "AWS ECS",
+      "category": "Policy Authoring — Least Privilege",
+      "content": "Writing least-privilege policies that survive review\n\nLeast privilege means starting from zero permissions and adding only what is provably required. Production policies must scope by Action, Resource, and Condition. Wildcards in Resource are the single largest source of accidental privilege escalation. AWS provides Access Analyzer (Policy Generation) which generates policies from CloudTrail history — the recommended starting point for any non-trivial role.\n\nDecision rules:\n- GENERATE candidate policies with IAM Access Analyzer Policy Generation from 90 days of CloudTrail\n- SCOPE every Action to specific Resource ARNs — `Resource: \"*\"` is allowed only for genuinely global APIs (e.g. ec2:DescribeRegions)\n- USE Conditions for defense-in-depth: aws:SourceVpc, aws:SourceIp, aws:PrincipalOrgID, aws:RequestTag\n- USE permission boundaries on roles created by developers — boundary caps the maximum reachable privilege\n- DENY wins — use explicit Deny statements as guardrails (e.g. deny iam:* outside a specific admin role)\n- TAG roles and use ABAC (`aws:ResourceTag/Project`) for multi-team accounts to keep policies short\n\nTrade-offs:\n- Strict scoping: high security but more policy churn when new resources appear — mitigate with ABAC\n- Permission boundaries: protect against privilege escalation but add cognitive load for engineers\n- Service Control Policies (SCPs) at the org level: blunt but powerful guardrail vs per-account complexity\n\nAnti-patterns:\n- `Action: \"*\", Resource: \"*\"` — that is AdministratorAccess by another name\n- Attaching `*FullAccess` AWS-managed policies to workload roles — they are too broad for production\n- Using `iam:PassRole` with `Resource: \"*\"` — enables privilege escalation via Lambda/EC2/ECS\n- Skipping Conditions — a policy without `aws:SourceVpc` or `aws:PrincipalOrgID` is exploitable from any account that gets the credentials",
+      "tags": [
+        "iam",
+        "security",
+        "identity",
+        "access-control",
+        "aws-ecs",
+        "aws",
+        "rbac",
+        "least-privilege",
+        "irsa",
+        "sts",
+        "cross-account"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/iam/aws_iam_decision_intelligence_kb.json",
+        "source_id": "iam-002"
+      }
+    },
+    {
+      "id": "iam/aws_iam_decision_intelligence_kb::iam-003",
+      "title": "AssumeRole with ExternalId for third-party and cross-account",
+      "domain": "iam",
+      "service": "AWS IAM",
+      "category": "Cross-Account Access",
+      "content": "AssumeRole with ExternalId for third-party and cross-account\n\nCross-account access is implemented with an IAM role in the target account whose trust policy permits a principal in a different account (or third-party AWS account) to call sts:AssumeRole. For third-party access, the trust policy MUST require an `sts:ExternalId` known only to the third party — this prevents the confused-deputy attack where another customer of the same vendor could assume your role.\n\nDecision rules:\n- REQUIRE sts:ExternalId in the trust policy of any role assumable by a third-party AWS account\n- GENERATE a unique, high-entropy ExternalId per integration; never reuse across customers or roles\n- SCOPE the trust policy Principal to a specific account ID, not aws:PrincipalOrgID, when integrating with vendors\n- USE aws:PrincipalOrgID in trust policies for INTRA-organization access — it auto-trusts all member accounts\n- SET role session duration to the minimum that completes the job (default 1h, max 12h)\n- LOG all sts:AssumeRole calls and alert on unexpected source accounts\n\nTrade-offs:\n- Short session duration: better security vs more refresh churn for long-running jobs\n- PrincipalOrgID trust: scales with org growth but trusts every account — pair with SCPs\n- Per-vendor unique role: clean blast radius vs more roles to manage\n\nAnti-patterns:\n- Trust policy with `Principal: \"*\"` — any AWS account in the world can assume the role\n- Reusing the same ExternalId across multiple vendors — defeats the confused-deputy mitigation\n- Granting cross-account access by sharing IAM access keys instead of using AssumeRole\n- Allowing the role to call sts:AssumeRole on itself or a more privileged role (chained escalation)",
+      "tags": [
+        "iam",
+        "security",
+        "identity",
+        "access-control",
+        "aws-iam",
+        "aws",
+        "rbac",
+        "least-privilege",
+        "irsa",
+        "sts",
+        "cross-account"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/iam/aws_iam_decision_intelligence_kb.json",
+        "source_id": "iam-003"
+      }
+    },
+    {
+      "id": "iam/aws_iam_decision_intelligence_kb::iam-004",
+      "title": "IAM Roles for Service Accounts (IRSA) on EKS",
+      "domain": "iam",
+      "service": "AWS EKS",
+      "category": "Workload Identity — EKS IRSA",
+      "content": "IAM Roles for Service Accounts (IRSA) on EKS\n\nIRSA binds a Kubernetes ServiceAccount to an IAM role via OIDC federation. Pods using that ServiceAccount receive short-lived, automatically-rotated AWS credentials with exactly the role's permissions. IRSA replaces the older anti-patterns of (a) attaching IAM permissions to the entire node, and (b) baking access keys into pods. It is the only correct way to give a pod AWS access in production.\n\nDecision rules:\n- ENABLE the cluster OIDC provider and create per-application IAM roles bound to per-application ServiceAccounts\n- SCOPE the role's trust policy to the exact `system:serviceaccount:<ns>:<sa>` subject — not the whole cluster\n- STRIP node-level IAM permissions to the absolute minimum (ECR pull, CNI, autoscaler) — never put app permissions on the node role\n- USE one role per workload — never share an IRSA role across distinct applications or namespaces\n- PAIR IRSA with NetworkPolicy and PodSecurityStandard restricted — IRSA only covers AWS API access, not in-cluster access\n\nTrade-offs:\n- Per-workload roles: clean blast radius vs more roles and trust policies to manage (Terraform module helps)\n- IRSA: cleanest workload identity vs requires OIDC provider setup; alternative is Pod Identity (newer, simpler)\n- EKS Pod Identity (2023+): simpler than IRSA, no OIDC required, but cluster-scoped agent dependency\n\nAnti-patterns:\n- Attaching application-specific IAM permissions to the node IAM role — every pod on the node inherits them\n- Mounting AWS credentials as a Kubernetes Secret — long-lived, no automatic rotation\n- Using a single 'app' ServiceAccount across all workloads — defeats per-workload least privilege\n- Trust policy with subject claim `system:serviceaccount:*:*` — any pod in the cluster can assume the role",
+      "tags": [
+        "iam",
+        "security",
+        "identity",
+        "access-control",
+        "aws-eks",
+        "aws",
+        "rbac",
+        "least-privilege",
+        "irsa",
+        "sts",
+        "cross-account"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/iam/aws_iam_decision_intelligence_kb.json",
+        "source_id": "iam-004"
+      }
+    },
+    {
+      "id": "iam/aws_iam_decision_intelligence_kb::iam-005",
+      "title": "IAM monitoring, anomaly detection, and key compromise response",
+      "domain": "iam",
+      "service": "Amazon GuardDuty",
+      "category": "Detection and Response",
+      "content": "IAM monitoring, anomaly detection, and key compromise response\n\nEven a perfect policy can be defeated by a stolen credential. Production accounts must continuously monitor for suspicious IAM activity and have a rehearsed compromise-response playbook. AWS GuardDuty produces high-fidelity findings (CredentialAccess, Discovery, Persistence) and Access Analyzer surfaces external access and unused permissions.\n\nDecision rules:\n- ENABLE GuardDuty in all accounts and regions; route findings to Security Hub and a SIEM\n- ENABLE IAM Access Analyzer (external access + unused access); review unused permissions quarterly\n- ENABLE CloudTrail (org trail, multi-region, log file validation, S3 with object lock)\n- ALERT on: root login, MFA disable, IAM user creation, access key creation, AssumeRole from a new source IP/ASN, console login without MFA\n- ROTATE on compromise: deactivate the credential, invalidate all sessions (sts:RevokeOlderSessions), audit CloudTrail for actions taken with the credential\n- PRACTICE the runbook quarterly — credential compromise drills surface gaps before incidents\n\nTrade-offs:\n- GuardDuty: high signal but ~$1-5/account/day baseline; turn on in every account anyway\n- Aggressive alerting: catches real incidents but generates noise — tune in the first 30 days\n- Session revocation: fast containment but can disrupt ongoing legitimate work\n\nAnti-patterns:\n- Treating a leaked access key as 'just rotate the key' — the attacker may have created backdoor users, roles, or trust policies in the meantime\n- Disabling CloudTrail in dev accounts to save cost — those accounts are the easiest pivot point into prod\n- No alerting on root account use — root use should be vanishingly rare and always investigated\n- Storing CloudTrail logs in the same account being audited — an attacker with admin can delete them",
+      "tags": [
+        "iam",
+        "security",
+        "identity",
+        "access-control",
+        "amazon-guardduty",
+        "aws",
+        "rbac",
+        "least-privilege",
+        "irsa",
+        "sts",
+        "cross-account"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/iam/aws_iam_decision_intelligence_kb.json",
+        "source_id": "iam-005"
+      }
+    }
+  ]
+}

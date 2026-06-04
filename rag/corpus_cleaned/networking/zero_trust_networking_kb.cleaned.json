@@ -1,0 +1,184 @@
+{
+  "file_name": "rag/corpus/networking/zero_trust_networking_kb.json",
+  "domain": "networking",
+  "resource_type": "security",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Zero-Trust Networking & Cloud Network Security — Decision Intelligence",
+  "entry_count": 6,
+  "cleaned_entries": [
+    {
+      "id": "networking/zero_trust_networking_kb::net-001",
+      "title": "Zero-trust networking principles applied to cloud workloads",
+      "domain": "networking",
+      "service": "AWS IAM",
+      "category": "Zero-Trust Foundations",
+      "content": "Zero-trust networking principles applied to cloud workloads\n\nZero trust replaces the perimeter model ('inside the VPC = trusted') with the assumption that the network is hostile. Every request is authenticated, authorized, and encrypted regardless of source. In cloud, this manifests as: (1) identity-based access control (SG referencing SG, IAM, mTLS) instead of IP allowlists, (2) default-deny everywhere, (3) encryption in transit between every component including same-VPC traffic, (4) short-lived credentials for both humans and workloads.\n\nDecision rules:\n- DEFAULT-DENY at every boundary: SG default outbound is permissive — explicitly restrict it\n- PREFER identity over IP: SG-to-SG references, IAM auth on RDS, mTLS in service mesh\n- ENCRYPT in transit always — TLS even for in-VPC traffic; ALB→target should use TLS not HTTP\n- ELIMINATE flat networks — segment by tier (web/app/data) and by trust domain (prod/non-prod/shared)\n- AUTHENTICATE every service-to-service call (SPIFFE/mTLS or signed JWT), do not rely on network position\n\nTrade-offs:\n- Strict default-deny: secure but causes outages during deploys until policies catch up — pair with staging that mirrors prod policies\n- mTLS everywhere: strong identity but cert lifecycle complexity — service mesh (Istio/Linkerd) amortizes the cost\n- Identity-based controls: scales with services not IPs but requires the identity plane (IAM, SPIFFE) to be highly available\n\nAnti-patterns:\n- 0.0.0.0/0 in security group ingress on application ports\n- Flat /16 VPC with no tier separation — one compromised pod reaches the database\n- Treating private IP space as 'trusted' — RFC1918 is not a security boundary\n- Plaintext HTTP between microservices because 'it's internal'",
+      "tags": [
+        "networking",
+        "aws-iam",
+        "zero-trust",
+        "vpc",
+        "security-groups",
+        "nacl",
+        "transit-gateway",
+        "privatelink",
+        "networkpolicy",
+        "service-mesh",
+        "mtls"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/networking/zero_trust_networking_kb.json",
+        "source_id": "net-001"
+      }
+    },
+    {
+      "id": "networking/zero_trust_networking_kb::net-002",
+      "title": "When to use Security Groups, when to use Network ACLs",
+      "domain": "networking",
+      "service": "AWS Systems Manager",
+      "category": "AWS — Security Groups vs NACLs",
+      "content": "When to use Security Groups, when to use Network ACLs\n\nSecurity Groups are stateful, instance-level, allow-only firewalls referenced by ID. NACLs are stateless, subnet-level, allow+deny firewalls. They are not interchangeable: SGs are the primary control plane and should carry 95% of the policy. NACLs are a coarse second layer for blast-radius control (e.g. block a known-bad CIDR across an entire subnet) and for explicit denies that SGs cannot express.\n\nDecision rules:\n- USE Security Groups as the primary firewall — write rules referencing other SG IDs, not IPs, where possible\n- USE NACLs only for: (a) wholesale CIDR blocks, (b) compliance requirements for explicit deny, (c) defense-in-depth at subnet edge\n- KEEP NACLs simple — stateless rules force you to allow ephemeral return ports (1024-65535) which is error-prone\n- PREFER one SG per role (web-sg, app-sg, db-sg) referencing each other, over per-instance custom SGs\n- AUDIT SGs for 0.0.0.0/0 ingress on non-public ports — common via Access Analyzer or `aws ec2 describe-security-groups`\n\nTrade-offs:\n- SG-to-SG references: identity-based and clean but limited to 60 rules per SG (soft limit)\n- NACL deny lists: powerful but stateless rules require careful return-port handling\n- Multiple SGs per ENI (up to 5): flexible composition vs harder to reason about effective policy\n\nAnti-patterns:\n- Replicating SG rules in NACLs — doubles maintenance, no security benefit\n- Allowing 0.0.0.0/0 on port 22 (SSH) — use Systems Manager Session Manager instead, no inbound port required\n- Using NACLs to control individual application ports — SGs are the right layer\n- One giant SG attached to everything — defeats segmentation",
+      "tags": [
+        "networking",
+        "aws-systems-manager",
+        "zero-trust",
+        "vpc",
+        "security-groups",
+        "nacl",
+        "transit-gateway",
+        "privatelink",
+        "networkpolicy",
+        "service-mesh",
+        "mtls"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/networking/zero_trust_networking_kb.json",
+        "source_id": "net-002"
+      }
+    },
+    {
+      "id": "networking/zero_trust_networking_kb::net-003",
+      "title": "Eliminating internet egress for AWS service traffic",
+      "domain": "networking",
+      "service": "Amazon VPC",
+      "category": "AWS — VPC Endpoints and PrivateLink",
+      "content": "Eliminating internet egress for AWS service traffic\n\nBy default, an EC2 instance in a private subnet calling S3 routes through a NAT gateway and the public internet. VPC Endpoints (Gateway endpoints for S3/DynamoDB; Interface endpoints / PrivateLink for everything else) route this traffic over the AWS backbone, never traversing the internet. This eliminates NAT data-processing cost, reduces attack surface, and enables endpoint policies for fine-grained control.\n\nDecision rules:\n- USE Gateway endpoints for S3 and DynamoDB — free, applied via route table, no per-hour cost\n- USE Interface endpoints (PrivateLink) for: SSM, Secrets Manager, KMS, ECR, STS, CloudWatch Logs, SQS\n- ATTACH endpoint policies that scope which buckets/keys can be reached from the VPC — defense against data exfil\n- BLOCK NAT egress for AWS API calls once endpoints are deployed — forces traffic through audited path\n- USE PrivateLink to expose your own services across accounts/VPCs without VPC peering or public exposure\n\nTrade-offs:\n- Interface endpoints: ~$0.01/hour/AZ + data — adds up across many endpoints, but typically cheaper than NAT for high-volume API traffic\n- Endpoint policies: extra control plane vs another place to misconfigure\n- Gateway endpoints: free but only S3/DynamoDB\n\nAnti-patterns:\n- Routing all AWS API traffic through NAT — expensive and exposes the call to internet path\n- Endpoint policy of `*` — defeats the purpose; scope to required buckets/regions\n- VPC peering when PrivateLink would do — peering creates a transitive trust risk",
+      "tags": [
+        "networking",
+        "amazon-vpc",
+        "zero-trust",
+        "vpc",
+        "security-groups",
+        "nacl",
+        "transit-gateway",
+        "privatelink",
+        "networkpolicy",
+        "service-mesh",
+        "mtls"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/networking/zero_trust_networking_kb.json",
+        "source_id": "net-003"
+      }
+    },
+    {
+      "id": "networking/zero_trust_networking_kb::net-004",
+      "title": "Transit Gateway vs VPC Peering vs PrivateLink",
+      "domain": "networking",
+      "service": "Amazon VPC",
+      "category": "Multi-VPC Connectivity",
+      "content": "Transit Gateway vs VPC Peering vs PrivateLink\n\nAt small scale (2-3 VPCs), VPC peering is cheapest. Beyond that, Transit Gateway becomes the right primitive: it is a hub-and-spoke router that supports route tables per attachment, scales to thousands of VPCs, and integrates with on-premises (Direct Connect, VPN). PrivateLink is orthogonal — it exposes a single service without making the whole VPC reachable, which is the right answer for SaaS-like inter-team service exposure.\n\nDecision rules:\n- USE VPC Peering only for ≤3 VPCs with stable, predictable mesh topology\n- USE Transit Gateway when you have 3+ VPCs, multi-account, or hybrid (on-prem) connectivity\n- USE PrivateLink for service-level exposure — when the consumer needs ONE service, not a whole VPC\n- SEGMENT TGW with route tables — prod, non-prod, shared-services should be separate route tables on the same TGW\n- AVOID transitive routing across peering — peering is non-transitive by design; TGW is the right answer\n\nTrade-offs:\n- TGW: scalable but ~$0.05/hour/attachment + data — costlier than peering at small scale\n- Peering: cheap but explodes to N*(N-1)/2 connections — unmanageable past ~5 VPCs\n- PrivateLink: tightest exposure but per-service setup; not suitable for general 'two VPCs need to talk'\n\nAnti-patterns:\n- Full mesh peering across 10+ VPCs — operational nightmare\n- TGW with one shared route table — defeats segmentation, prod sees non-prod\n- Routing prod traffic through a non-prod TGW attachment for 'convenience'",
+      "tags": [
+        "networking",
+        "amazon-vpc",
+        "zero-trust",
+        "vpc",
+        "security-groups",
+        "nacl",
+        "transit-gateway",
+        "privatelink",
+        "networkpolicy",
+        "service-mesh",
+        "mtls"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/networking/zero_trust_networking_kb.json",
+        "source_id": "net-004"
+      }
+    },
+    {
+      "id": "networking/zero_trust_networking_kb::net-005",
+      "title": "Default-deny NetworkPolicy with namespace-scoped egress",
+      "domain": "networking",
+      "service": "Kubernetes",
+      "category": "Kubernetes — NetworkPolicy",
+      "content": "Default-deny NetworkPolicy with namespace-scoped egress\n\nBy default, every pod in a Kubernetes cluster can talk to every other pod. This is the largest in-cluster blast-radius problem and the first thing to fix. NetworkPolicy resources implement default-deny + explicit allow at L3/L4. They require a CNI that enforces policy (Calico, Cilium, AWS VPC CNI with policy mode). Production clusters should ship with a default-deny baseline in every namespace and per-app egress rules.\n\nDecision rules:\n- APPLY a default-deny ingress + egress NetworkPolicy in every namespace as the baseline\n- ALLOW DNS egress (UDP/TCP 53 to kube-system) explicitly — without it, all pod traffic breaks\n- SCOPE allow rules using podSelector + namespaceSelector — never allow by IP/CIDR inside the cluster\n- ALLOW egress to specific external CIDRs (e.g. database VPC, payment provider) only where required\n- TEST policies in a staging cluster identical to prod — NetworkPolicy bugs cause silent partial outages\n\nTrade-offs:\n- Default-deny: strong isolation but causes deploy-time breakage if policies lag — gate via CI policy linting\n- Calico/Cilium: full L3-L7 policy but adds a CNI dependency vs simpler kube-proxy + AWS VPC CNI\n- Cilium with eBPF: highest performance and L7 policy but operational complexity\n\nAnti-patterns:\n- Running production without any NetworkPolicy — one compromised pod reaches everything\n- Allow-all egress to 0.0.0.0/0 — defeats the purpose, common exfil path\n- Forgetting to allow DNS egress — entire namespace silently breaks\n- Using AWS VPC CNI without the network policy add-on enabled — NetworkPolicy resources are silently ignored",
+      "tags": [
+        "networking",
+        "kubernetes",
+        "zero-trust",
+        "vpc",
+        "security-groups",
+        "nacl",
+        "transit-gateway",
+        "privatelink",
+        "networkpolicy",
+        "service-mesh",
+        "mtls"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/networking/zero_trust_networking_kb.json",
+        "source_id": "net-005"
+      }
+    },
+    {
+      "id": "networking/zero_trust_networking_kb::net-006",
+      "title": "Service mesh for zero-trust east-west traffic (Istio, Linkerd)",
+      "domain": "networking",
+      "service": "Amazon VPC",
+      "category": "Service Mesh — mTLS and Identity",
+      "content": "Service mesh for zero-trust east-west traffic (Istio, Linkerd)\n\nA service mesh terminates and enforces mTLS between every service in the cluster, replacing IP-based trust with cryptographic workload identity (SPIFFE). It also provides L7 authorization policies (e.g. 'service-A can call /v1/charge on service-B'), traffic shifting (canary), and observability. Mesh is the right answer when you have many services, multi-team ownership, or compliance requirements for in-transit encryption.\n\nDecision rules:\n- ADOPT a mesh (Linkerd preferred for simplicity, Istio for advanced traffic management) when service count exceeds ~10 or compliance requires in-cluster mTLS\n- ENABLE STRICT mTLS mode mesh-wide once all workloads are onboarded — PERMISSIVE is the migration step, not the destination\n- WRITE AuthorizationPolicy resources in addition to NetworkPolicy — NetworkPolicy is L3/L4, AuthZ is L7\n- CO-DEPLOY mesh with NetworkPolicy — they are layered controls, not alternatives\n- MONITOR mesh control-plane health — a failed control plane can break workload-to-workload traffic\n\nTrade-offs:\n- Linkerd: simple, fast, Rust data plane vs fewer features than Istio\n- Istio: feature-rich (VirtualService, fault injection, ext-authz) vs complexity and resource cost\n- Sidecar mode: per-pod overhead vs ambient mode (newer, less mature) reduces footprint\n\nAnti-patterns:\n- Adopting Istio for a 5-service cluster — operational complexity exceeds benefit\n- Running mesh in PERMISSIVE mode forever — provides no security guarantee\n- Skipping NetworkPolicy because 'we have a service mesh' — mesh data plane can be bypassed if pod can talk directly",
+      "tags": [
+        "networking",
+        "amazon-vpc",
+        "zero-trust",
+        "vpc",
+        "security-groups",
+        "nacl",
+        "transit-gateway",
+        "privatelink",
+        "networkpolicy",
+        "service-mesh",
+        "mtls"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/networking/zero_trust_networking_kb.json",
+        "source_id": "net-006"
+      }
+    }
+  ]
+}

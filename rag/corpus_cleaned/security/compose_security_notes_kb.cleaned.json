@@ -1,0 +1,30 @@
+{
+  "file_name": "rag/corpus/security/compose_security_notes_kb.json",
+  "domain": "security",
+  "resource_type": "security",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Security — Docker Compose Reminders",
+  "entry_count": 1,
+  "cleaned_entries": [
+    {
+      "id": "security/compose_security_notes_kb::security_compose_notes",
+      "title": "Docker Compose Security Baseline Reminders",
+      "domain": "security",
+      "service": "Docker Compose",
+      "category": "devsecops",
+      "content": "Docker Compose Security Baseline Reminders\n\nSecurity reminders applied during Docker Compose generation: reference all secrets via environment variable substitution (${VAR}), limit published ports to those required externally, add persistent volumes only where genuinely needed.\n\nDecision rules:\n- Use ${VAR} syntax for all credentials — values come from .env file or Docker secrets\n- Only publish ports (host:container) for services that need external access\n- Add named volumes only for stateful services (databases, caches with persistence requirements)\n\nAnti-patterns:\n- Hardcoding passwords, tokens, or API keys directly in docker-compose.yml\n- Publishing all internal service ports to 0.0.0.0 on the host\n- Adding unnecessary volumes to stateless API containers",
+      "tags": [
+        "security",
+        "docker-compose"
+      ],
+      "importance": "high",
+      "cloud_provider": "multi",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/security/compose_security_notes_kb.json",
+        "source_id": "security_compose_notes"
+      }
+    }
+  ]
+}

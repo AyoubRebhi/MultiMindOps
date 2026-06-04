@@ -1,0 +1,30 @@
+{
+  "file_name": "rag/corpus/security/docker_security_notes_kb.json",
+  "domain": "security",
+  "resource_type": "security",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Security — Docker Artifact Reminders",
+  "entry_count": 1,
+  "cleaned_entries": [
+    {
+      "id": "security/docker_security_notes_kb::security_docker_notes",
+      "title": "Docker Security Baseline Reminders",
+      "domain": "security",
+      "service": "Docker",
+      "category": "devsecops",
+      "content": "Docker Security Baseline Reminders\n\nCore security reminders applied during Docker artifact generation: prefer minimal base images (alpine, distroless, slim), avoid embedding secrets in image layers or ENV instructions, expose only ports required by the service, use a non-root USER when the application supports it.\n\nDecision rules:\n- Always prefer minimal base images: python:3.11-slim, node:20-alpine, eclipse-temurin:17-jre-alpine, or distroless variants\n- Never embed secrets via ENV or hardcoded ARG instructions — pass at runtime\n- Expose only the service port — do not expose debug or admin ports\n- Add USER appuser before CMD/ENTRYPOINT whenever the application does not require root\n\nAnti-patterns:\n- Using full OS images (ubuntu:latest, debian:latest) as base instead of slim/distroless\n- Setting ENV API_KEY=sk-secret123 or similar in Dockerfile\n- Running containers as root (UID 0) in production",
+      "tags": [
+        "security",
+        "docker"
+      ],
+      "importance": "high",
+      "cloud_provider": "multi",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/security/docker_security_notes_kb.json",
+        "source_id": "security_docker_notes"
+      }
+    }
+  ]
+}

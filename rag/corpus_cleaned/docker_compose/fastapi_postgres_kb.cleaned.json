@@ -1,0 +1,32 @@
+{
+  "file_name": "rag/corpus/docker_compose/fastapi_postgres_kb.json",
+  "domain": "docker_compose",
+  "resource_type": "docker",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Docker Compose — FastAPI with PostgreSQL",
+  "entry_count": 1,
+  "cleaned_entries": [
+    {
+      "id": "docker_compose/fastapi_postgres_kb::compose_fastapi_postgres",
+      "title": "FastAPI + PostgreSQL Docker Compose Pattern",
+      "domain": "docker_compose",
+      "service": "Docker Compose",
+      "category": "docker",
+      "content": "FastAPI + PostgreSQL Docker Compose Pattern\n\nDocker Compose pattern for a FastAPI backend with a PostgreSQL 15 database. Backend service builds from Dockerfile, maps port 8000:8000, receives DATABASE_URL from environment, depends_on db. DB service uses postgres:15 official image with POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB from env vars, publishes port 5432.\n\nDecision rules:\n- Use for local development and integration testing of FastAPI + PostgreSQL stacks\n- Credentials must be passed via .env file — never hardcoded in docker-compose.yml\n- Use depends_on to control startup order (does not wait for DB readiness — add healthcheck for that)\n\nTrade-offs:\n- No named volume for db service — data is lost on docker-compose down; add volumes for persistence\n- No healthcheck on db — backend may attempt connections before PostgreSQL is fully ready\n\nAnti-patterns:\n- Do not hardcode POSTGRES_PASSWORD in docker-compose.yml\n- Do not publish port 5432 to 0.0.0.0 in production or shared environments",
+      "tags": [
+        "docker-compose",
+        "docker",
+        "compose",
+        "local-development"
+      ],
+      "importance": "medium",
+      "cloud_provider": "multi",
+      "resource_type": "docker",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/docker_compose/fastapi_postgres_kb.json",
+        "source_id": "compose_fastapi_postgres"
+      }
+    }
+  ]
+}

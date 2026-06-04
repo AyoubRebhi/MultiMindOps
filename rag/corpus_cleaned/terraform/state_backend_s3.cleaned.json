@@ -1,0 +1,34 @@
+{
+  "file_name": "rag/corpus/terraform/state_backend_s3.tf",
+  "domain": "terraform",
+  "resource_type": "terraform",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Terraform Remote State Backend — S3 + DynamoDB Locking",
+  "note": "Derived from Terraform (.tf) source. Each entry explains what the resources do, when to use them, best practices, and security considerations — grounded strictly in the file's own comments and resource definitions. Raw HCL is not embedded without explanation.",
+  "entry_count": 1,
+  "cleaned_entries": [
+    {
+      "id": "terraform/state_backend_s3::tf-state-001",
+      "title": "Terraform Remote State Backend — S3 + DynamoDB Locking",
+      "domain": "terraform",
+      "service": "Amazon S3",
+      "category": "Terraform State Management",
+      "content": "Terraform Remote State Backend — S3 + DynamoDB Locking\n\nDefines the production-standard Terraform remote state backend: an S3 bucket stores the terraform.tfstate file and a DynamoDB table provides state locking so two engineers or CI runs cannot apply simultaneously. The backend infrastructure is created once by a bootstrap configuration, after which state is migrated to the remote backend with `terraform init -migrate-state`. The S3 backend block (bucket, key, region, encrypt, dynamodb_table) is placed in backend.tf/versions.tf of every consuming module, not in main.tf.\n\nWhen to use:\n- Use for any Terraform managed by more than one engineer or by CI/CD — local state does not support locking or sharing\n- Run the bootstrap configuration ONCE to create the bucket and lock table, then migrate state to the remote backend\n- Use a per-workspace state key of the form `${var.environment}/${var.component}/terraform.tfstate` (e.g. prod/vpc/terraform.tfstate, staging/rds/terraform.tfstate) to isolate state per environment and component\n\nBest practices:\n- Enable S3 bucket versioning so any previous state file can be restored after a bad apply\n- Set `prevent_destroy = true` on both the state bucket and the lock table so `terraform destroy` cannot delete them accidentally\n- Use DynamoDB billing_mode PAY_PER_REQUEST with a single LockID (String) hash key — no capacity planning required for the lock table\n- Keep the backend block in backend.tf or versions.tf (not main.tf) and pin the AWS provider (~> 5.0) and required_version (>= 1.5.0)\n\nSecurity considerations:\n- Enable server-side encryption on the state bucket (AES256, or a KMS key ARN for stricter control) — state files contain resource attributes and sometimes secrets\n- Block ALL public access on the state bucket (block_public_acls, block_public_policy, ignore_public_acls, restrict_public_buckets) — state must never be public\n- Grant the CI/CD role a least-privilege IAM policy scoped to exactly the state bucket (s3:GetObject/PutObject/DeleteObject/ListBucket) and the lock table (dynamodb:GetItem/PutItem/DeleteItem/DescribeTable) — not account-wide S3 or DynamoDB access\n\nTerraform resources: terraform { backend \"s3\" { bucket=..., key=\"${env}/${component}/terraform.tfstate\", region=..., encrypt=true, dynamodb_table=\"terraform-state-locks\" } } plus aws_s3_bucket (versioning + SSE + public_access_block + prevent_destroy) and aws_dynamodb_table (PAY_PER_REQUEST, LockID hash key, prevent_destroy).",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "amazon-s3"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/terraform/state_backend_s3.tf",
+        "source_id": "tf-state-001"
+      }
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "file_name": "rag/corpus/security/terraform_security_notes_kb.json",
+  "domain": "security",
+  "resource_type": "security",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Security — Terraform Generation Reminders",
+  "entry_count": 1,
+  "cleaned_entries": [
+    {
+      "id": "security/terraform_security_notes_kb::security_terraform_notes",
+      "title": "Terraform Security Baseline Reminders",
+      "domain": "security",
+      "service": "HashiCorp Terraform",
+      "category": "terraform",
+      "content": "Terraform Security Baseline Reminders\n\nSecurity reminders applied during Terraform code generation: always pin provider versions with version constraints, never set sensitive values as hardcoded variable defaults, mark outputs containing sensitive data with sensitive = true.\n\nDecision rules:\n- Pin all provider versions with constraints (e.g. version = \"~> 5.0\") — never omit or use \"latest\"\n- Declare sensitive variables with sensitive = true to suppress them in plan/apply logs\n- Default values for sensitive variables should be null or omitted — require explicit injection\n\nAnti-patterns:\n- Using no version constraint or version = \"latest\" for Terraform providers\n- Setting default = \"mysecretpassword\" on a sensitive variable\n- Outputting sensitive values (DB passwords, private keys) without sensitive = true",
+      "tags": [
+        "security",
+        "hashicorp-terraform"
+      ],
+      "importance": "high",
+      "cloud_provider": "multi",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/security/terraform_security_notes_kb.json",
+        "source_id": "security_terraform_notes"
+      }
+    }
+  ]
+}

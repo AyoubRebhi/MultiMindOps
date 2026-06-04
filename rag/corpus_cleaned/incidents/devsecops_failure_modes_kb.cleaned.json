@@ -1,0 +1,184 @@
+{
+  "file_name": "rag/corpus/incidents/devsecops_failure_modes_kb.json",
+  "domain": "incidents",
+  "resource_type": "security",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "DevSecOps Failure Modes & Postmortem-Style Knowledge",
+  "entry_count": 6,
+  "cleaned_entries": [
+    {
+      "id": "incidents/devsecops_failure_modes_kb::inc-001",
+      "title": "Public S3 bucket leaks customer data",
+      "domain": "incidents",
+      "service": "Amazon S3",
+      "category": "Data Exposure — S3",
+      "content": "Public S3 bucket leaks customer data\n\nA developer creates an S3 bucket for a one-off export, sets ACL to public-read 'just to share with the partner', forgets to revert it. A bucket-enumeration scanner finds it weeks later. The file contains PII or credentials. This is the most common cloud data-leak pattern in public DBIR data and continues to dominate cloud breaches in 2024-2025.\n\nPreventive controls:\n- Enable S3 Block Public Access at the ACCOUNT level — overrides any bucket-level setting\n- Enable S3 Block Public Access at the ORGANIZATION level via SCP — even break-glass admins cannot toggle off\n- Default encryption with KMS CMK — even on accidental public exposure, the object is encrypted\n- Use IAM Access Analyzer for S3 — flags any bucket reachable from outside the org\n- Use bucket policies that explicitly deny `s3:GetObject` when `aws:PrincipalOrgID` does not match\n\nDetection signals:\n- Access Analyzer finding 'External access granted to bucket'\n- GuardDuty finding `Discovery:S3/MaliciousIPCaller.Custom`\n- CloudTrail `PutBucketAcl` or `PutBucketPolicy` events outside the change-management window\n- Macie sensitive-data discovery on a bucket newly flagged public\n\nRemediation runbook:\n1. Immediately make bucket private (set ACL private, attach explicit deny policy)\n2. Enumerate access via S3 server access logs and CloudFront logs (if fronted)\n3. Identify objects accessed and notify per breach-disclosure obligations\n4. Rotate any credentials, tokens, or keys present in the leaked objects\n5. Add the bucket to weekly Access Analyzer review until permanently retired\n\nAnti-patterns:\n- Relying on bucket-level Block Public Access only — account-level is the right layer\n- Treating 'private bucket with a presigned URL' as the same as a public bucket — presigned URLs in logs/Slack are a separate exposure class\n- Not enabling S3 server access logs — without them, breach scope cannot be determined",
+      "tags": [
+        "incidents",
+        "failure-modes",
+        "reliability-engineering",
+        "amazon-s3",
+        "postmortem",
+        "security",
+        "misconfiguration",
+        "data-leak",
+        "ssrf",
+        "ransomware",
+        "supply-chain"
+      ],
+      "importance": "critical",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/incidents/devsecops_failure_modes_kb.json",
+        "source_id": "inc-001"
+      }
+    },
+    {
+      "id": "incidents/devsecops_failure_modes_kb::inc-002",
+      "title": "Application SSRF reaches IMDS and steals instance role credentials (Capital One 2019 pattern)",
+      "domain": "incidents",
+      "service": "AWS EKS",
+      "category": "SSRF and Metadata Service",
+      "content": "Application SSRF reaches IMDS and steals instance role credentials (Capital One 2019 pattern)\n\nAn application has an SSRF vulnerability (often via image-fetch or webhook validation). Attacker forces the app to GET http://169.254.169.254/latest/meta-data/iam/security-credentials/<role>. IMDSv1 returns role credentials. Attacker uses them to enumerate and exfiltrate S3 data. This is the Capital One 2019 pattern — 100M records, $190M total cost.\n\nPreventive controls:\n- ENFORCE IMDSv2 (HttpTokens=required) on every instance and launch template — IMDSv2 requires a session token that SSRF cannot easily acquire\n- BLOCK PUT to /latest/api/token in WAF/proxy and SET IMDSv2 hop-limit=1 (default 2) for non-containerized workloads\n- USE IRSA in EKS (no IMDS exposure to pods) — pods get credentials via projected SA token, not metadata service\n- MINIMIZE the role attached to compute — SSRF stealing a role with `s3:Get*` on one bucket is incident-class lower than stealing AdministratorAccess\n- USE VPC endpoint policies and SG egress rules to limit where stolen credentials can be used FROM (less effective but layered)\n\nDetection signals:\n- GuardDuty `UnauthorizedAccess:IAMUser/InstanceCredentialExfiltration.OutsideAWS`\n- CloudTrail `AssumeRole` or API calls from the instance role with sourceIPAddress outside the expected VPC NAT range\n- Sudden spike in `s3:ListBuckets` or `s3:GetObject` from an instance role\n- WAF logs showing requests to internal IPs (169.254.x.x) in URL parameters\n\nRemediation runbook:\n1. Revoke active sessions: `aws iam put-role-policy` with a deny-all + condition `aws:TokenIssueTime` < now\n2. Patch the SSRF vulnerability (input validation, internal-IP blocklist, IMDSv2)\n3. Audit CloudTrail for the credential's actions — every API call with the stolen credential\n4. Rotate any data accessed (re-encrypt with new KMS key)\n5. Review and minimize the instance role permissions\n\nAnti-patterns:\n- Allowing IMDSv1 for backward compatibility — SSRF defeats it trivially\n- Granting compute roles broad S3 access ('AmazonS3ReadOnlyAccess') — turns SSRF from incident into breach\n- Application-level SSRF allowlist by hostname only — DNS rebinding bypasses it",
+      "tags": [
+        "incidents",
+        "failure-modes",
+        "reliability-engineering",
+        "aws-eks",
+        "postmortem",
+        "security",
+        "misconfiguration",
+        "data-leak",
+        "ssrf",
+        "ransomware",
+        "supply-chain"
+      ],
+      "importance": "critical",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/incidents/devsecops_failure_modes_kb.json",
+        "source_id": "inc-002"
+      }
+    },
+    {
+      "id": "incidents/devsecops_failure_modes_kb::inc-003",
+      "title": "Public Kubernetes dashboard or unauthenticated kubelet leads to cluster takeover (Tesla 2018 pattern)",
+      "domain": "incidents",
+      "service": "Kubernetes",
+      "category": "Kubernetes — Exposed Dashboard / Kubelet",
+      "content": "Public Kubernetes dashboard or unauthenticated kubelet leads to cluster takeover (Tesla 2018 pattern)\n\nAn admin exposes the Kubernetes dashboard via a LoadBalancer service for convenience, with anonymous-auth enabled or no authentication. Attacker reaches it, deploys a cryptominer or pivots into the cluster. Tesla's 2018 incident (cryptojacking via exposed Kubernetes dashboard) is the canonical case. Kubelet read-only port (10255) and unauthenticated API server present similar risks.\n\nPreventive controls:\n- NEVER expose the Kubernetes dashboard publicly — port-forward or behind SSO/identity-aware proxy only\n- DISABLE anonymous auth on the API server (`--anonymous-auth=false`) and on kubelet (`--anonymous-auth=false`)\n- DISABLE the kubelet read-only port (`--read-only-port=0`)\n- RESTRICT API server access via SG / authorized networks — public API endpoint should be IP-allowlisted in EKS\n- ENFORCE PodSecurityStandard `restricted` in every namespace except kube-system\n\nDetection signals:\n- GuardDuty for EKS Runtime Monitoring findings (`CryptoCurrency:Runtime/BitcoinTool.B`)\n- Unexpected new namespace, Deployment, or DaemonSet in audit logs\n- Outbound network traffic to known mining pools (Falco rule)\n- `kubectl auth can-i --as=system:anonymous` returning yes for any verb\n\nRemediation runbook:\n1. Rotate cluster admin credentials, all ServiceAccount tokens, and any cloud credentials reachable from the cluster\n2. Audit all workloads for unknown images, init containers, and recently-added DaemonSets\n3. Inspect node-level processes (Falco / runtime detection) for resident malware\n4. Rebuild compromised nodes — assume node OS compromise\n\nAnti-patterns:\n- Exposing the dashboard 'temporarily' for a demo — it never gets removed\n- Treating private subnets as enough — one compromised pod inside the cluster reaches the dashboard too\n- kubectl proxy in a long-running tmux session — a stolen laptop gives cluster-admin",
+      "tags": [
+        "incidents",
+        "failure-modes",
+        "reliability-engineering",
+        "kubernetes",
+        "postmortem",
+        "security",
+        "misconfiguration",
+        "data-leak",
+        "ssrf",
+        "ransomware",
+        "supply-chain"
+      ],
+      "importance": "critical",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/incidents/devsecops_failure_modes_kb.json",
+        "source_id": "inc-003"
+      }
+    },
+    {
+      "id": "incidents/devsecops_failure_modes_kb::inc-004",
+      "title": "AWS access key committed to public repo (or even private repo with broad access)",
+      "domain": "incidents",
+      "service": "AWS Lambda",
+      "category": "Secrets — Credential in Git History",
+      "content": "AWS access key committed to public repo (or even private repo with broad access)\n\nDeveloper commits `.env` or hardcoded key, pushes to GitHub. Within minutes (literally — there are bots scanning new commits), the key is found and used to spin up crypto-mining instances or exfiltrate data. Even private repos are not safe: a contractor with read access, a leaked PAT, or accidental fork can leak the secret.\n\nPreventive controls:\n- PRE-COMMIT hooks: gitleaks or trufflehog blocking commits containing key patterns\n- GITHUB push protection (free tier as of 2024) — server-side block of detected secrets\n- ELIMINATE long-lived keys: use OIDC federation from CI to AWS instead of static keys\n- SCAN repos continuously (gitleaks-action, GitHub secret scanning) — secrets predate push protection\n- Rotate any committed secret IMMEDIATELY — assume it leaked even if you force-pushed it away. Git history is forever in clones and forks.\n\nDetection signals:\n- GitHub secret-scanning alert\n- GuardDuty finding for credential use from unexpected geography\n- AWS CloudTrail showing API calls from a user-agent or source IP not in the expected baseline\n- Sudden bill spike (mining instances)\n\nRemediation runbook:\n1. Deactivate the IAM key immediately, do not just rotate (rotation gives attacker time)\n2. Audit CloudTrail for all actions taken with the key\n3. Look for backdoors: new IAM users, roles, trust policies, lambda functions\n4. Rotate any data or credentials reachable from the key's permissions\n5. Cost-recover: AWS support will often credit fraud-related spend if remediated quickly\n\nAnti-patterns:\n- Force-pushing the offending commit and assuming the secret is gone — clones/forks/CI logs still have it\n- Long-lived IAM access keys for CI when GitHub OIDC federation is available\n- Storing secrets in CI environment variables instead of a real secret manager (AWS Secrets Manager, Vault)",
+      "tags": [
+        "incidents",
+        "failure-modes",
+        "reliability-engineering",
+        "aws-lambda",
+        "postmortem",
+        "security",
+        "misconfiguration",
+        "data-leak",
+        "ssrf",
+        "ransomware",
+        "supply-chain"
+      ],
+      "importance": "critical",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/incidents/devsecops_failure_modes_kb.json",
+        "source_id": "inc-004"
+      }
+    },
+    {
+      "id": "incidents/devsecops_failure_modes_kb::inc-005",
+      "title": "Malicious npm/pip package included via dependency confusion or typosquat",
+      "domain": "incidents",
+      "service": "Amazon GuardDuty",
+      "category": "Supply Chain — Compromised Dependency",
+      "content": "Malicious npm/pip package included via dependency confusion or typosquat\n\nAttacker publishes a package mimicking a legitimate one (typosquat) or exploits dependency confusion (publishing a public package with the same name as an internal one to a public registry; the build system pulls the public one). Build pipeline installs the malicious package; postinstall script exfiltrates env vars including AWS_SECRET_ACCESS_KEY and CI tokens.\n\nPreventive controls:\n- PIN dependencies with lockfiles AND verify integrity (npm `--ignore-scripts` for CI; pip-compile + hash mode)\n- USE a private registry (Verdaccio, GitHub Packages, AWS CodeArtifact) configured to NEVER fall through to the public registry for internal scopes\n- NAMESPACE internal packages with a scope (@company/foo) and reserve the scope on npmjs.com\n- RUN dependency scanners (Snyk, OWASP Dependency-Check, Dependabot) and BLOCK builds on critical findings\n- DISABLE postinstall scripts in CI (npm ci `--ignore-scripts`) for any build that does not absolutely need them\n- GENERATE and verify SBOM (CycloneDX or SPDX) on every build for downstream attestation\n\nDetection signals:\n- Sudden new package in lockfile diff — review every dependency add in code review\n- Build CPU/network spike during install (postinstall scripts doing work)\n- Egress traffic from CI runner to unknown domains during install\n- GuardDuty findings on CI runner credentials used from anomalous IPs\n\nRemediation runbook:\n1. Remove the malicious package, lock to a known-good version\n2. Rotate every credential the CI build had access to (AWS, registry, signing keys, deploy tokens)\n3. Re-issue any artifacts the compromised build produced\n4. Audit downstream consumers of those artifacts\n\nAnti-patterns:\n- Trusting `latest` tag for any dependency — pin versions\n- Allowing public-registry fallthrough for internal scopes — opens dependency confusion door\n- Running `npm install` in CI instead of `npm ci` — non-reproducible, ignores lockfile",
+      "tags": [
+        "incidents",
+        "failure-modes",
+        "reliability-engineering",
+        "amazon-guardduty",
+        "postmortem",
+        "security",
+        "misconfiguration",
+        "data-leak",
+        "ssrf",
+        "ransomware",
+        "supply-chain"
+      ],
+      "importance": "critical",
+      "cloud_provider": "aws",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/incidents/devsecops_failure_modes_kb.json",
+        "source_id": "inc-005"
+      }
+    },
+    {
+      "id": "incidents/devsecops_failure_modes_kb::inc-006",
+      "title": "Bad deploy + missing PodDisruptionBudget + aggressive autoscaler = full outage",
+      "domain": "incidents",
+      "service": "Kubernetes",
+      "category": "Availability — Self-Inflicted Outage",
+      "content": "Bad deploy + missing PodDisruptionBudget + aggressive autoscaler = full outage\n\nA new deploy ships a regression. HPA detects elevated error rate as elevated CPU and scales up. New pods are unhealthy. Cluster Autoscaler removes 'idle' nodes to save cost, evicting healthy pods at the same time the rolling deploy progresses. With no PodDisruptionBudget, kube-controller-manager evicts in parallel. All replicas of the service are unavailable simultaneously.\n\nPreventive controls:\n- DEFINE PodDisruptionBudget (`minAvailable: 1` or `maxUnavailable: 25%`) for every Deployment in production\n- HEALTH PROBES: separate liveness, readiness, and startup probes — readiness gates traffic, liveness restarts, startup tolerates slow boots\n- PROGRESSIVE delivery: Argo Rollouts or Flagger with metric-based analysis — auto-rollback on error rate / latency regression\n- DEPLOY across multiple AZs with topology spread constraints — single-AZ failure does not kill the service\n- PIN HPA min-replicas to ≥2 for any prod service — 'scale to zero' is for dev/staging\n\nDetection signals:\n- PodDisruptionBudget violation events in audit log\n- Sudden drop in `kube_deployment_status_replicas_available`\n- Error budget burn-rate alert (multi-window: fast burn 1h + slow burn 6h)\n- Synthetic check failures coinciding with deploy timestamp\n\nRemediation runbook:\n1. Roll back the deploy via Argo Rollouts abort or `kubectl rollout undo`\n2. Pause autoscaler until incident is closed\n3. Add PDB before next deploy attempt\n4. Postmortem — was the regression caught in staging? If not, why not?\n\nAnti-patterns:\n- No readiness probe — Kubernetes sends traffic to a pod that has not yet warmed up\n- Liveness probe identical to readiness probe — restart loop on transient backend failure\n- PDB `minAvailable: 100%` — blocks all evictions including legitimate node maintenance\n- HPA scaling on CPU when error rate is the real signal",
+      "tags": [
+        "incidents",
+        "failure-modes",
+        "reliability-engineering",
+        "kubernetes",
+        "postmortem",
+        "security",
+        "misconfiguration",
+        "data-leak",
+        "ssrf",
+        "ransomware",
+        "supply-chain"
+      ],
+      "importance": "critical",
+      "cloud_provider": "multi",
+      "resource_type": "security",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/incidents/devsecops_failure_modes_kb.json",
+        "source_id": "inc-006"
+      }
+    }
+  ]
+}

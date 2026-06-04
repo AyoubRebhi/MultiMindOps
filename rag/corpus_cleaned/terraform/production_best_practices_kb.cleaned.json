@@ -1,0 +1,266 @@
+{
+  "file_name": "rag/corpus/terraform/production_best_practices_kb.json",
+  "domain": "terraform",
+  "resource_type": "terraform",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Production Best Practices — Decision Intelligence Knowledge Base",
+  "entry_count": 8,
+  "cleaned_entries": [
+    {
+      "id": "terraform/production_best_practices_kb::prod-001",
+      "title": "Environment Separation Strategy — dev / staging / prod",
+      "domain": "terraform",
+      "service": "AWS IAM",
+      "category": "Production Best Practices",
+      "content": "Environment Separation Strategy — dev / staging / prod\n\nEnvironment separation is the practice of maintaining fully isolated infrastructure stacks per environment, preventing changes in one environment from affecting another. The gold standard uses separate AWS accounts per environment (AWS Organizations) to provide hard blast radius boundaries. At minimum, separate Terraform state, VPCs, and IAM roles must exist per environment. A staging environment must be production-equivalent to be useful for validation.\n\nDecision rules:\n- USE separate AWS accounts for prod vs. non-prod environments when budget allows — account-level isolation is the strongest boundary\n- USE separate Terraform state files per environment — never share state between dev and prod\n- MAKE staging infrastructure topology identical to prod — same instance types, same AZ count, same security group rules\n- ALLOW instance sizing differences between environments but never topology differences — staging in 2 AZs while prod is 3 is acceptable\n- RESTRICT prod account access to break-glass scenarios only — all prod changes must go through CI/CD pipeline, not console\n- DEPLOY infrastructure changes through environments in sequence: dev → staging → prod with automated gates\n- USE separate Terraform workspaces ONLY for ephemeral environments — not for persistent environment separation\n\nTrade-offs:\n- Separate accounts: strongest isolation vs. higher AWS Organizations overhead, cross-account networking complexity\n- Identical staging topology: accurate pre-prod testing vs. 2x infrastructure cost for staging\n- Strict pipeline gates: prevents bad deployments reaching prod vs. slower deployment cycle\n- Shared account multi-VPC: simpler IAM vs. blast radius extends across environments on IAM misconfiguration\n\nAnti-patterns:\n- Sharing a VPC between dev and prod — a misconfigured route or security group can expose prod data to dev\n- Making staging infrastructure materially different from prod — bugs that only reproduce in prod become hard to diagnose\n- Allowing direct console access to production for routine changes — changes bypass IaC, create drift, cannot be rolled back\n- Using Terraform workspaces for dev/prod separation — see workspace anti-pattern entry\n- Deploying to prod without a successful staging run — eliminates pre-prod validation value\n\nAWS Well-Architected alignment:\n- Security Pillar: account-level isolation prevents cross-environment credential and data exposure\n- Operational Excellence: pipeline-driven deployments with staged rollouts reduce change failure rate\n- Reliability: staging validates changes before they reach production workloads",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "aws-iam",
+        "aws",
+        "production",
+        "environment-separation",
+        "secrets-management",
+        "tagging",
+        "cost-optimization",
+        "monitoring",
+        "disaster-recovery",
+        "ci-cd"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/terraform/production_best_practices_kb.json",
+        "source_id": "prod-001"
+      }
+    },
+    {
+      "id": "terraform/production_best_practices_kb::prod-002",
+      "title": "Terraform Module Structuring — Layered Architecture",
+      "domain": "terraform",
+      "service": "AWS EKS",
+      "category": "Production Best Practices",
+      "content": "Terraform Module Structuring — Layered Architecture\n\nA well-structured Terraform repository separates infrastructure into layers with clearly defined ownership and change cadence. Network infrastructure changes rarely; compute changes frequently; application configuration changes continuously. Separating these layers allows fast application deployments without re-planning slow-changing network infrastructure. The standard layering is: core/network layer → platform layer (EKS/ECS/RDS) → application layer.\n\nDecision rules:\n- LAYER infrastructure into: 00-network (VPC, subnets, TGW), 10-platform (EKS/ECS, RDS, ElastiCache), 20-application (services, ALBs, DNS records)\n- DEPLOY lower layers less frequently — network changes are rare; application changes are daily\n- CONSUME lower-layer outputs via terraform_remote_state or SSM Parameter Store — never duplicate resources across layers\n- STRUCTURE module directory as: modules/<name>/{main.tf, variables.tf, outputs.tf, versions.tf} — consistent interface\n- KEEP root modules thin — root modules orchestrate calls to reusable child modules, not implement resources directly\n- CREATE a separate live/ directory for root modules and a modules/ directory for reusable modules — Terragrunt pattern\n\nTrade-offs:\n- Fine-grained layers: fast targeted applies vs. more state files and more coordination\n- Monorepo vs. multi-repo for modules: easy cross-module changes vs. clearer ownership boundaries\n- Deep module nesting: clean abstraction vs. difficult to trace resource lineage in plans\n- Terragrunt for DRY configs: eliminates root module duplication vs. additional tooling dependency\n\nAnti-patterns:\n- Single root module for all infrastructure — slow plans (1000+ resources), high blast radius, team conflicts\n- Root modules with direct resource definitions instead of module calls — kills reusability\n- Network resources and application resources in the same state file — network failure blocks application deployments\n- Circular module dependencies — module A calls module B which calls module A\n- Not documenting module interfaces (variables.tf descriptions) — forces code reading to understand inputs\n\nAWS Well-Architected alignment:\n- Operational Excellence: layered deployment reduces deployment risk and change failure rate\n- Reliability: infrastructure layers can be independently recovered when a layer fails",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "aws-eks",
+        "aws",
+        "production",
+        "environment-separation",
+        "secrets-management",
+        "tagging",
+        "cost-optimization",
+        "monitoring",
+        "disaster-recovery",
+        "ci-cd"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/terraform/production_best_practices_kb.json",
+        "source_id": "prod-002"
+      }
+    },
+    {
+      "id": "terraform/production_best_practices_kb::prod-003",
+      "title": "Secrets Management — SSM Parameter Store vs. AWS Secrets Manager",
+      "domain": "terraform",
+      "service": "AWS Secrets Manager",
+      "category": "Production Best Practices",
+      "content": "Secrets Management — SSM Parameter Store vs. AWS Secrets Manager\n\nSecrets management is the practice of storing and distributing sensitive configuration (passwords, API keys, certificates) without exposing them in code, environment variables, or Terraform state. AWS provides two services: SSM Parameter Store (free for standard parameters, KMS-encrypted SecureString) and Secrets Manager (paid, rotation support, cross-account access, fine-grained IAM). The choice depends on rotation requirements and secret value.\n\nDecision rules:\n- USE Secrets Manager WHEN: automatic rotation is required (RDS passwords, API keys), cross-account secret sharing needed, or secret value justifies the cost (~$0.40/secret/month)\n- USE SSM Parameter Store SecureString WHEN: configuration values, feature flags, simple API keys without rotation, cost-sensitive environments\n- NEVER store secrets in Terraform state — use SSM/Secrets Manager data sources to inject at runtime, not plan time\n- NEVER store secrets in environment variables in ECS task definitions or Lambda configuration in plaintext — reference Secrets Manager ARN instead\n- ENABLE automatic rotation for all database passwords via Secrets Manager rotation Lambda\n- USE separate secrets per environment — dev and prod must never share a secret ARN\n- AUDIT secret access with CloudTrail — every GetSecretValue call should be logged\n\nTrade-offs:\n- Secrets Manager: automatic rotation, rich IAM vs. $0.40/secret/month — significant cost at scale\n- SSM SecureString: free (standard), KMS encryption vs. no native rotation, less fine-grained access control\n- Runtime injection: secrets never in state vs. application startup dependency on secrets service availability\n- Secrets in env vars: simple to implement vs. visible in process list, container inspect output, and logs\n\nAnti-patterns:\n- Hardcoding secrets in Terraform tfvars files committed to Git — permanent credential exposure in git history\n- Storing plaintext secrets in SSM Standard Parameter (not SecureString) — unencrypted at rest\n- Sharing a single database password across all environments — breach in dev exposes prod credential\n- Not rotating secrets after a potential exposure event — treating rotation as optional\n- Using Terraform to write secrets into the state file via aws_ssm_parameter resource with sensitive=false\n\nAWS Well-Architected alignment:\n- Security Pillar: secrets management is explicitly required by the AWS Security pillar for credential protection\n- Operational Excellence: automatic rotation reduces manual credential management toil",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "aws-secrets-manager",
+        "aws",
+        "production",
+        "environment-separation",
+        "secrets-management",
+        "tagging",
+        "cost-optimization",
+        "monitoring",
+        "disaster-recovery",
+        "ci-cd"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/terraform/production_best_practices_kb.json",
+        "source_id": "prod-003"
+      }
+    },
+    {
+      "id": "terraform/production_best_practices_kb::prod-004",
+      "title": "AWS Resource Tagging Strategy",
+      "domain": "terraform",
+      "service": "AWS IAM",
+      "category": "Production Best Practices",
+      "content": "AWS Resource Tagging Strategy\n\nTags are key-value metadata on AWS resources. A consistent tagging strategy enables cost allocation by team/project, security policy enforcement via IAM conditions, automated compliance checks, and operational runbooks (e.g., auto-start/stop dev resources). Without tags, AWS cost reports are unreadable and security audits cannot identify resource ownership. Tags must be enforced at provisioning time, not added retroactively.\n\nDecision rules:\n- ENFORCE minimum required tags on all resources: Environment, Project, Team, ManagedBy, CostCenter\n- USE Environment tag values consistently: dev, staging, prod — not Dev, Development, PROD\n- SET ManagedBy = terraform for all Terraform-managed resources — enables drift detection\n- ADD Name tag to all resources — human-readable identifier in the console\n- USE AWS Organizations Tag Policy to enforce tag keys and valid values across all accounts\n- PROPAGATE tags from Auto Scaling Groups to launched EC2 instances using propagate_at_launch = true\n- USE provider default_tags block in Terraform to apply common tags to all resources without repetition\n\nTrade-offs:\n- Many tags: rich metadata vs. tag limit of 50 per resource, management overhead\n- Enforced tag policy: compliance vs. blocks resource creation if tags are missing — requires team training\n- provider default_tags: DRY tagging vs. individual resources cannot override inherited tags easily\n\nAnti-patterns:\n- Inconsistent tag values across teams — 'production', 'prod', 'PROD' make cost reports require manual normalization\n- Only tagging some resource types — cost allocation gaps for untagged resources are untraceable\n- Not tagging at resource creation — retroactive tagging is operationally expensive and error-prone\n- Using tags for access control without enforcement — tags can be modified by anyone with resource update permission\n\nAWS Well-Architected alignment:\n- Cost Optimization: cost allocation tags enable showback and chargeback per team/project\n- Operational Excellence: ownership tags accelerate incident response by identifying responsible team\n- Security Pillar: tag-based IAM conditions can restrict operations to environment-appropriate resources",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "aws-iam",
+        "aws",
+        "production",
+        "environment-separation",
+        "secrets-management",
+        "tagging",
+        "cost-optimization",
+        "monitoring",
+        "disaster-recovery",
+        "ci-cd"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/terraform/production_best_practices_kb.json",
+        "source_id": "prod-004"
+      }
+    },
+    {
+      "id": "terraform/production_best_practices_kb::prod-005",
+      "title": "Cost Optimization Patterns — Reserved Capacity and Right-Sizing",
+      "domain": "terraform",
+      "service": "AWS EKS",
+      "category": "Production Best Practices",
+      "content": "Cost Optimization Patterns — Reserved Capacity and Right-Sizing\n\nAWS cost optimization is a continuous process, not a one-time activity. The biggest levers are: Reserved Instance / Savings Plans for predictable workloads, Spot instances for fault-tolerant workloads, right-sizing to eliminate over-provisioned resources, and lifecycle policies to delete unused resources. The AWS Well-Architected Cost Optimization pillar emphasizes that cost should be a first-class metric, visible to engineering teams.\n\nDecision rules:\n- PURCHASE 1-year Savings Plans for stable workloads (>70% utilization baseline) — delivers 30-40% savings over On-Demand\n- PURCHASE 3-year Reserved Instances for database instances (RDS) with known longevity — up to 60% savings\n- USE Spot instances for: batch jobs, EKS non-critical node groups, dev/staging environments — 60-90% savings\n- RIGHT-SIZE instances after 2 weeks of CloudWatch metrics — use AWS Compute Optimizer recommendations\n- ENABLE S3 Intelligent-Tiering for buckets with unknown access patterns — auto-moves objects to cheaper tiers\n- SET S3 lifecycle policies to transition logs/backups to S3 Glacier after 30 days, expire after 365 days\n- DELETE unattached EBS volumes, unused Elastic IPs, and idle load balancers — these generate cost with zero value\n- USE CloudWatch Cost Anomaly Detection to alert on unexpected spend increases\n\nTrade-offs:\n- Reserved Instances: guaranteed savings vs. upfront commitment — inflexible if workload changes\n- Savings Plans: more flexible than RIs (Compute Savings Plans apply across EC2 family/region) vs. slightly lower max discount\n- Spot instances: maximum savings vs. requires application fault tolerance design upfront\n- Over-provisioning for headroom: operational safety vs. wasted spend — use auto-scaling instead\n\nAnti-patterns:\n- Paying On-Demand for workloads that have been running >3 months — most expensive option for predictable workloads\n- Not setting S3 lifecycle policies on log buckets — logs grow indefinitely at S3 Standard pricing\n- Leaving development environments running 24/7 — dev environments should stop at end of business hours\n- Using large RDS instances 'just in case' without Performance Insights to validate the need\n- Purchasing Reserved Instances without first right-sizing — locking into wrong instance type\n\nAWS Well-Architected alignment:\n- Cost Optimization Pillar: this entry directly implements the Cost Optimization pillar's practice areas\n- Operational Excellence: cost visibility enables teams to make informed architecture decisions",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "aws-eks",
+        "aws",
+        "production",
+        "environment-separation",
+        "secrets-management",
+        "tagging",
+        "cost-optimization",
+        "monitoring",
+        "disaster-recovery",
+        "ci-cd"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/terraform/production_best_practices_kb.json",
+        "source_id": "prod-005"
+      }
+    },
+    {
+      "id": "terraform/production_best_practices_kb::prod-006",
+      "title": "Observability Architecture — Metrics, Logs, Traces",
+      "domain": "terraform",
+      "service": "AWS EKS",
+      "category": "Production Best Practices",
+      "content": "Observability Architecture — Metrics, Logs, Traces\n\nProduction observability requires three pillars: metrics (CloudWatch, dashboards), logs (CloudWatch Logs, structured logging), and distributed traces (AWS X-Ray or OpenTelemetry). Without observability, incident MTTR increases dramatically because engineers cannot distinguish between application bugs, infrastructure failures, and dependency issues. Observability must be designed into the infrastructure, not added after incidents.\n\nDecision rules:\n- ENABLE CloudWatch Container Insights for ECS and EKS — provides CPU, memory, network, and disk metrics per pod\n- CONFIGURE structured JSON logging for all applications — enables CloudWatch Logs Insights queries\n- SET CloudWatch alarms for: high CPU (>80%), memory pressure, error rate (5xx > threshold), DB connection count\n- ENABLE X-Ray tracing on ALB, Lambda, ECS tasks, and API Gateway — provides end-to-end request tracing\n- USE CloudWatch Log Groups with retention policies — default is infinite retention (expensive and unnecessary)\n- CREATE CloudWatch dashboards per service — single-pane visibility reduces investigation time\n- SET log retention to: 7 days for debug logs, 30 days for application logs, 90 days for audit/security logs, 1 year for compliance logs\n\nTrade-offs:\n- Full observability: fast incident response vs. CloudWatch Logs costs can be significant at high log volume\n- Structured logging: queryable, parseable vs. requires application code changes and discipline\n- X-Ray tracing: performance bottleneck identification vs. sampling rate tuning required to control cost\n- Long log retention: compliance support vs. CloudWatch Logs storage cost\n\nAnti-patterns:\n- No CloudWatch alarms — incidents are discovered by customers before engineering teams\n- Logging without retention policies — log storage becomes a significant monthly cost silently\n- Not correlating metrics, logs, and traces — forces manual investigation across multiple tools\n- Using print/console.log for structured data — unqueryable in CloudWatch Logs Insights\n\nAWS Well-Architected alignment:\n- Operational Excellence Pillar: observability is the foundation of responding to events and improving processes\n- Reliability Pillar: metric-based alarms trigger automated and manual recovery procedures",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "aws-eks",
+        "aws",
+        "production",
+        "environment-separation",
+        "secrets-management",
+        "tagging",
+        "cost-optimization",
+        "monitoring",
+        "disaster-recovery",
+        "ci-cd"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/terraform/production_best_practices_kb.json",
+        "source_id": "prod-006"
+      }
+    },
+    {
+      "id": "terraform/production_best_practices_kb::prod-007",
+      "title": "Disaster Recovery — RTO/RPO and Strategy Selection",
+      "domain": "terraform",
+      "service": "Amazon RDS",
+      "category": "Production Best Practices",
+      "content": "Disaster Recovery — RTO/RPO and Strategy Selection\n\nDisaster Recovery (DR) defines how quickly a system can recover (RTO — Recovery Time Objective) and how much data loss is acceptable (RPO — Recovery Point Objective). AWS provides four DR patterns at increasing cost and complexity: backup-and-restore, pilot light, warm standby, and multi-site active-active. The DR strategy must be chosen based on business requirements, not technical preferences.\n\nDecision rules:\n- DEFINE RTO and RPO with business stakeholders before designing DR — do not assume technical preferences\n- USE Backup-and-Restore WHEN: RTO hours acceptable, RPO hours acceptable, cost sensitivity high — lowest DR cost\n- USE Pilot Light WHEN: RTO 10-30 minutes acceptable, core data is replicated but compute is off — moderate cost\n- USE Warm Standby WHEN: RTO minutes acceptable, RPO seconds, business-critical applications — significant cost\n- USE Multi-Site Active-Active WHEN: RTO seconds/zero downtime, RPO near-zero, mission-critical revenue-generating systems — highest cost\n- ENABLE RDS automated backups with point-in-time recovery — minimum DR for all database workloads\n- TEST DR procedures quarterly — untested DR plans fail at the worst possible time\n- USE AWS Backup service to centralize backup policies across RDS, EFS, EC2, and DynamoDB\n\nTrade-offs:\n- Active-Active: zero-downtime DR vs. 10-20x cost of backup-and-restore, complex data synchronization\n- Warm Standby: minutes RTO vs. paying for duplicate running infrastructure at 50% capacity\n- Pilot Light: cheap vs. 10-30 minute RTO includes provisioning time that may be unacceptable\n- Cross-region vs. cross-AZ DR: protects against region failure vs. 10-100x higher data transfer costs\n\nAnti-patterns:\n- No DR plan for production databases — data loss is unacceptable in most business contexts\n- DR plan that has never been tested — theoretical DR is not DR\n- Assuming multi-AZ RDS is DR — Multi-AZ protects against AZ failure but not region failure or data corruption\n- DR in the same region as primary — regional failure affects both primary and DR simultaneously\n\nAWS Well-Architected alignment:\n- Reliability Pillar: DR planning is a core reliability requirement\n- Operational Excellence: regular DR testing is a required operational practice",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "amazon-rds",
+        "aws",
+        "production",
+        "environment-separation",
+        "secrets-management",
+        "tagging",
+        "cost-optimization",
+        "monitoring",
+        "disaster-recovery",
+        "ci-cd"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/terraform/production_best_practices_kb.json",
+        "source_id": "prod-007"
+      }
+    },
+    {
+      "id": "terraform/production_best_practices_kb::prod-008",
+      "title": "CI/CD for Terraform — Pipeline Architecture",
+      "domain": "terraform",
+      "service": "AWS IAM",
+      "category": "Production Best Practices",
+      "content": "CI/CD for Terraform — Pipeline Architecture\n\nTerraform changes in production must go through an automated pipeline that enforces validation, planning, and approval gates. The pipeline prevents human error from direct apply operations, enforces policy checks (Checkov, tfsec, OPA), and creates an audit trail of all infrastructure changes. The Terraform plan output must be reviewed before apply, especially for destructive changes.\n\nDecision rules:\n- STRUCTURE pipeline as: lint/validate → plan (with saved planfile) → review gate → apply from planfile\n- RUN terraform fmt check, terraform validate, and tflint in the lint stage — fast feedback before expensive plan\n- RUN tfsec or Checkov on every plan — catches security misconfigurations before they reach AWS\n- REQUIRE human approval for prod apply, especially when plan shows resource deletion or replacement\n- SAVE terraform plan output as artifact — apply must use the exact same plan that was reviewed\n- USE OIDC federation for CI/CD AWS authentication — eliminates long-lived IAM access keys in CI secrets\n- BLOCK apply on main branch without passing tests — no exceptions for 'quick hotfixes'\n- NOTIFY on all plan outputs that include resource destruction — proactive awareness before approval\n\nTrade-offs:\n- Approval gates: safety vs. deployment velocity — automate approval for dev, manual for prod\n- Plan artifact: apply from reviewed plan vs. small plan/apply time gap allows AWS state to drift between them\n- OIDC: no static credentials vs. more complex initial setup\n- Full policy scanning: catches every misconfiguration vs. slower pipeline and false positives requiring tuning\n\nAnti-patterns:\n- Running terraform apply in CI without saving and reviewing the plan first — apply may do something different than expected\n- Storing AWS credentials as CI/CD static secrets — rotate risk, blast radius on breach\n- No policy scanning in pipeline — security misconfigurations reach production\n- Allowing direct terraform apply from developer machines to production — no audit trail, no approval gate\n- Not testing infrastructure modules — changes break downstream consumers silently\n\nAWS Well-Architected alignment:\n- Operational Excellence: automated pipelines with gates reduce change failure rate and improve audit capability\n- Security Pillar: policy scanning in pipeline enforces security baseline consistently",
+      "tags": [
+        "terraform",
+        "infrastructure",
+        "provisioning",
+        "iac",
+        "aws-iam",
+        "aws",
+        "production",
+        "environment-separation",
+        "secrets-management",
+        "tagging",
+        "cost-optimization",
+        "monitoring",
+        "disaster-recovery",
+        "ci-cd"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "end",
+      "source": {
+        "file": "rag/corpus/terraform/production_best_practices_kb.json",
+        "source_id": "prod-008"
+      }
+    }
+  ]
+}

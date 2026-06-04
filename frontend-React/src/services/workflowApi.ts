@@ -1,4 +1,5 @@
 import { tasksApi } from '@/api/tasks'
+import { apiClient } from '@/api/client'
 import type {
   TaskResponse,
   PlanPreviewResponse,
@@ -215,14 +216,14 @@ export async function applyAiPatch(taskId: string): Promise<PatchArtifactsRespon
   return res.json()
 }
 
-/** Start an async Docker build.  Returns immediately; connect WS for live logs. */
+/** Start an async Docker build.  Returns immediately; connect WS for live logs.
+ *  Uses the authenticated apiClient (Bearer token + 401 refresh) — the build
+ *  endpoint is gated by require_task_project_contributor. */
 export async function startDockerBuild(taskId: string): Promise<DockerBuildStartResponse> {
-  const res = await fetch(`${BASE}/api/execution/docker/build/${taskId}`, { method: 'POST' })
-  if (!res.ok) {
-    const d = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(d.detail ?? `Docker build start failed: ${res.status}`)
-  }
-  return res.json()
+  const { data } = await apiClient.post<DockerBuildStartResponse>(
+    `/api/execution/docker/build/${taskId}`,
+  )
+  return data
 }
 
 /** Retry through the human-in-the-loop endpoint using latest saved artifacts. */
@@ -235,21 +236,27 @@ export async function retryDockerBuild(taskId: string): Promise<DockerBuildStart
   return res.json()
 }
 
-/** Poll persisted Docker build status (logs survive page refresh). */
+/** Poll persisted Docker build status (logs survive page refresh).
+ *  Authenticated via apiClient — the status endpoint is gated by
+ *  require_task_project_member. */
 export async function getDockerBuildStatus(taskId: string): Promise<DockerBuildStatusResponse> {
-  const res = await fetch(`${BASE}/api/execution/docker/status/${taskId}`)
-  if (!res.ok) throw new Error(`Failed to fetch build status: ${res.status}`)
-  return res.json()
+  const { data } = await apiClient.get<DockerBuildStatusResponse>(
+    `/api/execution/docker/status/${taskId}`,
+  )
+  return data
 }
 
-/** Compute the WebSocket URL for live execution log streaming. */
-export function getWsExecutionUrl(taskId: string): string {
+/** Compute the WebSocket URL for live execution log streaming.
+ *  The access token is appended as a query param because browsers cannot set
+ *  custom headers on a WS handshake — same pattern as getWsTerraformUrl. */
+export function getWsExecutionUrl(taskId: string, token?: string | null): string {
   const wsBase = BASE
     ? BASE.replace(/^http/, 'ws')
     : (typeof window !== 'undefined'
       ? `ws://${window.location.host}`
       : 'ws://localhost:8000')
-  return `${wsBase}/ws/execution/${taskId}`
+  const q = token ? `?token=${encodeURIComponent(token)}` : ''
+  return `${wsBase}/ws/execution/${taskId}${q}`
 }
 
 export type TerraformWsPhase = 'terraform_validate' | 'terraform_plan'

@@ -1,0 +1,120 @@
+{
+  "file_name": "rag/corpus/k8s/kubernetes_deployment_patterns_kb.json",
+  "domain": "k8s",
+  "resource_type": "kubernetes",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Kubernetes Deployment Patterns — Production Ready",
+  "entry_count": 5,
+  "cleaned_entries": [
+    {
+      "id": "k8s/kubernetes_deployment_patterns_kb::k8s_namespace_and_labels",
+      "title": "Namespace and label conventions for production",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "category": "kubernetes",
+      "content": "Namespace and label conventions for production\n\nCreate a dedicated Namespace for each environment or team with labels: environment, managed-by, team. Standard labels applied to all resources: app (service name), version (semver), environment. Namespaces provide resource isolation, RBAC scope, and NetworkPolicy boundaries.\n\nDecision rules:\n- Use one namespace per environment (production, staging, development) — do not mix environments\n- Apply consistent labels (app, version, environment) to all resources to enable selectors and monitoring\n- Set managed-by: terraform or managed-by: helm on namespaces created via IaC\n\nTrade-offs:\n- Fine-grained namespace-per-team increases isolation but requires more RBAC and NetworkPolicy configuration\n\nAnti-patterns:\n- Deploying production workloads to the default namespace\n- Omitting labels — makes resource selection, monitoring dashboards, and GitOps tooling fragile\n\nAWS Well-Architected alignment:\n- EKS namespaces map to IAM Roles for Service Accounts (IRSA) scope for granular AWS API access control",
+      "tags": [
+        "k8s",
+        "kubernetes",
+        "orchestration",
+        "aws-eks"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "kubernetes",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/k8s/kubernetes_deployment_patterns_kb.json",
+        "source_id": "k8s_namespace_and_labels"
+      }
+    },
+    {
+      "id": "k8s/kubernetes_deployment_patterns_kb::k8s_production_deployment",
+      "title": "Production-ready Deployment manifest",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "category": "kubernetes",
+      "content": "Production-ready Deployment manifest\n\nProduction Deployment: 3 replicas, RollingUpdate strategy (maxSurge: 1, maxUnavailable: 0 for zero-downtime), dedicated ServiceAccount (automountServiceAccountToken: false), podAntiAffinity across nodes, pod-level SecurityContext (runAsNonRoot, seccompProfile RuntimeDefault), container-level SecurityContext (allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities drop ALL), resource requests/limits, env from ConfigMap/Secret, liveness + readiness + startup probes, emptyDir volumes for writable paths, terminationGracePeriodSeconds: 60.\n\nDecision rules:\n- Set maxUnavailable: 0 for zero-downtime rolling deployments — pods are added before old ones are removed\n- Use pinned image tags (myapp:1.0.0) — never :latest in production\n- Set terminationGracePeriodSeconds >= timeout of your longest in-flight request to allow graceful shutdown\n\nTrade-offs:\n- maxUnavailable: 0 requires cluster capacity for maxSurge extra pods during rollout\n- podAntiAffinity with preferredDuringScheduling may not spread pods if cluster nodes are insufficient\n\nAnti-patterns:\n- Using :latest image tag — non-deterministic and bypasses rollback capability\n- Not setting terminationGracePeriodSeconds — pods may be killed mid-request\n- Missing startup probe for slow-starting apps — liveness probe will kill the pod before it finishes initializing\n\nAWS Well-Architected alignment:\n- Use Karpenter on EKS for just-in-time node provisioning to support rolling surge capacity",
+      "tags": [
+        "k8s",
+        "kubernetes",
+        "orchestration",
+        "aws-eks"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "kubernetes",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/k8s/kubernetes_deployment_patterns_kb.json",
+        "source_id": "k8s_production_deployment"
+      }
+    },
+    {
+      "id": "k8s/kubernetes_deployment_patterns_kb::k8s_service_and_ingress",
+      "title": "Service (ClusterIP) and Ingress with TLS",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "category": "kubernetes",
+      "content": "Service (ClusterIP) and Ingress with TLS\n\nService type ClusterIP on port 80 -> targetPort 8000. Never NodePort or LoadBalancer directly for internal services. Ingress with nginx ingress class, cert-manager annotation (letsencrypt-prod), ssl-redirect: true, proxy-body-size: 10m, rate-limit: 100. TLS spec with hosts array and secretName for certificate.\n\nDecision rules:\n- Use ClusterIP as the default Service type — expose externally only via Ingress\n- Set nginx.ingress.kubernetes.io/rate-limit on all public-facing Ingress resources\n- Use cert-manager with Let's Encrypt for automated TLS certificate management\n\nTrade-offs:\n- Nginx Ingress with rate-limit annotation is per-server, not distributed — use Redis-backed rate limiting for distributed enforcement\n\nAnti-patterns:\n- Using NodePort or direct LoadBalancer Service types without an Ingress — bypasses centralized TLS and rate limiting\n- Not setting proxy-body-size — allows unbounded request body sizes\n\nAWS Well-Architected alignment:\n- On EKS, use AWS Load Balancer Controller with Ingress class alb for native ALB integration and ACM certificate management",
+      "tags": [
+        "k8s",
+        "kubernetes",
+        "orchestration",
+        "aws-eks"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "kubernetes",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/k8s/kubernetes_deployment_patterns_kb.json",
+        "source_id": "k8s_service_and_ingress"
+      }
+    },
+    {
+      "id": "k8s/kubernetes_deployment_patterns_kb::k8s_hpa",
+      "title": "Horizontal Pod Autoscaler (HPA) for automatic scaling",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "category": "kubernetes",
+      "content": "Horizontal Pod Autoscaler (HPA) for automatic scaling\n\nHPA (autoscaling/v2): scaleTargetRef points to the Deployment, minReplicas: 2, maxReplicas: 10. Metrics: CPU target utilization 70%, Memory target utilization 80%. Kubernetes scales pod count up/down to maintain the target metric values.\n\nDecision rules:\n- Set minReplicas >= 2 for production availability — 1 replica has no fault tolerance\n- Use CPU utilization 70% as a target — leaves headroom before pods become saturated\n- Combine HPA with PodDisruptionBudget to prevent all replicas from being disrupted simultaneously\n\nTrade-offs:\n- HPA reacts to current load — not suitable for sudden traffic spikes; use KEDA for event-driven scaling\n- Memory-based scaling can cause scale-thrash if memory is not released promptly after load drops\n\nAnti-patterns:\n- Setting minReplicas: 1 in production — a single pod disruption causes a complete outage\n- Setting maxReplicas too high without resource quotas — a runaway HPA can exhaust cluster capacity\n\nAWS Well-Architected alignment:\n- Combine HPA with Karpenter on EKS for both pod and node autoscaling\n- Use KEDA with SQS queue depth metric for event-driven HPA on EKS",
+      "tags": [
+        "k8s",
+        "kubernetes",
+        "orchestration",
+        "aws-eks"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "kubernetes",
+      "chunk_hint": "continue",
+      "source": {
+        "file": "rag/corpus/k8s/kubernetes_deployment_patterns_kb.json",
+        "source_id": "k8s_hpa"
+      }
+    },
+    {
+      "id": "k8s/kubernetes_deployment_patterns_kb::k8s_configmap_and_secret",
+      "title": "ConfigMap and Secret configuration management",
+      "domain": "k8s",
+      "service": "AWS EKS",
+      "category": "kubernetes",
+      "content": "ConfigMap and Secret configuration management\n\nConfigMap holds non-sensitive configuration: APP_ENV, LOG_LEVEL, CORS_ORIGINS, MAX_CONNECTIONS. Secrets hold sensitive values (DATABASE_URL) but in production should be managed via External Secrets Operator, not committed as plain Secret manifests. Reference ConfigMap values with valueFrom.configMapKeyRef, Secrets with valueFrom.secretKeyRef.\n\nDecision rules:\n- ConfigMap is for non-sensitive configuration only — never put passwords or tokens in ConfigMap\n- In production: use External Secrets Operator to sync from AWS Secrets Manager into Kubernetes Secrets\n- Reference individual keys (configMapKeyRef, secretKeyRef) rather than envFrom for explicit env var declarations\n\nTrade-offs:\n- envFrom (whole ConfigMap/Secret as env vars) is simpler but makes pod environment unpredictable — prefer key-by-key references\n\nAnti-patterns:\n- Storing sensitive values in ConfigMap data (not encrypted at rest by default)\n- Committing Secret manifests with base64-encoded values to git — base64 is encoding, not encryption\n\nAWS Well-Architected alignment:\n- Use External Secrets Operator with AWS Secrets Manager SecretStore for EKS\n- Use Secrets Store CSI Driver with AWS SSM Parameter Store as an alternative",
+      "tags": [
+        "k8s",
+        "kubernetes",
+        "orchestration",
+        "aws-eks"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "kubernetes",
+      "chunk_hint": "end",
+      "source": {
+        "file": "rag/corpus/k8s/kubernetes_deployment_patterns_kb.json",
+        "source_id": "k8s_configmap_and_secret"
+      }
+    }
+  ]
+}

@@ -1,0 +1,164 @@
+{
+  "file_name": "rag/corpus/observability/observability_patterns_kb.json",
+  "domain": "observability",
+  "resource_type": "observability",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Observability — Decision Intelligence Knowledge Base",
+  "entry_count": 5,
+  "cleaned_entries": [
+    {
+      "id": "observability/observability_patterns_kb::obs-001",
+      "title": "The three pillars and when each is the right tool",
+      "domain": "observability",
+      "service": "Amazon CloudWatch",
+      "category": "Foundations",
+      "content": "The three pillars and when each is the right tool\n\nLogs, metrics, and traces answer different questions. Metrics ('how many requests, what latency, what error rate') aggregate well and are cheap; they answer 'is something wrong?'. Logs ('the exact event, with all fields') are expensive at scale but answer 'what exactly happened on this request?'. Traces ('the request's path across services') answer 'where did the latency come from?'. A production observability stack uses all three with deliberate boundaries — logs for forensics, metrics for alerting, traces for performance debugging.\n\nDecision rules:\n- ALERT on metrics, never on logs — log-based alerts are slow, expensive, and unreliable\n- USE structured logs (JSON) with a common schema (trace_id, span_id, request_id, user_id) — flat text logs cripple every downstream tool\n- SAMPLE traces aggressively in steady state (1-5%) and tail-sample errors and high-latency requests\n- STORE high-cardinality data in traces, not metrics — metrics with millions of label combinations are a known foot-gun\n- PROPAGATE trace context across every async boundary (queues, jobs, workers) — broken propagation makes traces useless\n\nTrade-offs:\n- Logs: maximum fidelity vs highest cost — sample or sample-and-aggregate\n- Metrics: cheap and fast vs limited cardinality — Prometheus 1M series is a soft ceiling per replica\n- Traces: rich context vs intrusive instrumentation — OpenTelemetry auto-instrumentation amortizes the cost\n\nAnti-patterns:\n- Alerting on `grep ERROR` over a log stream — slow, brittle, and bills explode under load\n- Logging the entire request body — PII risk plus log-bill blowup\n- High-cardinality labels in metrics (user_id, request_id) — kills Prometheus / inflates Datadog bill\n- Unstructured `printf` logs in production — every parsing tool downstream is a liability",
+      "tags": [
+        "observability",
+        "monitoring",
+        "logging",
+        "metrics",
+        "amazon-cloudwatch",
+        "slo",
+        "sli",
+        "logs",
+        "traces",
+        "opentelemetry",
+        "prometheus",
+        "cloudwatch",
+        "alerting"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "observability",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/observability/observability_patterns_kb.json",
+        "source_id": "obs-001"
+      }
+    },
+    {
+      "id": "observability/observability_patterns_kb::obs-002",
+      "title": "Defining SLOs and burn-rate alerts (Google SRE pattern)",
+      "domain": "observability",
+      "service": "Amazon CloudWatch",
+      "category": "SLOs and Alerting",
+      "content": "Defining SLOs and burn-rate alerts (Google SRE pattern)\n\nAn SLO (Service Level Objective) is a numeric target on a Service Level Indicator (SLI) over a time window — e.g. 99.9% of requests succeed over 30 days. The error budget is `1 - SLO` (43.2 minutes of failure per month at 99.9%). Alerts should fire on burn-rate (how fast the budget is being consumed) using multi-window alerts (fast: 1h+5m, slow: 6h+30m) — this catches both sudden incidents and slow degradations while avoiding alert fatigue.\n\nDecision rules:\n- DEFINE SLOs from user-visible signals: availability (success rate), latency (p99), correctness — NOT internal metrics like CPU\n- PICK SLO targets from observed historical performance + business need — 99.9% is common; 99.99% is expensive and rarely needed\n- ALERT on multi-window burn rate (Google SRE workbook chapter 5): page on fast burn (2% of monthly budget in 1h), ticket on slow burn (10% in 6h)\n- EXEMPT planned events from SLO calculation only via explicit burn-budget freezes, not by silencing alerts\n- REVIEW SLOs quarterly — if you never miss an SLO, it is too lax; if you constantly miss, it is too strict or the system is unhealthy\n\nTrade-offs:\n- Tighter SLO: better user experience vs disproportionate engineering cost (each 9 is ~10x harder)\n- Multi-window alerts: low false-positive rate vs more complex Prometheus rules / Sloth config\n- Per-endpoint SLOs: precise but proliferate vs per-service rolled-up SLOs that hide endpoint regressions\n\nAnti-patterns:\n- Alerting on 'CPU > 80%' — that is a saturation symptom, not a user-visible problem\n- One alert that pages whenever error rate is non-zero — alert fatigue, real pages get ignored\n- Treating an unmet SLO as a personal failure rather than a signal — error budgets exist to be spent",
+      "tags": [
+        "observability",
+        "monitoring",
+        "logging",
+        "metrics",
+        "amazon-cloudwatch",
+        "slo",
+        "sli",
+        "logs",
+        "traces",
+        "opentelemetry",
+        "prometheus",
+        "cloudwatch",
+        "alerting"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "observability",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/observability/observability_patterns_kb.json",
+        "source_id": "obs-002"
+      }
+    },
+    {
+      "id": "observability/observability_patterns_kb::obs-003",
+      "title": "OpenTelemetry as the vendor-neutral instrumentation standard",
+      "domain": "observability",
+      "service": "OpenTelemetry",
+      "category": "OpenTelemetry Adoption",
+      "content": "OpenTelemetry as the vendor-neutral instrumentation standard\n\nOpenTelemetry (OTel) is the CNCF-backed standard for emitting telemetry. Adopt OTel SDKs in code, run an OTel Collector as the egress point, and let the Collector route to your backend (Prometheus, Tempo, Loki, Datadog, New Relic — anything that speaks OTLP or has a Collector exporter). This decouples instrumentation from vendor and is now the default in 2025+. The Collector also performs sampling, redaction, and enrichment — keep these in the Collector, not the application.\n\nDecision rules:\n- INSTRUMENT services with OpenTelemetry SDK + auto-instrumentation packages — direct vendor SDKs are legacy\n- DEPLOY the OTel Collector as a DaemonSet or sidecar — apps export to localhost:4317, Collector handles upstream\n- DO sampling, redaction, attribute enrichment in the Collector — keeps app code clean and centralizes policy\n- PROPAGATE W3C Trace Context (traceparent header) across every service boundary\n- ADOPT OpenTelemetry Logs (now stable) once your runtime supports it — unifies the three pillars under one SDK\n\nTrade-offs:\n- OTel: vendor-neutral but the spec is still evolving for some signals (logs more recent than traces)\n- Collector as DaemonSet vs sidecar: DaemonSet is simpler ops; sidecar gives stronger pod-level isolation\n- Auto-instrumentation: zero code change vs less precise spans than manual\n\nAnti-patterns:\n- Vendor-locked SDKs (e.g. agent-only Datadog) — migration cost grows with adoption\n- Sampling in the application — moves policy into N services instead of one Collector\n- No trace context propagation — traces look like disconnected fragments per service",
+      "tags": [
+        "observability",
+        "monitoring",
+        "logging",
+        "metrics",
+        "opentelemetry",
+        "slo",
+        "sli",
+        "logs",
+        "traces",
+        "prometheus",
+        "cloudwatch",
+        "alerting"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "observability",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/observability/observability_patterns_kb.json",
+        "source_id": "obs-003"
+      }
+    },
+    {
+      "id": "observability/observability_patterns_kb::obs-004",
+      "title": "CloudWatch vs Prometheus vs Datadog/New Relic — when to choose each",
+      "domain": "observability",
+      "service": "Amazon CloudWatch",
+      "category": "Stack Choice",
+      "content": "CloudWatch vs Prometheus vs Datadog/New Relic — when to choose each\n\nThere is no single right answer; the choice is driven by team size, cardinality, and cost tolerance. CloudWatch is the path of least resistance on AWS (zero ops, native integration, billing tied to AWS) but expensive at scale and limited cardinality. Prometheus + Grafana + Loki + Tempo is the best price/performance for medium-large teams with platform engineers. Datadog/New Relic offer the best UX and time-to-value but bills scale aggressively and lock-in is real.\n\nDecision rules:\n- PICK CloudWatch when: small team, AWS-only workload, low log volume, no dedicated SRE\n- PICK Prometheus stack when: Kubernetes-heavy, platform team exists, cardinality matters, cost-sensitive\n- PICK Datadog/New Relic when: time-to-value > cost, multi-cloud, no platform team to operate Prometheus\n- DECOUPLE via OpenTelemetry — you can switch backends later without re-instrumenting\n- ESTIMATE cost up-front: log GB/day × retention + metrics series count + APM host count → annual bill — surprises here are common\n\nTrade-offs:\n- CloudWatch: zero-ops vs $0.50/GB ingest, $0.03/GB storage, $0.005 per metric — bill scales fast\n- Prometheus: cheap and powerful vs cluster ops, federation complexity at multi-cluster\n- Datadog: best UX vs ~$15-30/host/month + per-custom-metric + log indexing — large bills are normal\n\nAnti-patterns:\n- Choosing Datadog and instrumenting with their SDK directly — locks in vendor; OTel + Datadog exporter is the right path\n- Running Prometheus without retention policy — disk fills, alerts go silent\n- Shipping every CloudWatch log line to a third-party indexer — log bills become the largest cloud line item",
+      "tags": [
+        "observability",
+        "monitoring",
+        "logging",
+        "metrics",
+        "amazon-cloudwatch",
+        "slo",
+        "sli",
+        "logs",
+        "traces",
+        "opentelemetry",
+        "prometheus",
+        "cloudwatch",
+        "alerting"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "observability",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/observability/observability_patterns_kb.json",
+        "source_id": "obs-004"
+      }
+    },
+    {
+      "id": "observability/observability_patterns_kb::obs-005",
+      "title": "Structured logs, redaction, and retention",
+      "domain": "observability",
+      "service": "Amazon CloudWatch",
+      "category": "Log Hygiene",
+      "content": "Structured logs, redaction, and retention\n\nLogs become a liability if they contain PII, are unstructured, or are retained forever. A production logging policy specifies: a structured schema (JSON with required fields), a redaction pipeline (in the Collector or shipper), tiered retention (7 days hot / 30 days warm / 1 year cold), and an out-of-band path for sensitive data (audit logs separated from app logs).\n\nDecision rules:\n- EMIT JSON logs with required fields: timestamp (RFC3339), level, service, version, trace_id, span_id, message\n- REDACT PII at the collector/shipper, not the application — centralizes policy\n- TIER retention: hot (queryable, 7-14 days), warm (slower query, 30-90 days), cold (S3/Glacier, 1+ year for compliance)\n- SEPARATE audit logs (who did what) from application logs — different retention, different access controls\n- RATE-LIMIT logs at the application — runaway logs are a self-DoS and a bill spike\n\nTrade-offs:\n- JSON logs: machine-readable but slightly larger than text — compression mitigates\n- Redaction in collector: central policy vs requires the policy author to know every field name\n- Long retention: better forensics vs storage cost — compliance often dictates\n\nAnti-patterns:\n- Logging passwords, tokens, or full credit card numbers — if you are not sure, redact\n- Logging at DEBUG in production permanently — bill explodes, signal disappears\n- Logs as the primary forensic trail without integrity protection — attacker who reaches the host can edit them",
+      "tags": [
+        "observability",
+        "monitoring",
+        "logging",
+        "metrics",
+        "amazon-cloudwatch",
+        "slo",
+        "sli",
+        "logs",
+        "traces",
+        "opentelemetry",
+        "prometheus",
+        "cloudwatch",
+        "alerting"
+      ],
+      "importance": "medium",
+      "cloud_provider": "aws",
+      "resource_type": "observability",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/observability/observability_patterns_kb.json",
+        "source_id": "obs-005"
+      }
+    }
+  ]
+}

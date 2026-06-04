@@ -1,0 +1,80 @@
+{
+  "file_name": "rag/corpus/terraform/aws_iam_roles.tf",
+  "domain": "iam",
+  "resource_type": "terraform",
+  "generated_by": "rag/tools/clean_corpus.py",
+  "source_title": "Terraform AWS IAM Roles & Policies — Production Patterns",
+  "note": "Derived from Terraform (.tf) source. Each entry explains what the resources do, when to use them, best practices, and security considerations — grounded strictly in the file's own comments and resource definitions. Raw HCL is not embedded without explanation.",
+  "entry_count": 3,
+  "cleaned_entries": [
+    {
+      "id": "iam/aws_iam_roles::tf-iam-001",
+      "title": "EC2 Instance IAM Role — SSM Access and Scoped S3 Read",
+      "domain": "iam",
+      "service": "AWS Systems Manager",
+      "category": "AWS IAM — Compute Roles",
+      "content": "EC2 Instance IAM Role — SSM Access and Scoped S3 Read\n\nCreates an IAM role assumable by the EC2 service, exposed to instances through an aws_iam_instance_profile. The role attaches the AWS-managed AmazonSSMManagedInstanceCore policy (enabling Systems Manager Session Manager) and a custom inline-built policy granting s3:GetObject and s3:ListBucket on a single named application bucket.\n\nWhen to use:\n- Use to give an EC2 workload read access to one specific S3 bucket without embedding long-lived credentials on the instance\n- Use the SSM managed policy to enable Session Manager so administrators do not need SSH (port 22) open to the instance\n\nBest practices:\n- Attach permissions to EC2 via an instance profile, not by placing access keys on the host\n- Prefer SSM Session Manager over opening port 22 for shell access — it replaces SSH and leaves an auditable trail\n- Namespace roles with a path (e.g. /app/) and tag them (Environment, ManagedBy=terraform) for organization and cleanup\n\nSecurity considerations:\n- Scope the S3 policy to the explicit bucket ARN and its objects (arn:aws:s3:::<bucket> and /*) rather than Resource: \"*\" — this is least privilege\n- Grant only the actions the workload needs (read-only GetObject/ListBucket here), not s3:*\n\nTerraform resources: aws_iam_role ec2_app (assume_role_policy Principal Service=ec2.amazonaws.com) + aws_iam_instance_profile + aws_iam_role_policy_attachment to AmazonSSMManagedInstanceCore + aws_iam_policy ec2_s3_read (s3:GetObject/ListBucket scoped to var.app_bucket_name).",
+      "tags": [
+        "iam",
+        "security",
+        "identity",
+        "access-control",
+        "aws-systems-manager"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/terraform/aws_iam_roles.tf",
+        "source_id": "tf-iam-001"
+      }
+    },
+    {
+      "id": "iam/aws_iam_roles::tf-iam-002",
+      "title": "CI/CD IAM Role via GitHub Actions OIDC — No Static Keys",
+      "domain": "iam",
+      "service": "AWS IAM",
+      "category": "AWS IAM — CI/CD Roles",
+      "content": "CI/CD IAM Role via GitHub Actions OIDC — No Static Keys\n\nCreates an IAM role that GitHub Actions assumes through OIDC federation using sts:AssumeRoleWithWebIdentity against the token.actions.githubusercontent.com OIDC provider. Trust is constrained by a StringLike condition on the token `sub` (repo:my-org/my-repo:*) and a StringEquals condition on `aud` (sts.amazonaws.com). The attached policy grants ECR push/pull actions scoped to the environment's repository path.\n\nWhen to use:\n- Use for CI/CD pipelines that deploy to AWS so the pipeline authenticates via short-lived OIDC tokens instead of long-lived IAM user access keys\n- Use when the pipeline must push container images to ECR and pull them back during deploy\n\nBest practices:\n- Prefer OIDC web-identity federation over storing static AWS access keys in CI secrets — there are no long-lived credentials to rotate or leak\n- Scope the ECR object actions (BatchCheckLayerAvailability, PutImage, UploadLayerPart, BatchGetImage, GetDownloadUrlForLayer, etc.) to the specific repository ARN path (repository/${var.environment}/*)\n\nSecurity considerations:\n- Restrict the trust policy `sub` to your exact org/repo (repo:my-org/my-repo:*) — never use \"*\", which would let any GitHub repo assume the role\n- ecr:GetAuthorizationToken requires Resource \"*\" by API design; keep all other ECR actions scoped to the repository path so a token leak cannot reach unrelated repositories\n\nTerraform resources: data.aws_iam_openid_connect_provider.github + aws_iam_role github_actions_deploy (AssumeRoleWithWebIdentity, StringLike sub, StringEquals aud) + aws_iam_policy github_actions_ecr (GetAuthorizationToken on *, other ECR actions scoped to repository/${env}/*).",
+      "tags": [
+        "iam",
+        "security",
+        "identity",
+        "access-control",
+        "aws-iam"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/terraform/aws_iam_roles.tf",
+        "source_id": "tf-iam-002"
+      }
+    },
+    {
+      "id": "iam/aws_iam_roles::tf-iam-003",
+      "title": "EKS Worker Node IAM Role — Required Managed Policies",
+      "domain": "iam",
+      "service": "AWS EKS",
+      "category": "AWS IAM — EKS Roles",
+      "content": "EKS Worker Node IAM Role — Required Managed Policies\n\nCreates an IAM role assumable by the EC2 service for EKS worker nodes and attaches the three AWS-managed policies EKS nodes require: AmazonEKSWorkerNodePolicy (node registration), AmazonEKS_CNI_Policy (VPC CNI pod networking), and AmazonEC2ContainerRegistryReadOnly (pull images from ECR).\n\nWhen to use:\n- Use as the instance role for EKS managed or self-managed worker nodes that must join the cluster, run the VPC CNI, and pull images from ECR\n\nBest practices:\n- Attach exactly the three required managed policies (worker node, CNI, ECR read-only) — these are the documented minimum for nodes to function\n\nSecurity considerations:\n- Permissions on the node role apply to every pod scheduled on the node; use IRSA (IAM Roles for Service Accounts) to grant application-specific AWS permissions at the pod level instead of broadening this node role\n\nTerraform resources: aws_iam_role eks_node (assume by ec2.amazonaws.com) + role_policy_attachments to AmazonEKSWorkerNodePolicy, AmazonEKS_CNI_Policy, AmazonEC2ContainerRegistryReadOnly.",
+      "tags": [
+        "iam",
+        "security",
+        "identity",
+        "access-control",
+        "aws-eks"
+      ],
+      "importance": "high",
+      "cloud_provider": "aws",
+      "resource_type": "terraform",
+      "chunk_hint": "start",
+      "source": {
+        "file": "rag/corpus/terraform/aws_iam_roles.tf",
+        "source_id": "tf-iam-003"
+      }
+    }
+  ]
+}
