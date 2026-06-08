@@ -519,6 +519,14 @@ class OrchestratorAgent(BaseAgent):
         tf_validation = tf_result.get("validation")
         tf_metadata = tf_result.get("generation_metadata")
         render_mode = tf_result.get("render_mode")
+        # Reliability contract: TerraformAgent ALWAYS returns artifacts now, even
+        # when terraform init/validate could not run. ``validation_status`` is
+        # one of passed | warnings | skipped | degraded | failed, and
+        # ``failure_classification`` is NETWORK_ERROR | PROVIDER_FETCH_FAILED |
+        # VALIDATION_FAILED | None. The artifacts above are ALREADY merged into
+        # ``infra`` so they will be persisted regardless of the outcome below.
+        validation_status = tf_result.get("validation_status")
+        failure_classification = tf_result.get("failure_classification")
         if render_mode:
             logs.append({
                 "step": "terraform_render_mode",
@@ -546,6 +554,33 @@ class OrchestratorAgent(BaseAgent):
             new_state["terraform_validation"] = tf_validation  # type: ignore[index]
         if tf_metadata is not None:
             new_state["terraform_generation_metadata"] = tf_metadata  # type: ignore[index]
+        if validation_status is not None:
+            new_state["terraform_validation_status"] = validation_status  # type: ignore[index]
+        if failure_classification is not None:
+            new_state["terraform_failure_classification"] = failure_classification  # type: ignore[index]
+
+        if validation_status == "degraded":
+            # Environment outage (registry unreachable). Artifacts are kept and
+            # the workflow continues — init/validate can be retried later.
+            logs.append({
+                "step": "terraform_validation_degraded",
+                "message": (
+                    f"Terraform validation degraded ({failure_classification}); "
+                    "generated artifacts preserved — workflow continues. "
+                    "Re-run validation when registry connectivity is restored."
+                ),
+            })
+        elif validation_status == "failed":
+            # Genuine config defect — flag the phase failed, but the artifacts
+            # remain in state (and will be persisted) for inspection/retry.
+            new_state["current_phase"] = "terraform_validation_failed"  # type: ignore[index]
+            logs.append({
+                "step": "terraform_validation_failed",
+                "message": (
+                    f"Terraform validation failed ({failure_classification}); "
+                    "artifacts preserved for inspection."
+                ),
+            })
         return new_state
 
     def _kubernetes_phase_node(self, state: OrchestratorState) -> OrchestratorState:
@@ -1833,13 +1868,41 @@ class OrchestratorAgent(BaseAgent):
     # ═══════════════════════════════════════════════════════════════════════════
 
     def run_docker_phase(self, prior_state: dict) -> dict:
-        """Run ONLY the Docker (InfrastructureAgent) phase and return updated state."""
+        """Run ONLY the Docker (InfrastructureAgent) phase and return updated state.
+
+        Docker generation NEVER fails the workflow: ``InfrastructureAgent.run``
+        degrades to deterministic artifacts on LLM failure, so this phase always
+        completes. ``state["docker_phase"]`` carries the completion contract
+        (status / used_llm / fallback_used) for the orchestration service + UI.
+        """
         state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
         logger.info("[OrchestratorAgent] run_docker_phase — starting")
         state = self._infrastructure_node(state)
         state["current_phase"] = "docker_completed"
+
+        infra = state.get("infra") or {}
+        used_llm = bool(infra.get("used_llm", True))
+        fallback_used = bool(infra.get("fallback_used", False))
+        generation_mode = infra.get("generation_mode", "llm")
+        phase_status = "completed" if (used_llm and not fallback_used) else "completed_with_fallback"
+        state["docker_phase"] = {  # type: ignore[typeddict-unknown-key]
+            "status": phase_status,
+            "used_llm": used_llm,
+            "fallback_used": fallback_used,
+            "generation_mode": generation_mode,
+        }
+
         logs = list(state.get("logs", []))
-        logs.append({"step": "phase_checkpoint", "message": "Docker phase complete — awaiting user approval"})
+        if phase_status == "completed_with_fallback":
+            logs.append({
+                "step": "phase_checkpoint",
+                "message": (
+                    f"Docker phase complete via deterministic fallback "
+                    f"(mode={generation_mode}, used_llm={used_llm}) — awaiting user approval"
+                ),
+            })
+        else:
+            logs.append({"step": "phase_checkpoint", "message": "Docker phase complete — awaiting user approval"})
         state["logs"] = logs
         return state
 

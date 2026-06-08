@@ -204,14 +204,57 @@ async def _run_terraform_phase(job: ExecutionJob, *, steps_name: str) -> Optiona
     ok = False
     results: list[dict] = []
     error: Optional[str] = None
+    failure_classification: Optional[str] = None
     env_error: Optional[Exception] = None
     plan_json: Optional[str] = None
     infrastructure_summary: Optional[dict] = None
     try:
         await _publish(f"== {phase} starting (artifact {artifact_id}) ==")
+        # DB-authoritative rehydrate (no filesystem-trust). The persisted
+        # ``terraform`` Artifact rows are the SINGLE source of truth for the
+        # generated HCL; ``generated_terraform/<id>/`` is only a process-local
+        # projection that can be stale (a re-generation bumped the DB), partial,
+        # or wiped by a restart — and the generation step also leaves inert
+        # canonical-key-named files there. So we ALWAYS rebuild the working
+        # directory from the DB before running terraform: validate/plan never run
+        # against whatever happens to be sitting on disk. Only when the DB holds
+        # no terraform artifacts do we fall back to an existing on-disk dir.
+        from backend.app.services.core.artifact_persistence_service import (
+            ArtifactPersistenceService as _APS,
+        )
+        db_rh = SessionLocal()
+        try:
+            tf_files = _APS.get_terraform_files(
+                db_rh, project_id=job.project_id, workflow_id=workflow_id,
+            )
+        finally:
+            db_rh.close()
+        if tf_files:
+            svc.rehydrate(artifact_id, tf_files)
+            await _publish(
+                f"== rehydrated {len(tf_files)} terraform file(s) from DB (authoritative) =="
+            )
+        elif (not artifact_dir.exists()) or not any(artifact_dir.glob("*.tf")):
+            await _publish(
+                "WARN: no terraform artifacts in DB and no on-disk HCL to "
+                "rehydrate — terraform will likely fail"
+            )
         ok, results = await stream_terraform_steps(artifact_dir, steps, _publish)
         if not ok:
             error = "terraform reported a non-zero exit — see logs"
+            # Classify the failure (NETWORK_ERROR / PROVIDER_FETCH_FAILED /
+            # VALIDATION_FAILED) from the captured terraform output so a registry
+            # outage is reported as a transient/recoverable problem rather than a
+            # config defect.
+            from backend.app.services.terraform_generation.validators import (
+                classify_terraform_output,
+            )
+            combined = "\n".join(
+                str(r.get("output") or "") for r in results if not r.get("ok")
+            )
+            failure_classification = classify_terraform_output(combined)
+            if failure_classification:
+                await _publish(f"== failure classified as {failure_classification} ==")
         elif steps_name == "terraform_plan":
             # Plan succeeded → derive a human-readable Infrastructure Summary.
             # A failure here (unparseable plan, terraform show error) must NOT
@@ -240,6 +283,7 @@ async def _run_terraform_phase(job: ExecutionJob, *, steps_name: str) -> Optiona
             results=results,
             artifact_id=artifact_id,
             error=error,
+            failure_classification=failure_classification,
             plan_json=plan_json,
             infrastructure_summary=infrastructure_summary,
         )

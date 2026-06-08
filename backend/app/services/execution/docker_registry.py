@@ -58,7 +58,9 @@ async def docker_login(
     Run `docker login` and return (success, output).
     registry_url may be empty for Docker Hub.
     """
-    cmd = ["docker", "login", "--username", username, "--password-stdin"]
+    from .docker_connectivity import resolve_docker_cli
+
+    cmd = [resolve_docker_cli(), "login", "--username", username, "--password-stdin"]
     if registry_url:
         cmd.append(registry_url)
 

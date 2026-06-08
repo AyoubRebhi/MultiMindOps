@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import relationship
@@ -8,15 +8,29 @@ from sqlalchemy.sql import func
 
 from backend.app.database.base import Base
 
+# JSONB on Postgres (production); plain JSON on SQLite (tests). Same pattern as
+# Artifact / ExecutionJob — lets the golden-path test exercise the real
+# Workflow table against an in-memory session instead of mocks.
+#
+# NOTE: each column gets a FRESH type instance — the mutable extension keys its
+# listeners by the type instance, so sharing one between a MutableDict and a
+# MutableList column breaks coercion.
+def _json_variant():
+    return JSONB().with_variant(JSON(), "sqlite")
+
 
 class Workflow(Base):
     """Execution instance scoped to a Project.
 
     A Project owns many Workflows. Each Workflow represents one run (or
-    re-run) of the orchestration graph or a subset of phases. ``phases_state``
-    stores per-phase metadata (status, last artifact_id, last duration, etc.)
-    so phase-level reruns can skip unchanged phases without re-executing the
-    whole graph.
+    re-run) of the orchestration graph or a subset of phases.
+
+    ``phases_state`` is the SINGLE SOURCE OF TRUTH for phase status. Every
+    surface — the project workflow router, the Docker build (execution.py),
+    and the Terraform job worker — records its phase outcome here, so the
+    authoritative answer to "what phase is this run in / did the build pass"
+    lives in exactly one place. ``Task.workflow_state`` is execution scratch
+    only (see ``backend/app/models/task.py``), not a source of truth.
     """
 
     __tablename__ = "workflows"
@@ -33,8 +47,8 @@ class Workflow(Base):
     execution_mode = Column(String, nullable=False, default="full")
 
     # Per-phase state map: { "DOCKER": {"status": "completed", "artifact_id": "...", ...}, ... }
-    phases_state = Column(MutableDict.as_mutable(JSONB), nullable=False, default=dict)
-    logs = Column(MutableList.as_mutable(JSONB), nullable=False, default=list)
+    phases_state = Column(MutableDict.as_mutable(_json_variant()), nullable=False, default=dict)
+    logs = Column(MutableList.as_mutable(_json_variant()), nullable=False, default=list)
     error_message = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

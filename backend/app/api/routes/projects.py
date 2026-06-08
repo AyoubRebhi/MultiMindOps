@@ -55,9 +55,12 @@ from backend.app.services.core.project_bootstrap_service import (
 )
 from backend.app.services.core.project_context_service import ProjectContextService
 from backend.app.services.core.project_service import ProjectService
+from backend.app.services.core.task_service import TaskService
 from backend.app.services.core.workflow_orchestration_service import (
     WorkflowOrchestrationService,
 )
+from backend.app.services.core.workflow_replay_service import WorkflowReplayService
+from backend.app.services.core.workflow_trace_service import WorkflowTraceService
 
 router = APIRouter(prefix="/api/projects", tags=["Projects"])
 
@@ -251,10 +254,16 @@ def start_workflow(
     current_user: User = Depends(get_current_user),
     _member: ProjectMember = Depends(require_project_contributor),  # DEVELOPER+
 ):
-    """Start a new workflow for the project (runs architecture-decision phase)."""
+    """Start a workflow for the project (runs architecture-decision phase).
+
+    Enforces one active workflow per project: if the project already has an
+    active (non-terminal) workflow — e.g. the one created by project-creation
+    bootstrap — that existing workflow is returned instead of creating a
+    duplicate. A new workflow is created only when none is active.
+    """
     project = _load_or_404(db, project_id, current_user)
     try:
-        workflow, task, state = WorkflowOrchestrationService.start_workflow(
+        workflow, task, state = WorkflowOrchestrationService.get_or_create_workflow(
             db,
             project=project,
             user=current_user,
@@ -335,7 +344,14 @@ def run_workflow_phase(
     current_user: User = Depends(get_current_user),
     _member: ProjectMember = Depends(require_project_contributor),  # DEVELOPER+
 ):
-    """Run (or rerun) a single phase. Does NOT restart the orchestration graph."""
+    """Run (or rerun) a single phase. Does NOT restart the orchestration graph.
+
+    Phase-completion contract — the DOCKER phase NEVER returns 500 for an LLM
+    problem (rate-limit, token exhaustion, invalid JSON, exhausted fallback
+    chain). ``InfrastructureAgent`` degrades to deterministic artifacts, so the
+    phase always completes (``completed`` or ``completed_with_fallback``). A 500
+    here means infrastructure is genuinely broken (DB / disk / permissions).
+    """
     project, workflow, task = _load_workflow_and_task(db, project_id, workflow_id, current_user)
     try:
         state, persisted_ids = WorkflowOrchestrationService.run_phase(
@@ -348,6 +364,9 @@ def run_workflow_phase(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        # Reaching here for DOCKER implies a true infrastructure failure (the
+        # generation path itself is non-raising); surface it as a 500 so it is
+        # not silently swallowed.
         raise HTTPException(status_code=500, detail=f"Phase '{phase}' failed: {exc}")
 
     return WorkflowPhaseRunResponse(
@@ -373,6 +392,71 @@ def get_workflow(
 ):
     _, workflow, _ = _load_workflow_and_task(db, project_id, workflow_id, current_user)
     return workflow
+
+
+def _load_workflow_lenient(db: Session, project_id: str, workflow_id: str, current_user: User):
+    """Load project + workflow (+ optional backing task).
+
+    Unlike ``_load_workflow_and_task`` this does NOT 422 when a workflow has no
+    backing task — the observability/replay layer degrades gracefully (terraform
+    replay still works; docker replay is skipped).
+    """
+    project = _load_or_404(db, project_id, current_user)
+    workflow = WorkflowOrchestrationService.get_workflow_for_project(db, project.id, workflow_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    task = WorkflowOrchestrationService.get_backing_task(db, workflow)
+    return project, workflow, task
+
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/debug",
+    response_model=None,
+)
+def get_workflow_debug(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Unified observability view for a workflow.
+
+    Returns the full phase timeline, the DB-backed artifacts list, failure
+    classifications, the materialised execution trace, and an artifact
+    completeness audit. Read-only — it materialises the live trace from the
+    authoritative ``Workflow.phases_state`` but never alters workflow state.
+    """
+    _project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    task_state = TaskService.load_workflow_state(db, task) if task else {}
+    return WorkflowTraceService.build_debug_payload(
+        db, workflow=workflow, task_state=task_state,
+    )
+
+
+@router.post(
+    "/{project_id}/workflows/{workflow_id}/replay",
+    response_model=None,
+)
+def replay_workflow(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_contributor),  # DEVELOPER+
+):
+    """Deterministically re-execute a workflow from DB artifacts ONLY.
+
+    Re-runs terraform validate/plan and the docker build using the artifacts
+    already persisted in the database. Performs NO LLM calls and NO regeneration
+    of terraform/Dockerfile. Returns a summary of the re-enqueued steps.
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    try:
+        return WorkflowReplayService.replay(
+            db, project=project, workflow=workflow, task=task,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Replay failed: {exc}")
 
 
 # ─── Artifact detail with version history ────────────────────────────────────

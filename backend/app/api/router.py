@@ -12,8 +12,13 @@ from backend.app.api.routes.jobs import router as jobs_router
 from backend.app.api.routes.releases import router as releases_router
 from backend.app.api.routes.projects import router as projects_router
 from backend.app.api.routes.tasks import router as tasks_router
-from backend.app.api.routes.terraform import router as terraform_router
-from backend.app.api.routes.workflow import router as workflow_router
+
+# NOTE: the legacy task-scoped `/workflow/*` router and the unauthenticated
+# `/terraform/*` router are intentionally NOT mounted. They were duplicate
+# workflow surfaces that bypassed the single source of truth
+# (`Workflow.phases_state`). The canonical surface is the project-scoped
+# `POST /api/projects/{pid}/workflows...` (projects_router). The route modules
+# remain on disk (dormant) but are unreachable.
 
 api_router = APIRouter()
 api_router.include_router(health_router)
@@ -23,8 +28,8 @@ api_router.include_router(auth_router)
 api_router.include_router(artifacts_router)
 api_router.include_router(tasks_router)
 api_router.include_router(evaluation_router)
-api_router.include_router(workflow_router, prefix="/api")
-# Project-centric routes — defines its own full /api/projects prefix.
+# Project-centric routes — defines its own full /api/projects prefix. This is
+# the ONLY workflow surface.
 api_router.include_router(projects_router)
 # Credentials routes are project-scoped — full path is /api/projects/{pid}/credentials.
 # Mounted alongside projects_router so the project-role gate applies.
@@ -39,5 +44,3 @@ api_router.include_router(execution_router)
 api_router.include_router(corrector_router)
 # Editable artifact persistence (/api/tasks/{id}/artifacts)
 api_router.include_router(artifact_edit_router)
-# Minimal Terraform generation + validation pipeline (/terraform/...)
-api_router.include_router(terraform_router)

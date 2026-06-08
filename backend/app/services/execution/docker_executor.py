@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Awaitable
 
+from .docker_connectivity import ensure_docker_daemon, resolve_docker_cli
 from .docker_registry import docker_login, generate_image_tag
 from .docker_streamer import LogStreamManager, classify_log_line, log_stream_manager
 from .execution_models import (
@@ -871,6 +872,10 @@ class DockerExecutor:
         and return the exit code. Raises asyncio.TimeoutError on timeout.
         """
         import time as _time
+        # Resolve the docker binary so the build runs even when the worker process
+        # did not inherit the interactive shell PATH (Windows service / sandbox).
+        if cmd and cmd[0] == "docker":
+            cmd = [resolve_docker_cli(), *cmd[1:]]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -955,36 +960,16 @@ class DockerExecutor:
         """
         logger.info("[DockerExecutor] Validating Docker environment for task %s", self.task_id)
 
-        # 1. Check Docker daemon connectivity
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "docker", "info",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                proc.kill()
-                return "Docker daemon did not respond within 10s. Is Docker Desktop running?"
-
-            if proc.returncode != 0:
-                stderr = await proc.stderr.read() if proc.stderr else b""
-                err_msg = stderr.decode(errors="replace").strip()
-                logger.error("[DockerExecutor] Docker info failed: %s", err_msg)
-                return (
-                    "Docker daemon is not running. "
-                    "Please start Docker Desktop and try again. "
-                    f"Details: {err_msg[:200]}"
-                )
-            logger.info("[DockerExecutor] Docker daemon is running")
-        except FileNotFoundError:
-            return (
-                "Docker command not found. "
-                "Please install Docker Desktop and ensure 'docker' is in your PATH."
-            )
-        except Exception as exc:
-            return f"Docker environment check failed: {exc}"
+        # 1. Check Docker daemon connectivity via the dedicated connectivity layer.
+        #    It probes with `docker version` through communicate() (never deadlocks
+        #    on a full pipe buffer — the failure mode of the old `docker info` +
+        #    proc.wait() check), resolves the docker binary even when PATH is not
+        #    inherited, honours DOCKER_HOST, and returns a precise remediation
+        #    message when the daemon is unreachable.
+        daemon_ok, daemon_err = await ensure_docker_daemon()
+        if not daemon_ok:
+            return daemon_err or "Docker daemon is unreachable."
+        logger.info("[DockerExecutor] Docker daemon is reachable")
 
         # 2. Validate Dockerfile artifact exists
         if not self.artifacts.get("dockerfile"):

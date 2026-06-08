@@ -173,6 +173,18 @@ class Settings(BaseSettings):
     # When true, push the image after a successful build
     DOCKER_PUSH_ON_SUCCESS: bool = False
 
+    # ── Docker daemon connectivity (see services/execution/docker_connectivity.py) ──
+    # How long the pre-build daemon probe (`docker version`) may take before it is
+    # treated as unreachable. Larger than the old hard-coded 10s to tolerate a cold
+    # Docker Desktop / WSL2 backend.
+    DOCKER_DAEMON_PROBE_TIMEOUT_SECONDS: float = 20.0
+    # Optional explicit fallback endpoint used when the OS-default endpoint (the
+    # Windows named pipe / unix socket) is unreachable from the backend process —
+    # e.g. "tcp://localhost:2375" when Docker Desktop exposes the daemon over TCP.
+    # Empty disables the fallback. When the fallback works, it is applied to the
+    # process environment so the actual `docker build` connects to it too.
+    DOCKER_HOST_FALLBACK: str = ""
+
     # ── AWS credentials (Terraform plan) ─────────────────────────────────────
     # Long-term IAM user keys (from `aws configure`) the AWS provider uses when
     # Terraform runs init/plan. These are overlaid onto the terraform subprocess

@@ -103,11 +103,56 @@ class InfrastructureAgent(EnhancedBaseAgent):
         """
         Generate Docker artifacts for the given prompt and plan.
 
+        PHASE CONTRACT — Docker generation MUST NEVER raise. LLM providers
+        (rate-limit / token exhaustion / invalid JSON / fallback-chain failure)
+        are treated as *non-fatal*: the structured generator's deterministic
+        per-section fallbacks and the template-based artifact builder always
+        yield a usable Dockerfile. Only a catastrophic, unexpected error reaches
+        the outer guard below, which still returns a minimal safe Dockerfile
+        rather than propagating a 500 up the workflow.
+
         Returns the same dict shape as before, plus:
-          - ``infrastructure_generation`` — structured pipeline trace (new in Phase 1)
+          - ``infrastructure_generation`` — structured pipeline trace (Phase 1)
           - ``react_iterations``          — number of ReAct iterations used
           - ``validation_summary``        — per-artifact validation results
+          - ``used_llm``                  — True if the LLM contributed content
+          - ``fallback_used``             — True if any deterministic fallback was used
+          - ``generation_mode``           — "llm" | "llm_with_fallback" |
+                                            "degraded" | "deterministic" |
+                                            "emergency_fallback"
         """
+        try:
+            return self._run_generation(
+                prompt=prompt,
+                plan=plan,
+                infrastructure_context=infrastructure_context,
+                approved_artifacts=approved_artifacts,
+            )
+        except Exception as exc:  # last-resort safety net — must never propagate
+            logger.error(
+                "[InfrastructureAgent] Generation pipeline failed unexpectedly "
+                "(%s: %s) — emitting deterministic safe Dockerfile so the Docker "
+                "phase never breaks the workflow",
+                exc.__class__.__name__,
+                exc,
+                exc_info=True,
+            )
+            return self._emergency_fallback_response(
+                prompt=prompt,
+                plan=plan,
+                infrastructure_context=infrastructure_context,
+                approved_artifacts=approved_artifacts,
+                error=exc,
+            )
+
+    def _run_generation(
+        self,
+        prompt: str,
+        plan: Dict[str, Any],
+        infrastructure_context: Optional[Dict[str, Any]] = None,
+        approved_artifacts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Core generation pipeline. See :meth:`run` for the phase contract."""
         # ── 1. Map context ────────────────────────────────────────────────────
         mapped_context = self.context_mapper.map(
             prompt=prompt,
@@ -254,13 +299,29 @@ class InfrastructureAgent(EnhancedBaseAgent):
             )
 
         # ── 3. RAG retrieval for ReAct loop (Qdrant → ChromaDB fallback) ─────
+        # RAG is best-effort enrichment: a vector-store outage must NOT fail the
+        # Docker phase. Degrade to an empty (disabled) retrieval on any error.
         artifact_keys = self._requested_artifact_keys(mapped_context)
-        qdrant_result = self._rag_pipeline.retrieve_for_agent(mapped_context, artifact_keys)
-        rag_result = (
-            qdrant_result
-            if qdrant_result.get("available")
-            else self.template_retrieval.retrieve_for_context(mapped_context, artifact_keys)
-        )
+        try:
+            qdrant_result = self._rag_pipeline.retrieve_for_agent(mapped_context, artifact_keys)
+            rag_result = (
+                qdrant_result
+                if qdrant_result.get("available")
+                else self.template_retrieval.retrieve_for_context(mapped_context, artifact_keys)
+            )
+        except Exception as exc:
+            logger.warning(
+                "[InfrastructureAgent] RAG retrieval failed (%s) — continuing without templates",
+                exc,
+            )
+            qdrant_result = {"available": False}
+            rag_result = {
+                "enabled": False,
+                "available": False,
+                "reason": "rag_error",
+                "retrievals": {},
+                "template_ids": [],
+            }
 
         # ── 4. Build ReAct loop prompt ────────────────────────────────────────
         compact_plan = self._compact_plan(plan)
@@ -341,14 +402,31 @@ Approved artifacts to generate (Docker artifacts only):
             iterations_used[0] += 1
             return evaluate_fn(response)
 
-        response = self.react_loop(
-            llm=self.llm,
-            system_prompt=self.prompt_template,
-            user_prompt=user_prompt,
-            evaluate_fn=_counted_evaluate,
-            temperature=0.2,
-            max_tokens=8000,
-        )
+        # The ReAct loop is the ONLY remaining hard LLM dependency. When every
+        # provider in the fallback chain is exhausted (rate-limit / token cap /
+        # invalid JSON), react_loop re-raises. We catch it here and continue with
+        # an empty response: the structured Dockerfile (already produced via
+        # deterministic section fallbacks if needed) plus the template-based
+        # artifact builder downstream still yield a complete, valid artifact set.
+        react_llm_failed = False
+        try:
+            response = self.react_loop(
+                llm=self.llm,
+                system_prompt=self.prompt_template,
+                user_prompt=user_prompt,
+                evaluate_fn=_counted_evaluate,
+                temperature=0.2,
+                max_tokens=8000,
+            )
+        except Exception as exc:
+            react_llm_failed = True
+            logger.warning(
+                "[InfrastructureAgent] ReAct loop failed — LLM unavailable (%s). "
+                "Degrading to deterministic Docker artifacts (non-fatal): %s",
+                exc.__class__.__name__,
+                exc,
+            )
+            response = {"artifacts": {}, "generated_artifacts": []}
 
         # ── 6. Inject structured Dockerfile (override ReAct result) ──────────
         if structured_dockerfile:
@@ -399,6 +477,40 @@ Approved artifacts to generate (Docker artifacts only):
             fallback_used = fallback_used or used
             if reason:
                 fallback_reasons["docker_compose"] = reason
+
+        # ── 7-pre. Template-token resolution sweep (artifact contract) ─────────
+        # Every artifact that reaches persistence MUST be fully rendered. The
+        # structured pipeline normally guarantees this, but a stray unresolved
+        # token would otherwise block the build at the PrebuildGate. Strip any
+        # residual token lines here so the persisted Dockerfile is always clean.
+        artifacts, _template_sanitized, _sanitized_lines = self._sanitize_unresolved_templates(artifacts)
+        if _template_sanitized:
+            fallback_used = True
+            fallback_reasons.setdefault("dockerfile", "template_token_sanitized")
+
+        # ── 7a. Dockerfile guarantee — the Docker phase MUST yield a Dockerfile ─
+        # Selection above can still leave the Dockerfile empty when BOTH the LLM
+        # output and the template builder produced nothing (e.g. total LLM outage
+        # with a sparse context, or needs_dockerfile not flagged). Backfill it,
+        # in descending order of quality, so a Dockerfile ALWAYS exists.
+        if not str(artifacts.get("dockerfile") or "").strip():
+            structured_raw = (
+                str(structured_result.artifact or "").strip()
+                if structured_result is not None
+                else ""
+            )
+            artifacts["dockerfile"] = (
+                structured_raw
+                or str(fallback_artifacts.get("dockerfile") or "").strip()
+                or self._minimal_safe_dockerfile(mapped_context)
+            )
+            fallback_used = True
+            fallback_reasons.setdefault("dockerfile", "dockerfile_guarantee")
+            logger.warning(
+                "[InfrastructureAgent] Dockerfile guarantee engaged — no LLM "
+                "Dockerfile available; backfilled deterministic Dockerfile (%d chars)",
+                len(artifacts["dockerfile"]),
+            )
 
         # ── 7b. Dockerfile-aware build-strategy reconciliation ────────────────
         # The detector ran at step 1c with only known_files. Now that the
@@ -484,7 +596,210 @@ Approved artifacts to generate (Docker artifacts only):
         if build_artifact_ctx is not None:
             response["build_artifact_context"] = build_artifact_ctx.to_dict()
 
+        # ── 10. Phase-completion contract metadata ────────────────────────────
+        # used_llm        — did the LLM contribute any content this run?
+        # fallback_used   — was any deterministic fallback substituted?
+        # generation_mode — coarse provenance for the UI / phase status mapping.
+        structured_meta = (infrastructure_generation or {}).get("generation_metadata") or {}
+        structured_llm_contributed = (
+            structured_result is not None
+            and structured_meta.get("dynamic_sections", 0)
+            > structured_meta.get("fallback_sections", 0)
+        )
+        used_llm = (not react_llm_failed) or structured_llm_contributed
+        fallback_used = bool(fallback_used or react_llm_failed)
+
+        if react_llm_failed:
+            generation_mode = "degraded"
+        elif not used_llm:
+            generation_mode = "deterministic"
+        elif fallback_used:
+            generation_mode = "llm_with_fallback"
+        else:
+            generation_mode = "llm"
+
+        response["used_llm"] = bool(used_llm)
+        response["fallback_used"] = fallback_used
+        response["generation_mode"] = generation_mode
+        response["template_sanitized"] = bool(_template_sanitized)
+        if _sanitized_lines:
+            response["template_sanitized_lines"] = _sanitized_lines
+
         return response
+
+    # ── Artifact contract enforcement ─────────────────────────────────────────
+
+    def _sanitize_unresolved_templates(
+        self, artifacts: Dict[str, str]
+    ) -> tuple[Dict[str, str], bool, List[str]]:
+        """Strip any artifact line that still carries an unresolved template token.
+
+        Generation should never emit ``{{ }}`` / ``{% %}`` / ``${{ }}`` style
+        tokens, but if one slips through (e.g. an LLM section value that itself
+        contained a placeholder), this guarantees the contract: every persisted
+        artifact is fully rendered. Offending lines are removed and logged.
+        Structural directives (FROM / WORKDIR / COPY / CMD) come from
+        deterministic sections and never carry tokens, so removal only affects
+        optional directives whose dynamic value failed to render.
+        """
+        try:
+            from backend.app.services.artifact_generation.validators.template_artifact_validator import (
+                TemplateArtifactValidator,
+            )
+            result = TemplateArtifactValidator().validate(artifacts)
+        except Exception as exc:
+            logger.warning("[InfrastructureAgent] Template sanitization scan failed: %s", exc)
+            return artifacts, False, []
+
+        if result.valid:
+            return artifacts, False, []
+
+        offending: Dict[str, set] = {}
+        for issue in result.issues:
+            offending.setdefault(issue.artifact, set()).add(issue.line_number)
+
+        removed: List[str] = []
+        for name, line_numbers in offending.items():
+            content = artifacts.get(name) or ""
+            kept_lines: List[str] = []
+            for idx, line in enumerate(content.splitlines(), start=1):
+                if idx in line_numbers:
+                    removed.append(f"{name}:{idx}: {line.strip()}")
+                    continue
+                kept_lines.append(line)
+            artifacts[name] = "\n".join(kept_lines)
+
+        logger.warning(
+            "[InfrastructureAgent] Sanitized %d unresolved template line(s) before "
+            "persistence — artifacts: %s",
+            len(removed),
+            sorted(offending.keys()),
+        )
+        return artifacts, True, removed
+
+    # ── Deterministic safety net ──────────────────────────────────────────────
+
+    def _minimal_safe_dockerfile(self, mapped_context: Optional[Dict[str, Any]] = None) -> str:
+        """Last-resort, dependency-free Dockerfile.
+
+        Used only when neither the structured generator nor the template builder
+        produced a Dockerfile (e.g. a total LLM outage with a sparse context).
+        Intentionally minimal but build-safe: slim base, no injected secrets,
+        best-effort dependency install that never hard-fails the image build.
+        """
+        ctx = mapped_context or {}
+        main_service = ctx.get("main_service") or {}
+        language = str(main_service.get("language") or "").lower()
+        port = main_service.get("port") or 8000
+
+        if language == "java":
+            return "\n".join([
+                "FROM eclipse-temurin:17-jre",
+                "WORKDIR /app",
+                "COPY . .",
+                f"EXPOSE {port}",
+                'CMD ["java", "-jar", "app.jar"]',
+            ])
+        if language in ("javascript", "typescript", "node", "nodejs"):
+            return "\n".join([
+                "FROM node:20-slim",
+                "WORKDIR /app",
+                "COPY . .",
+                "RUN npm install --omit=dev || true",
+                f"EXPOSE {port}",
+                'CMD ["node", "server.js"]',
+            ])
+        # default → Python (the most common service in this platform)
+        return "\n".join([
+            "FROM python:3.11-slim",
+            "WORKDIR /app",
+            "COPY . .",
+            "RUN pip install --no-cache-dir -r requirements.txt || true",
+            "ENV PYTHONUNBUFFERED=1",
+            f"EXPOSE {port}",
+            'CMD ["python", "app.py"]',
+        ])
+
+    def _emergency_fallback_response(
+        self,
+        *,
+        prompt: str,
+        plan: Dict[str, Any],
+        infrastructure_context: Optional[Dict[str, Any]],
+        approved_artifacts: Optional[List[str]],
+        error: Exception,
+    ) -> Dict[str, Any]:
+        """Build a complete, valid Docker artifact set without the LLM.
+
+        Invoked only when the main generation pipeline raises unexpectedly. It
+        re-derives a deterministic artifact set so callers always receive a
+        Dockerfile and the workflow can proceed to the build step.
+        """
+        mapped_context: Dict[str, Any] = {}
+        fallback_artifacts: Dict[str, str] = {}
+        try:
+            mapped_context = self.context_mapper.map(
+                prompt=prompt,
+                plan=plan,
+                infrastructure_context=infrastructure_context,
+                approved_artifacts=approved_artifacts,
+            )
+            fallback_artifacts = self.artifact_builder.build_fallback_artifacts(mapped_context)
+        except Exception as map_exc:
+            logger.warning(
+                "[InfrastructureAgent] Emergency context mapping failed (%s) — "
+                "using context-free minimal Dockerfile",
+                map_exc,
+            )
+
+        artifacts: Dict[str, str] = {
+            "dockerfile": (
+                str(fallback_artifacts.get("dockerfile") or "").strip()
+                or self._minimal_safe_dockerfile(mapped_context)
+            )
+        }
+        for key in ("dockerignore", "docker_compose", "env_example"):
+            value = str(fallback_artifacts.get(key) or "").strip()
+            if value:
+                artifacts[key] = value
+
+        try:
+            validation_summary = self.validation.aggregate_validation(
+                self.validation.validate_artifacts(artifacts)
+            )
+        except Exception:
+            validation_summary = {"status": "skipped", "issues": []}
+
+        try:
+            generated_artifacts = self._recompute_generated_artifacts(
+                [], artifacts, mapped_context
+            )
+        except Exception:
+            generated_artifacts = sorted(artifacts.keys())
+
+        return {
+            "artifacts": artifacts,
+            "generated_artifacts": generated_artifacts,
+            "requested_artifacts": mapped_context.get("requested_artifacts", []),
+            "artifact_targets": mapped_context.get("artifact_targets") or {},
+            "artifact_groups": {},
+            "context_used": mapped_context,
+            "rag": {
+                "enabled": False,
+                "available": False,
+                "reason": "emergency_fallback",
+                "template_ids_used": [],
+                "generated_with_rag": False,
+                "fallback_used": True,
+                "fallback_reasons": {"dockerfile": "emergency_fallback"},
+            },
+            "react_iterations": 0,
+            "validation_summary": validation_summary,
+            "used_llm": False,
+            "fallback_used": True,
+            "generation_mode": "emergency_fallback",
+            "generation_error": f"{error.__class__.__name__}: {error}",
+        }
 
     # ── ReAct quality evaluator ───────────────────────────────────────────────
 

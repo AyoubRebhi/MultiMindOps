@@ -20,28 +20,25 @@ import {
   Server,
   Database,
   HardDrive,
+  RefreshCcw,
 } from 'lucide-react'
-import {
-  useProjectRole,
-  useRunPhase,
-  useStartWorkflow,
-  useRefreshProjectWorkflows,
-} from '@/hooks/useProjects'
+import { useProjectRole, useStartWorkflow } from '@/hooks/useProjects'
 import { cn, timeAgo } from '@/lib/utils'
-import {
-  getWsTerraformUrl,
-  getWsExecutionUrl,
-  startDockerBuild,
-  getDockerBuildStatus,
-  type TerraformWsPhase,
-} from '@/services/workflowApi'
-import { tokenStorage } from '@/lib/tokenStorage'
+import { useWorkflowEngine, type WorkflowEngine } from '@/components/workflow/useWorkflowEngine'
+import type { PhaseStatus, PhasesState } from '@/components/workflow/workflowEvents'
 import {
   WorkflowProgressHeader,
   WorkflowGuidancePanel,
   PHASE_EXPLANATIONS,
 } from '@/components/workflow/WorkflowGuidance'
-import type { PhaseName, ProjectRole, WorkflowResponse } from '@/types/project'
+import { WorkflowTimeline } from '@/components/workflow/WorkflowTimeline'
+import { DockerBuildBlockedPanel } from '@/components/workflow/DockerBuildBlockedPanel'
+import type {
+  ArtifactResponse,
+  PhaseName,
+  ProjectRole,
+  WorkflowResponse,
+} from '@/types/project'
 
 const CONTRIBUTOR_ROLES = new Set<ProjectRole>([
   'DEVELOPER',
@@ -50,19 +47,14 @@ const CONTRIBUTOR_ROLES = new Set<ProjectRole>([
   'ADMIN',
 ])
 
-// Legacy / parallel phases — kept available under "Other phases" so they don't
-// clutter the guided Discovery → Infrastructure flow.
+// Optional, non-guided phases. Docker + the guided Terraform flow are first-class
+// elsewhere; these remain available (collapsed) without cluttering the main flow.
 const LEGACY_PHASE_BUTTONS: { phase: PhaseName; label: string; icon: React.ElementType }[] = [
-  { phase: 'DOCKER',     label: 'Docker',        icon: Container },
-  { phase: 'TERRAFORM',  label: 'Terraform (AI)', icon: Boxes },
-  { phase: 'KUBERNETES', label: 'Kubernetes',    icon: Boxes },
-  { phase: 'CICD',       label: 'CI/CD',         icon: ShieldCheck },
+  { phase: 'KUBERNETES', label: 'Kubernetes', icon: Boxes },
+  { phase: 'CICD',       label: 'CI/CD',      icon: ShieldCheck },
 ]
 
-// ── Phase grouping (Task 4) ───────────────────────────────────────────────────
-// Extensible group model. Group 3 (Delivery) and Group 4 (Governance) are
-// intentionally left out — the structure supports adding them later without a
-// rewrite.
+// ── Phase grouping ────────────────────────────────────────────────────────────
 interface GroupPhase {
   key: string
   label: string
@@ -92,18 +84,9 @@ const PHASE_GROUPS: PhaseGroup[] = [
       { key: 'TERRAFORM_PLAN',       label: 'Terraform Plan',       icon: FileSearch },
     ],
   },
-  // Group 3 — Delivery     → CI/CD              (future)
-  // Group 4 — Governance   → Security, Cost     (future)
 ]
 
-const TF_WS_PHASE: Partial<Record<string, TerraformWsPhase>> = {
-  TERRAFORM_VALIDATION: 'terraform_validate',
-  TERRAFORM_PLAN: 'terraform_plan',
-}
-
 // ── Status helpers ─────────────────────────────────────────────────────────────
-
-type PhaseStatus = 'completed' | 'failed' | 'running' | 'awaiting_input' | 'not_started'
 
 // Infrastructure Summary — the human-readable plan digest the backend embeds
 // into the TERRAFORM_PLAN phase entry after a successful `terraform plan`.
@@ -122,24 +105,11 @@ interface InfrastructureSummary {
   categories: SummaryCategory[]
 }
 
-interface PhaseEntry {
-  status?: string
-  updated_at?: string
-  task_id?: string
-  error?: string
-  infrastructure_summary?: InfrastructureSummary
-}
-type PhasesState = Record<string, PhaseEntry>
-
+/** Read a merged phase status off the engine's `phases` object. */
 function statusOf(s: PhasesState, key: string): PhaseStatus {
   const v = s[key]?.status
   if (v === 'completed' || v === 'failed' || v === 'running' || v === 'awaiting_input') return v
   return 'not_started'
-}
-
-/** The backing task id is stamped into phases_state by start_workflow. */
-function backingTaskId(s: PhasesState): string | null {
-  return s['ARCHITECTURE_DECISION']?.task_id ?? null
 }
 
 const STATUS_LABEL: Record<PhaseStatus, string> = {
@@ -181,7 +151,7 @@ function StatusDot({ status }: { status: PhaseStatus }) {
   return <Circle className="w-4 h-4 text-slate-300 dark:text-white/20" />
 }
 
-// ── Next-action computation (Task 3) ───────────────────────────────────────────
+// ── Next-action computation ─────────────────────────────────────────────────────
 
 type NextAction =
   | { kind: 'run'; phase: PhaseName; label: string }
@@ -206,21 +176,37 @@ function nextTerraformAction(s: PhasesState): NextAction {
   return { kind: 'done' }
 }
 
+function formatBuildDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}m ${s}s`
+}
+
 // ── Root ───────────────────────────────────────────────────────────────────────
 
 interface Props {
   projectId: string
   workflows: WorkflowResponse[]
+  /** Project artifacts — used by the engine-fed WorkflowTimeline counters. */
+  artifacts?: ArtifactResponse[]
 }
 
-export function WorkflowPanel({ projectId, workflows }: Props) {
+export function WorkflowPanel({ projectId, workflows, artifacts = [] }: Props) {
   const latest = workflows[0]
   const role = useProjectRole(projectId)
   const canRun = !!role && CONTRIBUTOR_ROLES.has(role)
   return (
     <div className="space-y-4">
       {canRun ? <StartWorkflowCard projectId={projectId} /> : <ReadOnlyHint role={role} />}
-      {latest && <ActiveWorkflowCard projectId={projectId} workflow={latest} canRun={canRun} />}
+      {latest && (
+        <ActiveWorkflowCard
+          projectId={projectId}
+          workflow={latest}
+          canRun={canRun}
+          artifacts={artifacts}
+        />
+      )}
       {workflows.length > 1 && <WorkflowHistory workflows={workflows.slice(1)} />}
     </div>
   )
@@ -297,13 +283,17 @@ function ActiveWorkflowCard({
   projectId,
   workflow,
   canRun,
+  artifacts,
 }: {
   projectId: string
   workflow: WorkflowResponse
   canRun: boolean
+  artifacts: ArtifactResponse[]
 }) {
-  const runPhase = useRunPhase(projectId, workflow.id)
-  const phasesState = (workflow.phases_state ?? {}) as PhasesState
+  // The single reactive engine instance for this workflow. Everything below is
+  // a pure renderer over `engine` — no component opens a socket or calls an API.
+  const engine = useWorkflowEngine(projectId, workflow, canRun)
+  const phases = engine.phases
 
   return (
     <div
@@ -326,60 +316,50 @@ function ActiveWorkflowCard({
         </div>
       </div>
 
+      {/* Read-only timeline, fed by the engine's merged state (single placement). */}
+      <WorkflowTimeline
+        workflow={{ ...workflow, phases_state: phases } as WorkflowResponse}
+        artifacts={artifacts}
+      />
+
       {/* High-level progress header — Discovery → Deployment */}
-      <WorkflowProgressHeader phasesState={phasesState} />
+      <WorkflowProgressHeader phasesState={phases} />
 
       {/* Guidance: where you are, what happened, what to do next */}
       <WorkflowGuidancePanel
-        phasesState={phasesState}
+        phasesState={phases}
         canRun={canRun}
-        onRunPhase={(phase) => runPhase.mutate(phase as PhaseName)}
-        isRunning={runPhase.isPending}
+        onRunPhase={(phase) => engine.runPhase(phase as PhaseName)}
+        isRunning={engine.runPhasePending}
       />
 
-      {/* Grouped phase overview (Task 2 + Task 4) */}
+      {/* Grouped phase overview */}
       {PHASE_GROUPS.map((group) => (
-        <PhaseGroupCard
-          key={group.key}
-          group={group}
-          phasesState={phasesState}
-          projectId={projectId}
-          runPhase={runPhase}
-          canRun={canRun}
-        />
+        <PhaseGroupCard key={group.key} group={group} engine={engine} />
       ))}
 
-      {/* Docker image build — reuses the existing build engine + execution WS */}
-      {statusOf(phasesState, 'DOCKER') === 'completed' && (
-        <DockerBuildSection projectId={projectId} phasesState={phasesState} canRun={canRun} />
+      {/* Docker: generation → review → build → live logs → completion */}
+      <DockerSection engine={engine} />
+
+      {engine.runPhaseError && (
+        <div className="text-xs text-red-600 dark:text-red-400">{engine.runPhaseError.message}</div>
       )}
 
-      {runPhase.error && (
-        <div className="text-xs text-red-600 dark:text-red-400">{runPhase.error.message}</div>
-      )}
-
-      {/* Legacy / parallel phases — tucked away so they don't clutter the flow */}
-      <OtherPhases phasesState={phasesState} runPhase={runPhase} canRun={canRun} />
+      {/* Optional, non-guided phases — collapsed so they don't clutter the flow */}
+      <OtherPhases engine={engine} />
     </div>
   )
 }
 
 // ── Grouped phase card ──────────────────────────────────────────────────────────
 
-function PhaseGroupCard({
-  group,
-  phasesState,
-  projectId,
-  runPhase,
-  canRun,
-}: {
-  group: PhaseGroup
-  phasesState: PhasesState
-  projectId: string
-  runPhase: ReturnType<typeof useRunPhase>
-  canRun: boolean
-}) {
+function PhaseGroupCard({ group, engine }: { group: PhaseGroup; engine: WorkflowEngine }) {
+  const phases = engine.phases
   const isInfra = group.key === 'infrastructure'
+  const planSummary =
+    statusOf(phases, 'TERRAFORM_PLAN') === 'completed'
+      ? (phases['TERRAFORM_PLAN']?.infrastructure_summary as InfrastructureSummary | undefined)
+      : undefined
   return (
     <div className="rounded-lg border border-slate-200 dark:border-white/[0.06] overflow-hidden">
       <div className="px-3 py-2 bg-slate-50 dark:bg-surface-900/40 border-b border-slate-100 dark:border-white/[0.04]">
@@ -391,8 +371,9 @@ function PhaseGroupCard({
       {/* Vertical stepper */}
       <ol className="p-3 space-y-0">
         {group.phases.map((phase, idx) => {
-          const status = statusOf(phasesState, phase.key)
-          const entry = phasesState[phase.key]
+          const status = statusOf(phases, phase.key)
+          const entry = phases[phase.key]
+          const updatedAt = entry?.updated_at as string | undefined
           const Icon = phase.icon
           return (
             <li key={phase.key}>
@@ -409,9 +390,9 @@ function PhaseGroupCard({
                     </span>
                   )}
                 </div>
-                {entry?.updated_at && status !== 'not_started' && (
+                {updatedAt && status !== 'not_started' && (
                   <span className="text-[10px] text-slate-400 hidden sm:inline shrink-0">
-                    {timeAgo(entry.updated_at)}
+                    {timeAgo(updatedAt)}
                   </span>
                 )}
                 <StatusBadge status={status} />
@@ -426,36 +407,24 @@ function PhaseGroupCard({
         })}
       </ol>
 
-      {/* Infrastructure: single next action + live logs (Task 3 + Task 5) */}
+      {/* Infrastructure: single next action + live logs + summary */}
       {isInfra && (
         <div className="px-3 pb-3 space-y-3 border-t border-slate-100 dark:border-white/[0.04] pt-3">
-          <InfrastructureAction phasesState={phasesState} runPhase={runPhase} canRun={canRun} />
-          <TerraformLogViewer projectId={projectId} phasesState={phasesState} />
-          {statusOf(phasesState, 'TERRAFORM_PLAN') === 'completed' &&
-            phasesState['TERRAFORM_PLAN']?.infrastructure_summary && (
-              <InfrastructureSummaryCard
-                summary={phasesState['TERRAFORM_PLAN'].infrastructure_summary}
-              />
-            )}
+          <InfrastructureAction engine={engine} />
+          <TerraformLogViewer engine={engine} />
+          {planSummary && <InfrastructureSummaryCard summary={planSummary} />}
         </div>
       )}
     </div>
   )
 }
 
-// ── Phase-driven action (Task 3) ────────────────────────────────────────────────
+// ── Phase-driven action ─────────────────────────────────────────────────────────
 
-function InfrastructureAction({
-  phasesState,
-  runPhase,
-  canRun,
-}: {
-  phasesState: PhasesState
-  runPhase: ReturnType<typeof useRunPhase>
-  canRun: boolean
-}) {
-  const action = nextTerraformAction(phasesState)
-  const planReady = statusOf(phasesState, 'PLAN_SELECTED') === 'completed'
+function InfrastructureAction({ engine }: { engine: WorkflowEngine }) {
+  const phases = engine.phases
+  const action = nextTerraformAction(phases)
+  const planReady = statusOf(phases, 'PLAN_SELECTED') === 'completed'
 
   if (action.kind === 'done') {
     return (
@@ -477,8 +446,8 @@ function InfrastructureAction({
 
   // kind === 'run'
   const needsPlan = action.phase === 'TERRAFORM_GENERATION' && !planReady
-  const disabled = runPhase.isPending || !canRun || needsPlan
-  const title = !canRun
+  const disabled = engine.runPhasePending || !engine.canRun || needsPlan
+  const title = !engine.canRun
     ? 'Read-only role'
     : needsPlan
       ? 'Select a plan in the Architecture tab first'
@@ -487,7 +456,7 @@ function InfrastructureAction({
   return (
     <div className="space-y-1">
       <button
-        onClick={() => runPhase.mutate(action.phase)}
+        onClick={() => engine.runPhase(action.phase)}
         disabled={disabled}
         title={title}
         className={cn(
@@ -496,7 +465,7 @@ function InfrastructureAction({
           'disabled:opacity-50 disabled:cursor-not-allowed',
         )}
       >
-        {runPhase.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+        {engine.runPhasePending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
         {action.label}
       </button>
       {needsPlan && (
@@ -506,32 +475,16 @@ function InfrastructureAction({
   )
 }
 
-// ── Terraform live log viewer (Task 1 + Task 5) ─────────────────────────────────
+// ── Terraform live log viewer (pure renderer) ───────────────────────────────────
 
-function TerraformLogViewer({
-  projectId,
-  phasesState,
-}: {
-  projectId: string
-  phasesState: PhasesState
-}) {
-  const taskId = backingTaskId(phasesState)
-  const refresh = useRefreshProjectWorkflows(projectId)
-
-  const validateStatus = statusOf(phasesState, 'TERRAFORM_VALIDATION')
-  const planStatus = statusOf(phasesState, 'TERRAFORM_PLAN')
-
-  // Stream whichever phase is running; otherwise reflect the most recent one.
-  const active: TerraformWsPhase | null =
-    validateStatus === 'running'
-      ? 'terraform_validate'
-      : planStatus === 'running'
-        ? 'terraform_plan'
-        : null
+function TerraformLogViewer({ engine }: { engine: WorkflowEngine }) {
+  const validateStatus = engine.statusOf('TERRAFORM_VALIDATION')
+  const planStatus = engine.statusOf('TERRAFORM_PLAN')
+  const active = engine.terraformActive
 
   // The phase shown in the header (sticky after completion so the result is
   // still readable once the stream closes).
-  const displayPhaseKey =
+  const displayPhaseKey: 'TERRAFORM_VALIDATION' | 'TERRAFORM_PLAN' | null =
     active === 'terraform_validate'
       ? 'TERRAFORM_VALIDATION'
       : active === 'terraform_plan'
@@ -542,61 +495,13 @@ function TerraformLogViewer({
             ? 'TERRAFORM_VALIDATION'
             : null
 
-  const displayStatus = displayPhaseKey ? statusOf(phasesState, displayPhaseKey) : 'not_started'
-  const displayUpdatedAt = displayPhaseKey ? phasesState[displayPhaseKey]?.updated_at : undefined
+  const displayStatus = displayPhaseKey ? engine.statusOf(displayPhaseKey) : 'not_started'
+  const displayUpdatedAt = displayPhaseKey
+    ? (engine.phases[displayPhaseKey]?.updated_at as string | undefined)
+    : undefined
+  const lines = displayPhaseKey ? engine.logsOf(displayPhaseKey) : []
 
-  const [lines, setLines] = useState<string[]>([])
-  const wsRef = useRef<WebSocket | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
-
-  // Always invalidate with the latest callback when a stream settles (Task 1).
-  const refreshRef = useRef(refresh)
-  refreshRef.current = refresh
-
-  useEffect(() => {
-    if (!taskId || !active) return
-    setLines([])
-    const url = getWsTerraformUrl(taskId, active, tokenStorage.getAccess())
-    const ws = new WebSocket(url)
-    wsRef.current = ws
-    const ping = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
-    }, 30_000)
-
-    ws.onmessage = (evt) => {
-      let msg: { type?: string; message?: string; status?: string }
-      try {
-        msg = JSON.parse(evt.data as string)
-      } catch {
-        return
-      }
-      if (msg.type === 'pong' || msg.type === 'info') return
-      if (msg.type === 'complete') {
-        // Async phase finished → refresh workflow so the timeline flips
-        // Running → Completed/Failed without a manual refresh or polling.
-        refreshRef.current()
-        return
-      }
-      if (msg.type === 'error') {
-        setLines((prev) => [...prev, `ERROR: ${msg.message ?? 'unknown'}`])
-        refreshRef.current()
-        return
-      }
-      if (msg.message != null) setLines((prev) => [...prev, msg.message as string])
-    }
-    ws.onclose = () => clearInterval(ping)
-
-    return () => {
-      clearInterval(ping)
-      try {
-        ws.close()
-      } catch {
-        /* noop */
-      }
-      wsRef.current = null
-    }
-  }, [taskId, active])
-
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [lines])
@@ -660,11 +565,7 @@ function TerraformLogViewer({
   )
 }
 
-// ── Infrastructure Summary (Phase 4) ────────────────────────────────────────────
-//
-// Reads the categorized summary the backend embeds into the TERRAFORM_PLAN
-// phase entry and renders it as a readable "what will be created" card. Shown
-// only when Terraform Plan succeeded (gated by the caller).
+// ── Infrastructure Summary ──────────────────────────────────────────────────────
 
 const CATEGORY_ICON: Record<string, React.ElementType> = {
   Networking: Network,
@@ -703,9 +604,7 @@ function InfrastructureSummaryCard({ summary }: { summary: InfrastructureSummary
       </p>
 
       {categories.length === 0 ? (
-        <div className="p-3 text-xs text-slate-500">
-          The plan creates no resources.
-        </div>
+        <div className="p-3 text-xs text-slate-500">The plan creates no resources.</div>
       ) : (
         <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
           {categories.map((cat) => {
@@ -739,31 +638,203 @@ function InfrastructureSummaryCard({ summary }: { summary: InfrastructureSummary
   )
 }
 
-// ── Other (legacy) phases ───────────────────────────────────────────────────────
+// ── Docker: generation → approval → build → logs → completion ────────────────────
+// First-class, fully engine-driven. Replaces both the legacy "Run Docker" button
+// and the standalone build section so there is one Docker surface.
 
-function OtherPhases({
-  phasesState,
-  runPhase,
-  canRun,
-}: {
-  phasesState: PhasesState
-  runPhase: ReturnType<typeof useRunPhase>
-  canRun: boolean
-}) {
+function DockerSection({ engine }: { engine: WorkflowEngine }) {
+  const genStatus = engine.statusOf('DOCKER')
+  const planReady = engine.statusOf('PLAN_SELECTED') === 'completed'
+  const generated = genStatus === 'completed'
+  const build = engine.build
+
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+  }, [build.logs])
+
+  const buildLabel =
+    build.status === 'failed' ? 'Retry Build' : build.status === 'completed' ? 'Rebuild Image' : 'Build Docker Image'
+  const buildDisabled = !engine.canRun || build.starting || build.status === 'running'
+  const genDisabled = !engine.canRun || engine.runPhasePending || !planReady || genStatus === 'running'
+  const genLabel = genStatus === 'failed' ? 'Retry Docker Generation' : 'Generate Docker Artifacts'
+
+  return (
+    <div className="rounded-lg border border-slate-200 dark:border-white/[0.06] overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-surface-900/40 border-b border-slate-100 dark:border-white/[0.04]">
+        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 inline-flex items-center gap-1.5">
+          <Container className="w-3.5 h-3.5" />
+          Docker
+        </span>
+        <StatusBadge status={generated ? build.status : genStatus} />
+      </div>
+
+      <div className="p-3 space-y-3">
+        {!generated ? (
+          // ── Step 1: generation ────────────────────────────────────────────
+          <>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {PHASE_EXPLANATIONS.DOCKER}
+            </p>
+            <div className="space-y-1">
+              <button
+                onClick={() => engine.runPhase('DOCKER')}
+                disabled={genDisabled}
+                title={!engine.canRun ? 'Read-only role' : !planReady ? 'Select a plan first' : undefined}
+                className={cn(
+                  'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                  'bg-brand-600 hover:bg-brand-500 text-white',
+                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                )}
+              >
+                {genStatus === 'running' ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Play className="w-4 h-4" />
+                )}
+                {genStatus === 'running' ? 'Generating…' : genLabel}
+              </button>
+              {!planReady && (
+                <p className="text-[11px] text-slate-500">
+                  Select a plan in the Architecture tab to begin.
+                </p>
+              )}
+            </div>
+          </>
+        ) : (
+          // ── Step 2: review + build ────────────────────────────────────────
+          <>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Docker artifacts generated. Review them in the Docker tab, then build the image with the
+              existing build engine. Logs stream live below.
+            </p>
+
+            <div className="flex items-center gap-3 flex-wrap">
+              {build.status !== 'running' ? (
+                <button
+                  onClick={() => engine.startBuild()}
+                  disabled={buildDisabled}
+                  title={!engine.canRun ? 'Read-only role' : undefined}
+                  className={cn(
+                    'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                    'bg-brand-600 hover:bg-brand-500 text-white',
+                    'disabled:opacity-50 disabled:cursor-not-allowed',
+                  )}
+                >
+                  {build.starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  {buildLabel}
+                </button>
+              ) : (
+                <span className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-brand-50 dark:bg-brand-600/15 border border-brand-200 dark:border-brand-500/20 text-brand-700 dark:text-brand-300">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Building image…
+                </span>
+              )}
+
+              {build.status === 'completed' && (
+                <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+                  <Clock className="w-3.5 h-3.5" />
+                  {build.durationSeconds != null
+                    ? `Completed in ${formatBuildDuration(build.durationSeconds)}`
+                    : 'Completed'}
+                  {build.finishedAt && <span className="text-slate-400">· {timeAgo(build.finishedAt)}</span>}
+                </span>
+              )}
+              {build.status === 'failed' && build.finishedAt && (
+                <span className="inline-flex items-center gap-1 text-xs text-red-500">
+                  <XCircle className="w-3.5 h-3.5" /> Failed · {timeAgo(build.finishedAt)}
+                </span>
+              )}
+            </div>
+
+            {/* Build blocked by the PrebuildGate (HTTP 422). The build never
+                started and no WS was opened — show WHY, with a Fix & Retry CTA. */}
+            {build.blocked && (
+              <DockerBuildBlockedPanel
+                blocked={build.blocked}
+                onRetry={() => engine.regenerateDocker()}
+                retrying={engine.runPhasePending}
+                canRun={engine.canRun}
+              />
+            )}
+
+            {build.imageTag && (
+              <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 break-all">
+                image: {build.imageTag}
+              </div>
+            )}
+
+            {build.status === 'failed' && build.failureReason && (
+              <div className="text-xs text-red-600 dark:text-red-400 break-all">{build.failureReason}</div>
+            )}
+
+            {/* Build-trigger error (e.g. the 409 phase-cursor gate). Offer the
+                recovery that resets the backing task to docker_completed. */}
+            {build.error && (
+              <div className="space-y-1.5">
+                <div className="text-xs text-red-600 dark:text-red-400 break-all">{build.error}</div>
+                <button
+                  onClick={() => engine.regenerateDocker()}
+                  disabled={!engine.canRun || engine.runPhasePending}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-surface-900/40 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RefreshCcw className={cn('w-3.5 h-3.5', engine.runPhasePending && 'animate-spin')} />
+                  Re-generate Docker artifacts
+                </button>
+              </div>
+            )}
+
+            {/* Live logs — same UX as the Terraform log viewer. */}
+            {(build.logs.length > 0 || build.status === 'running') && (
+              <div className="rounded-lg border border-slate-200 dark:border-white/[0.06] overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-surface-900/40 border-b border-slate-100 dark:border-white/[0.04]">
+                  <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300 inline-flex items-center gap-1.5">
+                    <ScrollText className="w-3 h-3" />
+                    Build logs
+                    {build.live && <span className="text-brand-500">· live</span>}
+                  </span>
+                </div>
+                <div
+                  ref={scrollRef}
+                  className="max-h-48 overflow-auto bg-slate-950 text-slate-200 font-mono text-[11px] leading-relaxed p-3"
+                >
+                  {build.logs.length === 0 ? (
+                    <span className="text-slate-500">Waiting for build output…</span>
+                  ) : (
+                    build.logs.map((l, i) => (
+                      <div key={i} className="whitespace-pre-wrap break-all">
+                        {l}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Other (optional) phases ─────────────────────────────────────────────────────
+
+function OtherPhases({ engine }: { engine: WorkflowEngine }) {
+  const phases = engine.phases
   return (
     <details className="rounded-lg border border-slate-200 dark:border-white/[0.06]">
       <summary className="px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer select-none">
-        Other phases (Docker · Kubernetes · CI/CD)
+        Other phases (Kubernetes · CI/CD)
       </summary>
-      <div className="p-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
+      <div className="p-3 grid grid-cols-2 gap-2">
         {LEGACY_PHASE_BUTTONS.map(({ phase, label, icon: Icon }) => {
-          const status = statusOf(phasesState, phase)
+          const status = statusOf(phases, phase)
           return (
             <button
               key={phase}
-              onClick={() => runPhase.mutate(phase)}
-              disabled={runPhase.isPending || status === 'running' || !canRun}
-              title={!canRun ? 'Read-only role' : undefined}
+              onClick={() => engine.runPhase(phase)}
+              disabled={engine.runPhasePending || status === 'running' || !engine.canRun}
+              title={!engine.canRun ? 'Read-only role' : undefined}
               className={cn(
                 'inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors border',
                 'disabled:opacity-50 disabled:cursor-not-allowed',
@@ -774,7 +845,7 @@ function OtherPhases({
                     : 'bg-white dark:bg-surface-900/40 border-slate-200 dark:border-white/[0.08] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]',
               )}
             >
-              {runPhase.isPending && runPhase.variables === phase ? (
+              {engine.runPhasePending && engine.runPhaseVariable === phase ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Icon className="w-3.5 h-3.5" />
@@ -785,248 +856,6 @@ function OtherPhases({
         })}
       </div>
     </details>
-  )
-}
-
-// ── Docker image build (Tasks 1-5) ──────────────────────────────────────────
-// Bridges "Docker artifacts generated" → the EXISTING build engine. The
-// backend endpoint, execution worker, DockerExecutor, and /ws/execution socket
-// are reused unchanged — this only adds the missing UI connection.
-
-type BuildStatus = 'pending' | 'running' | 'success' | 'failed'
-
-function buildStatusToPhase(s: BuildStatus): PhaseStatus {
-  if (s === 'success') return 'completed'
-  if (s === 'failed') return 'failed'
-  if (s === 'running') return 'running'
-  return 'not_started'
-}
-
-function formatBuildDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  return `${m}m ${s}s`
-}
-
-function DockerBuildSection({
-  projectId: _projectId,
-  phasesState,
-  canRun,
-}: {
-  projectId: string
-  phasesState: PhasesState
-  canRun: boolean
-}) {
-  const taskId = backingTaskId(phasesState)
-
-  const [status, setStatus] = useState<BuildStatus>('pending')
-  const [lines, setLines] = useState<string[]>([])
-  const [imageTag, setImageTag] = useState<string | undefined>()
-  const [durationSeconds, setDurationSeconds] = useState<number | null>(null)
-  const [finishedAt, setFinishedAt] = useState<string | null>(null)
-  const [failureReason, setFailureReason] = useState<string | null>(null)
-  const [error, setError] = useState<string | undefined>()
-  const [starting, setStarting] = useState(false)
-  const [live, setLive] = useState(false)
-
-  const wsRef = useRef<WebSocket | null>(null)
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-
-  // Restore persisted build state — logs + status survive a page refresh.
-  useEffect(() => {
-    if (!taskId) return
-    let cancelled = false
-    getDockerBuildStatus(taskId)
-      .then((d) => {
-        if (cancelled) return
-        const s = (d.status as BuildStatus) || 'pending'
-        setStatus(s)
-        setImageTag(d.image_tag ?? undefined)
-        setDurationSeconds(d.duration_seconds ?? null)
-        setFinishedAt(d.finished_at ?? null)
-        setFailureReason(d.failure_reason ?? d.last_error_line ?? null)
-        if (Array.isArray(d.logs) && d.logs.length > 0) {
-          setLines((d.logs as Array<{ message?: string }>).map((l) => l.message ?? ''))
-        }
-        if (s === 'running' || d.current_phase === 'docker_build_running') setLive(true)
-      })
-      .catch(() => { /* no build yet — leave as Not Started */ })
-    return () => { cancelled = true }
-  }, [taskId])
-
-  // Live log stream — reuses the existing /ws/execution/{taskId} socket.
-  useEffect(() => {
-    if (!taskId || !live) return
-    const ws = new WebSocket(getWsExecutionUrl(taskId, tokenStorage.getAccess()))
-    wsRef.current = ws
-    const ping = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
-    }, 30_000)
-
-    ws.onmessage = (evt) => {
-      let msg: { type?: string; message?: string; status?: string }
-      try {
-        msg = JSON.parse(evt.data as string)
-      } catch {
-        return
-      }
-      if (msg.type === 'pong' || msg.type === 'info') return
-      if (msg.type === 'complete') {
-        setStatus(msg.status === 'success' ? 'success' : 'failed')
-        setLive(false)
-        // Pull final duration + diagnostics from the persisted record.
-        getDockerBuildStatus(taskId)
-          .then((d) => {
-            setDurationSeconds(d.duration_seconds ?? null)
-            setFinishedAt(d.finished_at ?? null)
-            setImageTag(d.image_tag ?? undefined)
-            setFailureReason(d.failure_reason ?? d.last_error_line ?? null)
-          })
-          .catch(() => {})
-        return
-      }
-      if (msg.type === 'error') {
-        setLines((prev) => [...prev, `ERROR: ${msg.message ?? 'unknown'}`])
-        return
-      }
-      if (msg.message != null) setLines((prev) => [...prev, msg.message as string])
-    }
-    ws.onclose = () => clearInterval(ping)
-
-    return () => {
-      clearInterval(ping)
-      try {
-        ws.close()
-      } catch {
-        /* noop */
-      }
-      wsRef.current = null
-    }
-  }, [taskId, live])
-
-  // Auto-scroll the log box on new output.
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [lines])
-
-  async function onBuild() {
-    if (!taskId) return
-    setError(undefined)
-    setStarting(true)
-    setLines([])
-    setFailureReason(null)
-    try {
-      await startDockerBuild(taskId)
-      setStatus('running')
-      setLive(true)
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setStarting(false)
-    }
-  }
-
-  if (!taskId) return null
-
-  const phaseStatus = buildStatusToPhase(status)
-  const buttonLabel =
-    status === 'failed' ? 'Retry Build' : status === 'success' ? 'Rebuild Image' : 'Build Docker Image'
-  const buildDisabled = !canRun || starting || status === 'running'
-
-  return (
-    <div className="rounded-lg border border-slate-200 dark:border-white/[0.06] overflow-hidden">
-      {/* Header + status (Task 5) */}
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-50 dark:bg-surface-900/40 border-b border-slate-100 dark:border-white/[0.04]">
-        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 inline-flex items-center gap-1.5">
-          <Container className="w-3.5 h-3.5" />
-          Docker Image Build
-        </span>
-        <StatusBadge status={phaseStatus} />
-      </div>
-
-      <div className="p-3 space-y-3">
-        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-          Builds the Docker image from the generated artifacts using the existing build engine.
-          Logs stream live below.
-        </p>
-
-        {/* Action + completion meta (Tasks 1 + 5) */}
-        <div className="flex items-center gap-3 flex-wrap">
-          {status !== 'running' ? (
-            <button
-              onClick={onBuild}
-              disabled={buildDisabled}
-              title={!canRun ? 'Read-only role' : undefined}
-              className={cn(
-                'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-                'bg-brand-600 hover:bg-brand-500 text-white',
-                'disabled:opacity-50 disabled:cursor-not-allowed',
-              )}
-            >
-              {starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              {buttonLabel}
-            </button>
-          ) : (
-            <span className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-brand-50 dark:bg-brand-600/15 border border-brand-200 dark:border-brand-500/20 text-brand-700 dark:text-brand-300">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Building image…
-            </span>
-          )}
-
-          {status === 'success' && (
-            <span className="inline-flex items-center gap-1 text-xs text-slate-500">
-              <Clock className="w-3.5 h-3.5" />
-              {durationSeconds != null ? `Completed in ${formatBuildDuration(durationSeconds)}` : 'Completed'}
-              {finishedAt && <span className="text-slate-400">· {timeAgo(finishedAt)}</span>}
-            </span>
-          )}
-          {status === 'failed' && finishedAt && (
-            <span className="inline-flex items-center gap-1 text-xs text-red-500">
-              <XCircle className="w-3.5 h-3.5" /> Failed · {timeAgo(finishedAt)}
-            </span>
-          )}
-        </div>
-
-        {imageTag && (
-          <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 break-all">
-            image: {imageTag}
-          </div>
-        )}
-
-        {status === 'failed' && failureReason && (
-          <div className="text-xs text-red-600 dark:text-red-400 break-all">{failureReason}</div>
-        )}
-        {error && <div className="text-xs text-red-600 dark:text-red-400">{error}</div>}
-
-        {/* Live logs — same UX style as the Terraform log viewer (Task 3) */}
-        {(lines.length > 0 || status === 'running') && (
-          <div className="rounded-lg border border-slate-200 dark:border-white/[0.06] overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50 dark:bg-surface-900/40 border-b border-slate-100 dark:border-white/[0.04]">
-              <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300 inline-flex items-center gap-1.5">
-                <ScrollText className="w-3 h-3" />
-                Build logs
-                {live && <span className="text-brand-500">· live</span>}
-              </span>
-            </div>
-            <div
-              ref={scrollRef}
-              className="max-h-48 overflow-auto bg-slate-950 text-slate-200 font-mono text-[11px] leading-relaxed p-3"
-            >
-              {lines.length === 0 ? (
-                <span className="text-slate-500">Waiting for build output…</span>
-              ) : (
-                lines.map((l, i) => (
-                  <div key={i} className="whitespace-pre-wrap break-all">
-                    {l}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
   )
 }
 

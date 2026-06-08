@@ -13,6 +13,7 @@ from backend.app.models.session import UserSession
 from backend.app.models.task import Task
 from backend.app.models.user import User
 from backend.app.models.workflow_event import WorkflowPhaseEvent
+from backend.app.models.workflow_execution_trace import WorkflowExecutionTrace
 
 __all__ = [
     "ExecutionJob",
@@ -24,4 +25,5 @@ __all__ = [
     "User",
     "UserSession",
     "WorkflowPhaseEvent",
+    "WorkflowExecutionTrace",
 ]

@@ -1,12 +1,17 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from backend.app.database.base import Base
+
+# JSONB on Postgres (production); plain JSON on SQLite (tests). Same pattern as
+# Artifact / ExecutionJob — lets the golden-path test boot the real projects /
+# project_contexts tables against an in-memory session.
+_JSON_VARIANT = JSONB().with_variant(JSON(), "sqlite")
 
 
 class Project(Base):
@@ -53,7 +58,7 @@ class Project(Base):
     # the analyzer attempts to use. 'public' | 'private'.
     repository_visibility = Column(String, nullable=True)
 
-    project_metadata = Column(MutableDict.as_mutable(JSONB), nullable=False, default=dict)
+    project_metadata = Column(MutableDict.as_mutable(_JSON_VARIANT), nullable=False, default=dict)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
@@ -122,7 +127,7 @@ class ProjectContext(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     context_type = Column(String, nullable=False, index=True)
-    content = Column(MutableDict.as_mutable(JSONB), nullable=False, default=dict)
+    content = Column(MutableDict.as_mutable(_JSON_VARIANT), nullable=False, default=dict)
     generated_by = Column(String, nullable=True)
     # Pointer into a vector store / RAG layer when relevant; null for plain JSON context.
     embedding_reference = Column(String, nullable=True)

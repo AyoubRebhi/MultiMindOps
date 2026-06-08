@@ -5,13 +5,13 @@
     "files": 43,
     "entries": 179,
     "chunks": 179,
-    "llm_calls": 56,
+    "llm_calls": 0,
     "llm_split": 0,
-    "llm_kept_whole": 56,
+    "llm_kept_whole": 0,
     "llm_fallback_rejected": 0,
     "kept_short_no_llm": 123,
     "kept_no_llm_flag": 0,
-    "cache_hits": 0,
+    "cache_hits": 56,
     "empty_entries": 0
   },
   "files": [

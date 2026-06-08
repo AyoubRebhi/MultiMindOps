@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from backend.app.core.authorization import (
@@ -41,6 +41,7 @@ from backend.app.models.task import Task
 from backend.app.models.user import User
 from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
+from backend.app.services.execution.docker_connectivity import docker_health_check
 from backend.app.services.execution.docker_executor import DockerExecutor
 from backend.app.services.execution.docker_registry import generate_image_tag
 from backend.app.services.execution.docker_streamer import log_stream_manager
@@ -235,7 +236,7 @@ def _enforce_prebuild_validation_gate(
     task,
     state: dict,
     artifacts: dict[str, str],
-) -> dict[str, Any] | None:
+) -> JSONResponse | None:
     """
     Multi-layer pre-build validation gate.
 
@@ -246,9 +247,11 @@ def _enforce_prebuild_validation_gate(
          exec form, healthcheck dependency, undefined build stage.
       C. DockerBuildStaticValidator — COPY-source resolution against known_files.
 
-    Returns a 200 JSON response when the build is blocked (with the relevant
-    validation payload + ``failure_kind`` indicating which layer fired), or
-    None when the build may proceed.
+    Returns a structured **HTTP 422** ``JSONResponse`` when the build is blocked
+    (carrying ``{phase, status, reason, details, ...}`` + the relevant validation
+    payload), or ``None`` when the build may proceed. The 422 is the contract
+    that lets the frontend surface *why* a build was blocked instead of opening a
+    WebSocket against a build that never started.
     """
     dockerfile = artifacts.get("dockerfile") or ""
     if not dockerfile:
@@ -370,6 +373,42 @@ def _enforce_prebuild_validation_gate(
     )
 
 
+# failure_kind → (machine-readable reason code, human-readable summary).
+_BLOCK_REASON: dict[str, tuple[str, str]] = {
+    "template_validation": (
+        "UNRESOLVED_TEMPLATE_TOKEN",
+        "Generated artifacts still contain unresolved template token(s).",
+    ),
+    "runtime_validation": (
+        "RUNTIME_VALIDATION_FAILED",
+        "The Dockerfile failed runtime validation (distro / exec form / healthcheck / stage).",
+    ),
+    "static_validation": (
+        "UNRESOLVED_BUILD_CONTEXT",
+        "One or more COPY sources cannot be resolved against the build context.",
+    ),
+}
+
+
+def _block_reason_and_details(
+    failure_kind: str,
+    payload: dict[str, Any],
+) -> tuple[str, list[str]]:
+    """Derive the structured ``reason`` code + human-readable ``details`` list."""
+    reason = payload.get("reason") or _BLOCK_REASON.get(failure_kind, (failure_kind.upper(), ""))[0]
+
+    # Prefer the validator's own ``details`` (e.g. ["dockerfile"]); otherwise
+    # build a concise list from the issue messages so the UI always has content.
+    details = [d for d in (payload.get("details") or []) if d]
+    if not details:
+        details = [
+            str(issue.get("message") or issue.get("artifact") or "").strip()
+            for issue in (payload.get("issues") or [])
+            if (issue.get("message") or issue.get("artifact"))
+        ]
+    return reason, details[:20]
+
+
 def _block_build(
     *,
     db: Session,
@@ -380,12 +419,19 @@ def _block_build(
     payload_key: str,
     payload: dict[str, Any],
     message: str,
-) -> dict[str, Any]:
-    """Persist a blocked-build state + return the API response body."""
+) -> JSONResponse:
+    """Persist a blocked-build state + return a structured HTTP 422 response.
+
+    The build job is intentionally NOT enqueued. Rather than silently returning
+    200 (which made the frontend open a WebSocket against a build that never
+    started — the "No active stream" dead state), we respond 422 with a
+    structured payload so the UI can render exactly why the build is blocked.
+    """
     issue_count = payload.get("issue_count", len(payload.get("issues") or []))
+    reason, details = _block_reason_and_details(failure_kind, payload)
     logger.warning(
-        "[PrebuildGate] %s BLOCKED build for task=%s with %d issue(s)",
-        failure_kind, task.id, issue_count,
+        "[PrebuildGate] %s BLOCKED build for task=%s reason=%s with %d issue(s) → HTTP 422",
+        failure_kind, task.id, reason, issue_count,
     )
 
     infra_store = state.setdefault("infrastructure", {})
@@ -405,6 +451,7 @@ def _block_build(
         "message": message,
         "metadata": {
             "failure_kind": failure_kind,
+            "reason": reason,
             "issue_count": issue_count,
             "issues": (payload.get("issues") or [])[:5],
         },
@@ -412,19 +459,44 @@ def _block_build(
 
     TaskService.save_workflow_state(db, task, state)
 
-    return {
-        "status": "blocked",
-        "logs": [],
-        "image_tag": None,
-        "execution_phase": "prebuild_validation",
-        "ws_url": f"/ws/execution/{task.id}",
-        "task_id": str(task.id),
-        "blocked": True,
-        "current_phase": "human_review_required",
-        "failure_kind": failure_kind,
-        payload_key: payload,
-        "message": message,
-    }
+    # Mirror the blocked outcome onto the authoritative Workflow.phases_state.
+    # Guarded for the unit test, which calls the gate with db=None.
+    if db is not None:
+        try:
+            from backend.app.services.core.workflow_orchestration_service import (
+                WorkflowOrchestrationService,
+            )
+            WorkflowOrchestrationService.record_build_result(
+                db, task, status="blocked",
+                extra={"failure_kind": failure_kind, "reason": reason},
+            )
+        except Exception as exc:  # noqa: BLE001 — mirroring must not fail the block
+            logger.warning(
+                "[Execution] record_build_result (block) failed: %s",
+                exc.__class__.__name__,
+            )
+
+    return JSONResponse(
+        status_code=422,
+        content={
+            # ── Structured contract (top-level, per spec) ─────────────────────
+            "phase": "DOCKER",
+            "status": "blocked",
+            "reason": reason,
+            "details": details,
+            # ── Backward-compatible diagnostics ───────────────────────────────
+            "blocked": True,
+            "failure_kind": failure_kind,
+            "message": message,
+            "current_phase": "human_review_required",
+            "execution_phase": "prebuild_validation",
+            "ws_url": f"/ws/execution/{task.id}",
+            "task_id": str(task.id),
+            "logs": [],
+            "image_tag": None,
+            payload_key: payload,
+        },
+    )
 
 
 def _save_execution_state(db: Session, task, result: DockerBuildResult, is_retry: bool = False) -> None:
@@ -454,16 +526,39 @@ def _save_execution_state(db: Session, task, result: DockerBuildResult, is_retry
     docker_exec["retries"] = docker_exec.get("retries", 0)
     docker_exec["build_number"] = docker_exec.get("build_number", 1)
 
+    _wf_status: str | None = None
     if result.status == ExecutionStatus.SUCCESS:
         state["current_phase"] = "docker_build_success"
+        _wf_status = "completed"
     elif result.status == ExecutionStatus.FAILED:
         state["current_phase"] = "docker_build_failed"
+        _wf_status = "failed"
 
     logger.info(
         "[Execution] Persisted logs count=%d status=%s task=%s",
         len(merged_logs), result.status, task.id,
     )
     TaskService.save_workflow_state(db, task_obj, state)
+
+    # Single source of truth: mirror the build outcome onto the authoritative
+    # Workflow.phases_state. Task.workflow_state is scratch only — without this
+    # the Workflow row never learns whether the build passed.
+    if _wf_status:
+        try:
+            from backend.app.services.core.workflow_orchestration_service import (
+                WorkflowOrchestrationService,
+            )
+            WorkflowOrchestrationService.record_build_result(
+                db, task_obj, status=_wf_status,
+                extra={
+                    "build_number": docker_exec.get("build_number", 1),
+                    "image_tag": getattr(result, "image_tag", None),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — mirroring must not fail the build
+            logger.warning(
+                "[Execution] record_build_result failed: %s", exc.__class__.__name__,
+            )
 
 
 # ── Background build task ──────────────────────────────────────────────────────
@@ -579,13 +674,38 @@ async def _run_build_background(
 
 # ── POST /api/execution/docker/build/{task_id} ─────────────────────────────────
 
-@router.post("/api/execution/docker/build/{task_id}")
+@router.get("/api/execution/docker/health", response_model=None)
+async def docker_health(
+    _user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Diagnose Docker daemon connectivity from the backend/worker process.
+
+    Returns the structured :class:`DockerHealth` (reachable, client/server version,
+    effective endpoint + transport, and a remediation message when unreachable).
+    Use this to tell apart "Docker isn't installed", "daemon not running", and
+    "the backend process can't see the daemon (PATH / named-pipe / group)".
+    """
+    health = await docker_health_check()
+    return health.to_dict()
+
+
+@router.post("/api/execution/docker/build/{task_id}", response_model=None)
 async def start_docker_build(
     task_id: str,
     db: Session = Depends(get_db),
     _gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
-) -> dict[str, Any]:
-    """Start an async Docker build for the given task."""
+) -> dict[str, Any] | JSONResponse:
+    """Start an async Docker build for the given task.
+
+    Always responds with ONE of two deterministic outcomes:
+      * **enqueue success** (200) — a durable build job is enqueued and the WS
+        stream will begin; the response carries ``ws_url`` + ``job_id``.
+      * **blocked** (422) — pre-build validation failed; the response carries
+        ``{phase, status:"blocked", reason, details}`` and NO job is enqueued.
+
+    There is no silent third outcome: a passing gate ALWAYS reaches
+    ``JobService.enqueue`` below.
+    """
     task = TaskService.get_task(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -621,11 +741,14 @@ async def start_docker_build(
             detail="No Dockerfile found in task artifacts. Run the Docker phase first.",
         )
 
-    # ── Pre-build static validation gate ──────────────────────────────────────
-    # Re-run COPY-path validation against the LATEST (possibly user-edited)
-    # Dockerfile + known_files. If structural issues remain, we refuse to start
-    # the build and route the task back to human review instead of burning a
-    # retry on a build we already know will fail.
+    # ── Pre-build validation gate ─────────────────────────────────────────────
+    # Re-run template / runtime / COPY-path validation against the LATEST
+    # (possibly user-edited) Dockerfile + known_files. If issues remain we refuse
+    # to start the build and return a structured HTTP 422 (NOT a silent 200) so
+    # the UI can show the user exactly why the build is blocked, instead of
+    # burning a retry on a build we already know will fail. When the gate passes,
+    # execution falls through to JobService.enqueue below — there is no silent
+    # block path.
     gate_failure = _enforce_prebuild_validation_gate(
         db=db, task=task, state=state, artifacts=artifacts,
     )
@@ -824,12 +947,12 @@ async def start_docker_build(
 
 # ── GET /api/execution/docker/status/{task_id} ─────────────────────────────────
 
-@router.post("/api/tasks/{task_id}/retry-build")
+@router.post("/api/tasks/{task_id}/retry-build", response_model=None)
 async def retry_docker_build(
     task_id: str,
     db: Session = Depends(get_db),
     gate: tuple[Task, ProjectMember] = Depends(require_task_project_contributor),
-) -> dict[str, Any]:
+) -> dict[str, Any] | JSONResponse:
     """Retry Docker build using the latest saved editable artifacts.
 
     The gate has already validated project membership; forward the resolved

@@ -36,7 +36,6 @@ import { RoleBadge } from '@/components/projects/RoleBadge'
 import { CodeAnalysisPanel } from '@/components/projects/CodeAnalysisPanel'
 import { useAuth } from '@/context/AuthContext'
 import { ArchitectureDecisionPanel } from '@/components/architecture/ArchitectureDecisionPanel'
-import { WorkflowTimeline } from '@/components/workflow/WorkflowTimeline'
 import type {
   ArtifactResponse,
   ProjectBootstrapStatus,
@@ -224,14 +223,7 @@ function renderTab({
     )
   }
   if (tab === 'workflows') {
-    return (
-      <div className="space-y-5">
-        {latestWorkflow && (
-          <WorkflowTimeline workflow={latestWorkflow} artifacts={artifacts} />
-        )}
-        <WorkflowPanel projectId={projectId} workflows={workflows} />
-      </div>
-    )
+    return <WorkflowPanel projectId={projectId} workflows={workflows} artifacts={artifacts} />
   }
   if (tab === 'architecture') {
     return (
@@ -347,10 +339,6 @@ function OverviewTab({
         latestWorkflow={latestWorkflow}
       />
 
-      {latestWorkflow && (
-        <WorkflowTimeline workflow={latestWorkflow} artifacts={artifacts} />
-      )}
-      <WorkflowPanel projectId={projectId} workflows={workflows} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
           <ProjectContextPanel projectId={projectId} />

@@ -335,6 +335,18 @@ CRITICAL_COLUMNS: List[ColumnRequirement] = [
         ),
         purpose="Phase 5 — workflow event log canary",
     ),
+    # ── Observability — workflow execution trace ────────────────────────────
+    # create_all() makes the table; this canary surfaces a missing table early
+    # on older deployments so the /debug + /replay observability layer works.
+    ColumnRequirement(
+        table="workflow_execution_traces",
+        column="phase",
+        repair_sql=(
+            "ALTER TABLE workflow_execution_traces "
+            "ADD COLUMN IF NOT EXISTS phase VARCHAR NOT NULL DEFAULT 'UNKNOWN'"
+        ),
+        purpose="Observability — per-phase execution trace canary",
+    ),
 ]
 
 
@@ -539,6 +551,77 @@ def run_schema_guard(engine: Engine) -> None:
         raise RuntimeError(
             "[SCHEMA_GUARD] NOT NULL invariant breach — refusing to start:\n  - "
             + "\n  - ".join(notnull_violations)
+        )
+
+
+def ensure_single_active_workflow_index(engine: Engine) -> None:
+    """Defense-in-depth DB guard for "one active workflow per project".
+
+    Creates a PARTIAL UNIQUE INDEX on ``workflows(project_id)`` restricted to
+    non-terminal rows, so the database itself rejects a second concurrent active
+    workflow even if the application-level ``get_or_create_workflow`` guard is
+    bypassed (e.g. a race).
+
+    Safety (honours "do NOT break historical / do NOT delete data"):
+    * Postgres only — the predicate uses ``status NOT IN (...)``. Other dialects
+      (the SQLite test DB) are skipped.
+    * If the project table ALREADY contains projects with multiple active
+      workflows (duplicates created before this guard shipped), creating the
+      unique index would fail — so we DETECT that first and SKIP creation,
+      logging a warning. We never mutate or delete the historical rows to force
+      the index; the application guard still prevents NEW duplicates.
+    * Idempotent: ``CREATE UNIQUE INDEX IF NOT EXISTS``.
+    """
+    if engine.dialect.name != "postgresql":
+        logger.info(
+            "[WORKFLOW_GUARD] dialect=%s — partial unique index skipped "
+            "(application get_or_create guard still active)",
+            engine.dialect.name,
+        )
+        return
+
+    terminal = "('completed','failed','cancelled')"
+    try:
+        with engine.connect() as conn:
+            dup_projects = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM ("
+                    "  SELECT project_id FROM workflows "
+                    f"  WHERE status NOT IN {terminal} "
+                    "  GROUP BY project_id HAVING COUNT(*) > 1"
+                    ") d"
+                )
+            ).scalar_one()
+        if dup_projects and int(dup_projects) > 0:
+            logger.warning(
+                "[WORKFLOW_GUARD] %d project(s) already have multiple ACTIVE "
+                "workflows — skipping unique-index creation to avoid breaking "
+                "existing data. The application get_or_create guard prevents NEW "
+                "duplicates; reconcile the legacy rows, then restart to enforce "
+                "at the DB level.",
+                int(dup_projects),
+            )
+            return
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_workflows_one_active_per_project "
+                    "ON workflows (project_id) "
+                    f"WHERE status NOT IN {terminal}"
+                )
+            )
+        logger.info(
+            "[WORKFLOW_GUARD] partial unique index ensured — at most one active "
+            "workflow per project enforced at the DB level"
+        )
+    except SQLAlchemyError as exc:
+        # Best-effort: never block startup over the defense-in-depth index. The
+        # application-level guard is the primary enforcement.
+        logger.warning(
+            "[WORKFLOW_GUARD] could not ensure single-active-workflow index: %s",
+            exc,
         )
 
 

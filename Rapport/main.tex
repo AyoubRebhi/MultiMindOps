@@ -1,0 +1,81 @@
+% =====================================================================
+%  Rapport de PFE — fichier racine (root document)
+%  Compilation : pdflatex (via latexmk dans LaTeX Workshop)
+% =====================================================================
+
+% Classe du document (charge la plupart des packages : voir pfe-report.cls)
+\documentclass[12pt, oneside, a4paper]{pfe-report}
+
+% --- Préambule -------------------------------------------------------
+% Ordre important :
+%   1) packages  : packages additionnels non fournis par la classe
+%   2) Commands  : commandes personnalisées (\reportTitle, \reportAuthor, ...)
+%   3) config    : métadonnées PDF (\hypersetup), minitoc, graphicspath
+% \input (et NON \include) : on est dans le préambule, \include y est interdit.
+\input{packages}
+\input{Commands}
+\input{config}
+
+% =====================================================================
+\begin{document}
+
+    % Double interligne pour la lisibilité
+    \doublespacing{}
+
+    % Numérotation romaine pour les pages liminaires
+    \pagenumbering{roman}
+
+    % --- Pages liminaires --------------------------------------------
+    \input{chapitre/01-Dedication}    % Dédicaces
+    \input{chapitre/02-Remerciement}  % Remerciements
+
+    % --- Table des matières ------------------------------------------
+    \addtocontents{toc}{\protect\thispagestyle{MyStyle}}
+    \renewcommand*\contentsname{TABLE DES MATIÈRES}
+    \begin{spacing}{1}
+    \tableofcontents
+    \end{spacing}
+
+    % --- Liste des figures -------------------------------------------
+    \addtocontents{lof}{\protect\thispagestyle{MyStyle}}
+    \renewcommand{\listfigurename}{LISTE DES FIGURES}
+    \begin{spacing}{1}
+    \listoffigures
+    \end{spacing}
+    \addcontentsline{toc}{chapter}{\listfigurename}
+    \adjustmtc
+
+    % --- Liste des tableaux ------------------------------------------
+    \addtocontents{lot}{\protect\thispagestyle{MyStyle}}  % lot (et non lof) pour les tableaux
+    \renewcommand{\listtablename}{LISTE DES TABLEAUX}
+    \begin{spacing}{1}
+    \listoftables
+    \end{spacing}
+    \addcontentsline{toc}{chapter}{\listtablename}
+    \adjustmtc
+
+    % --- Sections introductives --------------------------------------
+    \input{chapitre/03-ListeDesAbr}        % Liste des abréviations
+    \input{chapitre/04-IntroductionGeneral}% Introduction générale
+
+    % Numérotation arabe pour le corps du document
+    \pagenumbering{arabic}
+    \doublespacing{}
+
+    % --- Chapitres ---------------------------------------------------
+    \input{chapitre/05-Chapitre1}
+    \input{chapitre/06-Chapitre2}
+    \input{chapitre/07-Chapitre3}
+    \input{chapitre/08-Chapitre4}
+
+    % --- Conclusion --------------------------------------------------
+    \input{chapitre/11-ConclusionGenerale}
+
+    % --- Bibliographie / Webographie ---------------------------------
+    \input{chapitre/09-Bibliographie}
+
+    % Annexes : décommentez la ligne suivante APRÈS avoir ajouté l'image
+    % référencée (images/your_image.png) — voir le rapport de diagnostic.
+    % \input{chapitre/10-Annexes}
+
+\end{document}

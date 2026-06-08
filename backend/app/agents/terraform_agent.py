@@ -352,21 +352,41 @@ class TerraformAgent(EnhancedBaseAgent):
             container_port=container_port,
         )
 
-        # Validate before returning so the orchestrator can gate on result.
+        # ── Validation is DECOUPLED from generation (reliability fix) ─────────
+        # Generation MUST NOT be discarded because terraform init/validate could
+        # not run — most commonly because the provider registry is unreachable.
+        # We run validation best-effort, classify any blocking failure, and
+        # ALWAYS return the rendered artifacts. The orchestrator decides the
+        # phase outcome from ``validation_status`` + ``failure_classification``
+        # AFTER persisting the artifacts to the DB.
+        from backend.app.services.terraform_generation.validators.failure_classifier import (
+            classify_validation_result,
+            is_recoverable,
+        )
+
         validation = self._validator.validate(result.artifacts)
-        if validation.is_blocking:
-            raise TerraformValidationError(
-                "Generated Terraform failed deterministic validation.",
-                validator="pipeline",
-                findings=[i.model_dump() for i in validation.issues]
-                + [s.model_dump() for s in validation.security_issues],
-                metadata={
-                    "validators_run": validation.validators_run,
-                    "skipped_validators": validation.skipped_validators,
-                    "template_metadata": result.metadata,
-                    "error_count": validation.error_count,
-                    "security_critical_count": validation.security_critical_count,
-                },
+        failure_classification = classify_validation_result(validation)
+        if failure_classification is None:
+            validation_status = validation.status  # passed | warnings | skipped
+        elif is_recoverable(failure_classification):
+            # NETWORK_ERROR / PROVIDER_FETCH_FAILED — the HCL is fine, the box
+            # just could not reach the registry. Do not block the workflow.
+            validation_status = "degraded"
+            logger.warning(
+                "[TerraformAgent] terraform validation degraded (%s) — artifacts "
+                "are preserved; init/validate can be retried when connectivity "
+                "returns. errors=%d",
+                failure_classification, validation.error_count,
+            )
+        else:
+            # VALIDATION_FAILED — a genuine config defect. Still return the
+            # artifacts (so they are persisted + inspectable) but flag failed.
+            validation_status = "failed"
+            logger.warning(
+                "[TerraformAgent] terraform validation FAILED (%s) — artifacts "
+                "preserved for inspection. errors=%d security_critical=%d",
+                failure_classification, validation.error_count,
+                validation.security_critical_count,
             )
 
         # Build the structured outputs contract from the rendered outputs.tf.
@@ -398,6 +418,8 @@ class TerraformAgent(EnhancedBaseAgent):
             ),
             "generation_metadata": result.metadata,
             "validation": validation.model_dump(),
+            "validation_status": validation_status,
+            "failure_classification": failure_classification,
             "render_mode": "deterministic_template",
             "rag": {
                 "enabled": False,

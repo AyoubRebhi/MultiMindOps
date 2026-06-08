@@ -64,14 +64,33 @@ class TemplateIssue:
         }
 
 
+# Stable, machine-readable reason code surfaced to the API / UI contract.
+UNRESOLVED_TEMPLATE_TOKEN = "UNRESOLVED_TEMPLATE_TOKEN"
+
+
 @dataclass
 class TemplateValidationResult:
     valid: bool = True
     issues: List[TemplateIssue] = field(default_factory=list)
 
+    @property
+    def reason(self) -> Optional[str]:
+        """Machine-readable failure code, or None when valid."""
+        return None if self.valid else UNRESOLVED_TEMPLATE_TOKEN
+
+    @property
+    def affected_artifacts(self) -> List[str]:
+        """Distinct artifacts carrying unresolved tokens (e.g. ["dockerfile"])."""
+        return sorted({i.artifact for i in self.issues})
+
     def to_dict(self) -> dict:
+        # ``reason`` + ``details`` form the structured contract consumed by the
+        # PrebuildGate and the frontend; ``issue_count`` + ``issues`` are kept
+        # for the richer diagnostics the corrector + debug panels already read.
         return {
             "valid": self.valid,
+            "reason": self.reason,
+            "details": self.affected_artifacts,
             "issue_count": len(self.issues),
             "issues": [i.to_dict() for i in self.issues],
         }

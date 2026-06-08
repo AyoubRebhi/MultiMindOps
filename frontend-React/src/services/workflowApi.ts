@@ -1,3 +1,4 @@
+import { type AxiosError } from 'axios'
 import { tasksApi } from '@/api/tasks'
 import { apiClient } from '@/api/client'
 import type {
@@ -94,6 +95,28 @@ export interface DockerBuildStartResponse {
   execution_phase: string
   ws_url: string
   task_id: string
+}
+
+/** Structured payload returned by the PrebuildGate on HTTP 422 (build blocked). */
+export interface DockerBuildBlocked {
+  phase: string
+  status: 'blocked'
+  reason: string
+  details: string[]
+  failure_kind?: string
+  message?: string
+}
+
+/** Thrown by {@link startDockerBuild} when the backend blocks the build (422).
+ *  Carries the structured reason/details so the UI can show WHY it was blocked
+ *  without ever opening a WebSocket against a build that never started. */
+export class BuildBlockedError extends Error {
+  readonly blocked: DockerBuildBlocked
+  constructor(blocked: DockerBuildBlocked) {
+    super(blocked.message || blocked.reason || 'Docker build blocked')
+    this.name = 'BuildBlockedError'
+    this.blocked = blocked
+  }
 }
 
 export interface DockerBuildStatusResponse {
@@ -218,12 +241,24 @@ export async function applyAiPatch(taskId: string): Promise<PatchArtifactsRespon
 
 /** Start an async Docker build.  Returns immediately; connect WS for live logs.
  *  Uses the authenticated apiClient (Bearer token + 401 refresh) — the build
- *  endpoint is gated by require_task_project_contributor. */
+ *  endpoint is gated by require_task_project_contributor.
+ *
+ *  Throws {@link BuildBlockedError} when the PrebuildGate blocks the build
+ *  (HTTP 422). Callers MUST NOT open the log WebSocket in that case — there is
+ *  no build to stream; show the structured reason instead. */
 export async function startDockerBuild(taskId: string): Promise<DockerBuildStartResponse> {
-  const { data } = await apiClient.post<DockerBuildStartResponse>(
-    `/api/execution/docker/build/${taskId}`,
-  )
-  return data
+  try {
+    const { data } = await apiClient.post<DockerBuildStartResponse>(
+      `/api/execution/docker/build/${taskId}`,
+    )
+    return data
+  } catch (e) {
+    const resp = (e as AxiosError<DockerBuildBlocked>)?.response
+    if (resp?.status === 422 && resp.data?.status === 'blocked') {
+      throw new BuildBlockedError(resp.data)
+    }
+    throw e
+  }
 }
 
 /** Retry through the human-in-the-loop endpoint using latest saved artifacts. */

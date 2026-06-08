@@ -460,6 +460,39 @@ class TerraformPipelineService:
             duration_ms=duration_ms,
         )
 
+    def rehydrate(
+        self,
+        artifact_id: str,
+        files: Dict[str, str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        """Materialise a set of Terraform files onto disk under the artifact dir.
+
+        This is the "disk sync" step of the unified pipeline: the canonical
+        ``.tf`` source lives in the DB (``Artifact`` rows produced by the LLM
+        TerraformAgent); ``rehydrate`` writes that source back to
+        ``<storage_root>/<artifact_id>/`` so the streamed validate/plan phases
+        run ``terraform`` against the *real generated* artifact.
+
+        Idempotent: re-writing the same id overwrites the directory's files.
+        Because the source of truth is the DB, this can be called defensively
+        before validate/plan to reconstruct a directory that a process restart
+        wiped — closing the ephemeral-storage durability gap.
+        """
+        if not files:
+            raise ValueError("rehydrate requires at least one file to write")
+
+        meta: Dict[str, Any] = dict(metadata or {})
+        meta.setdefault("generated_by", "rehydrate")
+        meta.setdefault("rehydrated_at", time.time())
+
+        self._persist(artifact_id, files, meta)
+        logger.info(
+            "[TerraformPipelineService] Rehydrated artifact id=%s (%d files) → %s",
+            artifact_id, len(files), self._artifact_dir(artifact_id),
+        )
+        return self._artifact_dir(artifact_id)
+
     def artifact_path(self, artifact_id: str) -> Path:
         """Public accessor for an artifact's on-disk directory.
 

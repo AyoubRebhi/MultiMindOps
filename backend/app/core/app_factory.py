@@ -12,7 +12,10 @@ from backend.app.api.router import api_router
 from backend.app.core.config import settings
 from backend.app.core.log_redaction import install_secret_redactor
 from backend.app.core.logging_setup import configure_logging
-from backend.app.core.schema_guard import run_schema_guard
+from backend.app.core.schema_guard import (
+    ensure_single_active_workflow_index,
+    run_schema_guard,
+)
 from backend.app.database.base import Base
 from backend.app.database.session import engine
 from backend.app.services.repository.github_service import resolve_workspace_dir
@@ -120,6 +123,10 @@ def create_app() -> FastAPI:
     # (e.g. tasks.project_id) is detected and self-healed at boot — see
     # backend/app/core/schema_guard.py.
     run_schema_guard(engine)
+    # Defense-in-depth behind the application-level get_or_create_workflow guard:
+    # a partial unique index enforcing one ACTIVE workflow per project. Safe +
+    # best-effort (Postgres only; skipped if legacy duplicates exist).
+    ensure_single_active_workflow_index(engine)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

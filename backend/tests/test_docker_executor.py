@@ -158,6 +158,8 @@ async def test_build_image_success():
     with (
         patch("backend.app.services.execution.docker_executor.asyncio.create_subprocess_exec",
               new=AsyncMock(return_value=mock_proc)),
+        patch("backend.app.services.execution.docker_executor.ensure_docker_daemon",
+              new=AsyncMock(return_value=(True, None))),
         patch("backend.app.services.execution.docker_executor.tempfile.mkdtemp",
               return_value="/tmp/fake_workspace"),
         patch("pathlib.Path.write_text"),
@@ -194,6 +196,8 @@ async def test_build_image_invalid_dockerfile():
     with (
         patch("backend.app.services.execution.docker_executor.asyncio.create_subprocess_exec",
               new=AsyncMock(return_value=mock_proc)),
+        patch("backend.app.services.execution.docker_executor.ensure_docker_daemon",
+              new=AsyncMock(return_value=(True, None))),
         patch("backend.app.services.execution.docker_executor.tempfile.mkdtemp",
               return_value="/tmp/fake_fail"),
         patch("pathlib.Path.write_text"),
@@ -235,6 +239,8 @@ async def test_build_image_timeout():
     with (
         patch("backend.app.services.execution.docker_executor.asyncio.create_subprocess_exec",
               new=_slow_subprocess),
+        patch("backend.app.services.execution.docker_executor.ensure_docker_daemon",
+              new=AsyncMock(return_value=(True, None))),
         patch("backend.app.services.execution.docker_executor.BUILD_TIMEOUT_SECONDS", 0),
         patch("backend.app.services.execution.docker_executor.tempfile.mkdtemp",
               return_value="/tmp/fake_timeout"),

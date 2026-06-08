@@ -9,9 +9,7 @@ import {
   Cpu,
   GitBranch,
   Activity,
-  Workflow,
   FolderGit2,
-  Layers,
   X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -20,10 +18,8 @@ import { useTaskStore } from '@/store/taskStore'
 const NAV = [
   { to: '/',               icon: LayoutDashboard, label: 'Dashboard'    },
   { to: '/projects',       icon: FolderGit2,      label: 'Projects'     },
-  { to: '/tasks/workflow', icon: Workflow,        label: 'New Workflow' },
   { to: '/tasks/new',      icon: Plus,            label: 'Quick Task'   },
   { to: '/tasks',          icon: Activity,        label: 'All Tasks'    },
-  { to: '/terraform',      icon: Layers,          label: 'Terraform'    },
 ]
 
 const TOOLS = [

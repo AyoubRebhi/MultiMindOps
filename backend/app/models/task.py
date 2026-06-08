@@ -1,11 +1,21 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.sql import func
 
 from backend.app.database.base import Base
+
+# JSONB on Postgres (production); plain JSON on SQLite (tests). Same pattern as
+# Artifact / ExecutionJob — lets the golden-path test boot the real Task table
+# against an in-memory session.
+#
+# NOTE: each column gets a FRESH type instance — the mutable extension keys its
+# listeners by the type instance, so sharing one between a MutableDict and a
+# MutableList column breaks coercion.
+def _json_variant():
+    return JSONB().with_variant(JSON(), "sqlite")
 
 
 class Task(Base):
@@ -15,11 +25,15 @@ class Task(Base):
     prompt = Column(Text, nullable=False)
     status = Column(String, nullable=False, default="pending")
 
-    plan = Column(MutableDict.as_mutable(JSONB), nullable=True)
-    logs = Column(MutableList.as_mutable(JSONB), nullable=False, default=list)
-    result = Column(MutableDict.as_mutable(JSONB), nullable=True)
-    # Stores the full OrchestratorState between plan-preview and validate-plan
-    workflow_state = Column(MutableDict.as_mutable(JSONB), nullable=True)
+    plan = Column(MutableDict.as_mutable(_json_variant()), nullable=True)
+    logs = Column(MutableList.as_mutable(_json_variant()), nullable=False, default=list)
+    result = Column(MutableDict.as_mutable(_json_variant()), nullable=True)
+    # Execution SCRATCH — the orchestrator's working copy of OrchestratorState
+    # carried between phase methods. This is NOT a source of truth: the
+    # authoritative phase record is ``Workflow.phases_state`` (see
+    # ``backend/app/models/workflow.py``). Read it for orchestrator inputs, but
+    # never treat its ``current_phase`` as the canonical workflow status.
+    workflow_state = Column(MutableDict.as_mutable(_json_variant()), nullable=True)
 
     # Project link is mandatory — Phase 1 authz unification closed the
     # cross-tenant hole that existed while this column was nullable. Every

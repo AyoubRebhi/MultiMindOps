@@ -12,6 +12,7 @@ The orchestrator itself is NOT modified. This service composes around it.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -46,6 +47,12 @@ PHASE_TF_PLAN = "TERRAFORM_PLAN"
 
 _TF_PIPELINE_PHASES = {PHASE_TF_GENERATION, PHASE_TF_VALIDATION, PHASE_TF_PLAN}
 
+# Workflow statuses that are TERMINAL — a project may create a new workflow once
+# its current one reaches any of these. Everything else (pending, running,
+# awaiting_input) is "active", and a project may have at most ONE active workflow
+# at a time. Historical (terminal) workflows are never touched by this rule.
+TERMINAL_WORKFLOW_STATUSES = {"completed", "failed", "cancelled"}
+
 # Phase → durable job phase string consumed by the worker handler registry.
 _TF_JOB_PHASE = {
     PHASE_TF_VALIDATION: "terraform_validate",
@@ -65,6 +72,74 @@ def terraform_stream_key(task_id: str, job_phase: str) -> str:
 
 class WorkflowOrchestrationService:
     # ─── Workflow lifecycle ──────────────────────────────────────────────────
+
+    @staticmethod
+    def get_active_workflow(db: Session, project_id: str) -> Optional[Workflow]:
+        """Return the project's single ACTIVE (non-terminal) workflow, if any.
+
+        "Active" = status not in :data:`TERMINAL_WORKFLOW_STATUSES`. If more than
+        one exists (e.g. duplicates created before this guard shipped), the most
+        recently created one is returned so callers converge on a single run.
+        """
+        return (
+            db.query(Workflow)
+            .filter(
+                Workflow.project_id == project_id,
+                Workflow.status.notin_(TERMINAL_WORKFLOW_STATUSES),
+            )
+            .order_by(Workflow.created_at.desc())
+            .first()
+        )
+
+    @staticmethod
+    def get_or_create_workflow(
+        db: Session,
+        *,
+        project: Project,
+        user: User,
+        prompt: str,
+        execution_mode: str = "full",
+    ) -> Tuple[Workflow, Task, dict]:
+        """Single-active-workflow entry point used by BOTH creation paths.
+
+        Enforces "one project = one active workflow": if the project already has
+        an active (non-terminal) workflow with a backing task, that workflow is
+        returned as-is (no second run is started, no architecture-decision is
+        re-run). Otherwise a fresh workflow is created via
+        :meth:`start_workflow`.
+
+        Both the project-creation bootstrap and the explicit
+        ``POST /projects/{id}/workflows`` endpoint funnel through here, which is
+        what prevents the duplicate-workflow bug (bootstrap + API each creating
+        one). Terminal workflows do not block creation, so a completed/failed/
+        cancelled run is preserved and the next call starts a new workflow.
+        """
+        existing = WorkflowOrchestrationService.get_active_workflow(db, project.id)
+        if existing is not None:
+            task = WorkflowOrchestrationService.get_backing_task(db, existing)
+            if task is not None:
+                state = TaskService.load_workflow_state(db, task) or {}
+                logger.info(
+                    "[Workflow] reusing active workflow=%s for project=%s "
+                    "(status=%s) — not creating a duplicate",
+                    existing.id, project.id, existing.status,
+                )
+                return existing, task, state
+            # An active workflow with no backing task is a degenerate/broken row
+            # that callers cannot use. Fall through and create a usable one.
+            logger.warning(
+                "[Workflow] active workflow=%s for project=%s has no backing task "
+                "— creating a fresh workflow",
+                existing.id, project.id,
+            )
+
+        return WorkflowOrchestrationService.start_workflow(
+            db,
+            project=project,
+            user=user,
+            prompt=prompt,
+            execution_mode=execution_mode,
+        )
 
     @staticmethod
     def start_workflow(
@@ -202,21 +277,43 @@ class WorkflowOrchestrationService:
         task: Task,
         phase: str,
     ) -> Tuple[dict, List[str]]:
-        """Run a single phase by name.
+        """Run a single phase of the canonical workflow.
 
-        Loads state from the backing Task, delegates to the OrchestratorAgent's
-        per-phase method, persists state back to the Task, persists generated
-        artifacts to the project, and updates ``Workflow.phases_state``.
+        Canonical workflow:
+            ANALYSIS → INFRASTRUCTURE (terraform gen → validate → plan) → DOCKER.
+
+        The only LLM agent phase reachable here is DOCKER. Terraform
+        generation/validation/plan run through the dedicated pipeline path
+        (``_run_terraform_pipeline_phase``). CI/CD and Kubernetes are
+        deactivated — they are not part of the supported workflow.
+
+        Every phase is ATOMIC + IDEMPOTENT + retry-safe:
+          1. updates ``Workflow.phases_state`` (the single source of truth),
+          2. persists generated artifacts to the DB,
+          3. writes the orchestrator scratch state,
+        all in ONE transaction — a throw rolls the whole phase back. Re-running
+        a phase does not duplicate artifacts (upserts dedupe by content hash;
+        phase records are last-writer overwrites).
 
         Returns ``(state, persisted_artifact_ids)``.
         """
-        # Infrastructure Lifecycle phases run through a dedicated path: the
-        # template MVP pipeline + (for validation/plan) the durable job system.
-        # They do NOT touch the OrchestratorAgent / LLM terraform phase.
-        if phase.upper() in _TF_PIPELINE_PHASES:
+        phase_upper = phase.upper()
+
+        # Hard prerequisite gate — phases must run in dependency order.
+        WorkflowOrchestrationService._enforce_prerequisites(workflow, phase_upper)
+
+        # Infrastructure Lifecycle phases run through the dedicated pipeline path
+        # (LLM generation → DB → rehydrate → durable validate/plan jobs).
+        if phase_upper in _TF_PIPELINE_PHASES:
             return WorkflowOrchestrationService._run_terraform_pipeline_phase(
                 db, project=project, workflow=workflow, task=task,
-                phase=phase.upper(),
+                phase=phase_upper,
+            )
+
+        if phase_upper != PHASE_DOCKER:
+            raise ValueError(
+                f"Phase '{phase}' is not supported. Valid phases: DOCKER, "
+                "TERRAFORM_GENERATION, TERRAFORM_VALIDATION, TERRAFORM_PLAN."
             )
 
         prior_state = TaskService.load_workflow_state(db, task) or {}
@@ -226,68 +323,190 @@ class WorkflowOrchestrationService:
             db, prior_state, project_id=project.id,
         )
         orchestrator = OrchestratorAgent()
+        agent_name = "InfrastructureAgent"
 
-        phase_upper = phase.upper()
-        agent_name = ""
+        state = orchestrator.run_docker_phase(prior_state)
+        # Fold the build-critical setup that used to live only in the legacy
+        # /workflow run-docker endpoint so the canonical surface produces the
+        # same build-ready state (repo_source_path, known_files, editable
+        # artifact layer, build-context mirror).
+        state = WorkflowOrchestrationService._prepare_docker_build_state(state)
 
-        if phase_upper == PHASE_DOCKER:
-            state = orchestrator.run_docker_phase(prior_state)
-            agent_name = "InfrastructureAgent"
-        elif phase_upper == PHASE_TERRAFORM:
-            state = orchestrator.run_terraform_phase_only(prior_state, task_id=task.id)
-            agent_name = "TerraformAgent"
-        elif phase_upper == PHASE_KUBERNETES:
-            state = orchestrator.run_kubernetes_phase_only(prior_state)
-            agent_name = "KubernetesAgent"
-        elif phase_upper == PHASE_CICD:
-            state = orchestrator.run_cicd_and_finalize_phase(prior_state)
-            agent_name = "CICDAgent"
-        else:
-            raise ValueError(f"Unknown phase: {phase}")
-
-        TaskService.save_workflow_state(db, task, state)
-
+        # ── Atomic phase commit: scratch + artifacts + phase record together ──
+        TaskService.stage_workflow_state(task, state)
         artifacts = ArtifactPersistenceService.persist_state_artifacts(
             db,
             project_id=project.id,
             workflow_id=workflow.id,
             state=state,
             generated_by_agent=agent_name,
+            commit=False,
         )
 
-        phase_succeeded = not state.get("current_phase", "").endswith("_failed")
+        phase_succeeded = not str(state.get("current_phase", "")).endswith("_failed")
+        phase_status = "completed" if phase_succeeded else "failed"
+        phase_extra: dict = {
+            "artifact_count": len(artifacts),
+            "current_phase": state.get("current_phase"),
+        }
+        # DOCKER phase-completion contract: it never fails on LLM problems, but
+        # it may complete via deterministic fallback. Surface that distinction.
+        docker_meta = state.get("docker_phase") or {}
+        phase_extra["used_llm"] = docker_meta.get("used_llm", True)
+        phase_extra["fallback_used"] = docker_meta.get("fallback_used", False)
+        phase_extra["generation_mode"] = docker_meta.get("generation_mode", "llm")
+        if phase_succeeded and docker_meta.get("status") == "completed_with_fallback":
+            phase_status = "completed_with_fallback"
+
         WorkflowOrchestrationService._record_phase(
-            workflow,
-            phase=phase_upper,
-            status="completed" if phase_succeeded else "failed",
-            extra={
-                "artifact_count": len(artifacts),
-                "current_phase": state.get("current_phase"),
-            },
+            workflow, phase=PHASE_DOCKER, status=phase_status, extra=phase_extra,
         )
-        workflow.current_phase = phase_upper
-        workflow.status = "running" if phase_upper != PHASE_CICD else "completed"
-        if phase_upper == PHASE_CICD:
-            workflow.finished_at = datetime.now(timezone.utc)
+        workflow.current_phase = PHASE_DOCKER
+        workflow.status = "running"
 
         if state.get("result"):
-            TaskService.save_result(db, task, state["result"])
+            task.result = state["result"]
         if state.get("plan"):
-            TaskService.save_plan(db, task, state["plan"])
-
-        # Per-phase ProjectContext capture — docker/terraform/k8s hints,
-        # infrastructure summary, and validation rollup.
-        ProjectContextService.capture_from_state(
-            db,
-            project_id=project.id,
-            state=state,
-            phase=phase_upper,
-            generated_by=agent_name,
-        )
+            task.plan = state["plan"]
 
         db.commit()
         db.refresh(workflow)
+
+        # Derived ProjectContext digests are non-critical — capture in a
+        # separate best-effort transaction so a digest failure cannot roll back
+        # the (already committed) phase.
+        WorkflowOrchestrationService._capture_context_best_effort(
+            db, project_id=project.id, state=state, phase=PHASE_DOCKER,
+            generated_by=agent_name,
+        )
+
         return state, [a.id for a in artifacts]
+
+    # ─── Phase helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _enforce_prerequisites(workflow: Workflow, phase_upper: str) -> None:
+        """Reject a phase whose dependency phases have not completed.
+
+        Reads the authoritative ``Workflow.phases_state``. Raises ``ValueError``
+        (surfaced as HTTP 400) on an out-of-order request.
+        """
+        phases = workflow.phases_state or {}
+
+        def _is_completed(name: str) -> bool:
+            status = (phases.get(name) or {}).get("status")
+            return status in ("completed", "completed_with_fallback", "completed_no_files")
+
+        plan_selected = "PLAN_SELECTED" in phases
+
+        if phase_upper in (PHASE_DOCKER, PHASE_TF_GENERATION):
+            if not plan_selected:
+                raise ValueError(
+                    f"Cannot run {phase_upper}: a plan must be selected first "
+                    "(PLAN_SELECTED)."
+                )
+        elif phase_upper in (PHASE_TF_VALIDATION, PHASE_TF_PLAN):
+            if not _is_completed(PHASE_TF_GENERATION):
+                raise ValueError(
+                    f"Cannot run {phase_upper}: run TERRAFORM_GENERATION first."
+                )
+
+    @staticmethod
+    def _prepare_docker_build_state(state: dict) -> dict:
+        """Mirror Docker-agent outputs into the canonical infrastructure store.
+
+        Ported from the (removed) legacy ``/workflow`` run-docker endpoint so
+        the project surface yields the same build-ready state: the editable
+        artifact layer, the BuildStrategyDetector context, ``known_files`` for
+        the pre-build gate, and ``repo_source_path`` for the DockerExecutor.
+        """
+        from backend.app.services.core.artifact_service import ArtifactService
+
+        generated = dict((state.get("infra") or {}).get("artifacts") or {})
+        state = ArtifactService.initialize_from_state(state, generated)
+
+        infra_agent_response = state.get("infra") or {}
+        infra_store = state.setdefault("infrastructure", {})
+        for key in (
+            "repository_build_context",
+            "build_artifact_context",
+            "topology_summary",
+            "infrastructure_generation",
+        ):
+            value = infra_agent_response.get(key)
+            if value is not None:
+                infra_store[key] = value
+
+        agent_ctx = (state.get("agent_context") or {}).get("infrastructure_context") or {}
+        known_files = agent_ctx.get("known_files")
+        if known_files:
+            infra_store["known_files"] = list(known_files)
+
+        repo_source_path = (
+            state.get("repo_path")
+            or (state.get("agent_context") or {}).get("repo_path")
+        )
+        if repo_source_path:
+            infra_store["repo_source_path"] = repo_source_path
+
+        return state
+
+    @staticmethod
+    def _capture_context_best_effort(
+        db: Session,
+        *,
+        project_id: str,
+        state: dict,
+        phase: str,
+        generated_by: str,
+    ) -> None:
+        try:
+            ProjectContextService.capture_from_state(
+                db, project_id=project_id, state=state, phase=phase,
+                generated_by=generated_by,
+            )
+        except Exception as exc:  # noqa: BLE001 — context capture is non-critical
+            logger.warning(
+                "[ProjectContext] capture failed for phase=%s: %s",
+                phase, exc.__class__.__name__,
+            )
+            db.rollback()
+
+    @staticmethod
+    def record_build_result(
+        db: Session,
+        task: Task,
+        *,
+        status: str,
+        extra: Optional[dict] = None,
+    ) -> Optional[Workflow]:
+        """Reflect a Docker BUILD outcome on the authoritative phase record.
+
+        The build runs on the Task-scoped execution surface; this mirrors its
+        terminal outcome onto the owning ``Workflow.phases_state`` so phase
+        truth lives in exactly ONE place. ``status`` is one of
+        ``completed`` | ``failed`` | ``blocked``. A successful build is the
+        workflow's terminal state (the canonical workflow ends at DOCKER build).
+        """
+        workflow_id = getattr(task, "workflow_id", None)
+        if not workflow_id:
+            return None
+        workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
+        if workflow is None:
+            return None
+
+        WorkflowOrchestrationService._record_phase(
+            workflow, phase="DOCKER_BUILD", status=status, extra=extra or {},
+        )
+        workflow.current_phase = "DOCKER_BUILD"
+        if status == "completed":
+            workflow.status = "completed"
+            workflow.finished_at = datetime.now(timezone.utc)
+        elif status in ("failed", "blocked"):
+            # The run is not done — a fix + rebuild can still complete it.
+            workflow.status = "running"
+        db.commit()
+        return workflow
 
     # ─── Infrastructure Lifecycle (Terraform MVP pipeline) ───────────────────
 
@@ -323,71 +542,119 @@ class WorkflowOrchestrationService:
         workflow: Workflow,
         task: Task,
     ) -> Tuple[dict, List[str]]:
+        """Unified Terraform generation: LLM → Artifact DB → rehydrate to disk.
+
+        There is now ONE terraform engine. The LLM ``TerraformAgent`` produces
+        the HCL, it is persisted to the DB artifact store (the source of truth),
+        then rehydrated onto disk under ``generated_terraform/<artifact_id>/``
+        so the durable validate/plan jobs run ``terraform`` against the *real
+        generated* artifact — not a separately regenerated template.
+        """
         from backend.app.services.core.artifact_persistence_service import (
             classify_artifact,
+            extract_artifacts_from_state,
         )
         from backend.app.services.terraform_pipeline import TerraformPipelineService
 
-        state = TaskService.load_workflow_state(db, task) or {}
-        plan = state.get("plan") or {}
-        blueprint = plan.get("infrastructure_blueprint") or {}
-
-        architecture = (
-            blueprint.get("architecture_style")
-            or plan.get("architecture_style")
-            or state.get("architecture_style")
-        )
-        if not architecture:
-            raise ValueError(
-                "Cannot run TERRAFORM_GENERATION: no architecture style found in "
-                "the selected plan. Run architecture-decision + select-plan first."
-            )
-
-        # The MVP pipeline only supports the 'balanced' tier; pass it explicitly
-        # rather than the selected strategy id (low_cost/high_performance), which
-        # the template renderer does not implement.
-        project_name = (plan.get("project_name") or project.name or "app")[:32]
-
-        svc = TerraformPipelineService()
-        result = svc.generate(
-            architecture=str(architecture),
-            tier="balanced",
-            project_name=project_name,
+        prior_state = TaskService.load_workflow_state(db, task) or {}
+        prior_state = CredentialsService.hydrate_state(
+            db, prior_state, project_id=project.id,
         )
 
-        # Persist generated .tf into the project DB artifact store so the
-        # timeline counts them, alongside the filesystem copy generate() wrote.
-        persisted: List[str] = []
-        for filename, content in result.files.items():
-            row = ArtifactPersistenceService.upsert_artifact(
-                db,
-                project_id=project.id,
-                workflow_id=workflow.id,
-                artifact_type=classify_artifact(filename) or "terraform",
-                artifact_subtype=filename,
-                content=content,
-                generated_by_agent="TerraformPipelineService",
-            )
-            persisted.append(row.id)
-        db.commit()
+        orchestrator = OrchestratorAgent()
+        state = orchestrator.run_terraform_phase_only(prior_state, task_id=task.id)
 
-        # Record the pipeline artifact id so validation/plan can locate the dir.
+        current = str(state.get("current_phase") or "")
+        # Only a GENUINE failure blocks the phase. A registry-unreachable
+        # init/validate is reported as validation_status="degraded" (NOT a
+        # current_phase failure) so the workflow continues.
+        failed = current in ("terraform_failed", "terraform_validation_failed")
+        validation_status = state.get("terraform_validation_status")
+        failure_classification = state.get("terraform_failure_classification")
+
+        # STEP 1 — persist EVERY generated artifact to the DB FIRST. This runs
+        # unconditionally: artifact creation is never gated on terraform init /
+        # validate success. The .tf files land as `terraform` rows inside the
+        # atomic phase transaction (source of truth).
+        artifacts = ArtifactPersistenceService.persist_state_artifacts(
+            db,
+            project_id=project.id,
+            workflow_id=workflow.id,
+            state=state,
+            generated_by_agent="TerraformAgent",
+            commit=False,
+        )
+
+        # Collect the terraform files for the disk rehydration step.
+        all_files = extract_artifacts_from_state(state)
+        tf_files = {
+            fn: content
+            for fn, content in all_files.items()
+            if isinstance(content, str) and classify_artifact(fn) == "terraform"
+        }
+
+        # STEP 2 — attempt rehydration to disk whenever HCL exists, REGARDLESS of
+        # validation outcome. Disk durability is decoupled from init success so a
+        # registry outage cannot leave validate/plan without a directory to run
+        # against (the DB already has the canonical copy as a fallback).
+        artifact_id: Optional[str] = None
+        if tf_files:
+            artifact_id = uuid.uuid4().hex[:12]
+            try:
+                TerraformPipelineService().rehydrate(
+                    artifact_id,
+                    tf_files,
+                    metadata={
+                        "source": "TerraformAgent",
+                        "project_id": project.id,
+                        "workflow_id": workflow.id,
+                        "files": sorted(tf_files),
+                        "validation_status": validation_status,
+                        "failure_classification": failure_classification,
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 — disk sync is best-effort
+                # The DB copy is authoritative; the worker re-rehydrates from DB
+                # before validate/plan. A disk-write failure must not lose the
+                # artifacts or fail the phase.
+                logger.warning(
+                    "[TerraformPipeline] rehydrate to disk failed (DB copy intact): %s",
+                    exc,
+                )
+
+        # Stash the pipeline artifact id so validate/plan can locate the dir.
         tf_state = state.setdefault("terraform_pipeline", {})
-        tf_state["artifact_id"] = result.id
-        tf_state["architecture"] = str(architecture)
-        tf_state["tier"] = "balanced"
-        tf_state["files"] = sorted(result.files.keys())
-        tf_state["metadata"] = result.metadata
-        TaskService.save_workflow_state(db, task, state)
+        if artifact_id:
+            tf_state["artifact_id"] = artifact_id
+            tf_state["files"] = sorted(tf_files)
+        TaskService.stage_workflow_state(task, state)
+
+        # STEP 3 — phase status. Generation that produced HCL is `completed`
+        # (incl. the degraded-validation case → workflow continues). Only a
+        # genuine generation/validation defect is `failed`; even then the
+        # artifacts above remain persisted for inspection/retry.
+        if failed:
+            status = "failed"
+        elif tf_files:
+            status = "completed"
+        else:
+            # Generation ran but produced no terraform files (e.g. the plan did
+            # not request terraform). Not an error — there is just nothing to
+            # validate/plan.
+            status = "completed_no_files"
 
         WorkflowOrchestrationService._record_phase(
             workflow,
             phase=PHASE_TF_GENERATION,
-            status="completed",
+            status=status,
             extra={
-                "artifact_id": result.id,
-                "artifact_count": len(persisted),
-                "architecture": str(architecture),
+                "artifact_id": artifact_id,
+                "artifact_count": len(artifacts),
+                "file_count": len(tf_files),
+                "current_phase": current,
+                "validation_status": validation_status,
+                "failure_classification": failure_classification,
             },
         )
         workflow.current_phase = PHASE_TF_GENERATION
@@ -395,11 +662,18 @@ class WorkflowOrchestrationService:
         db.commit()
         db.refresh(workflow)
 
-        logger.info(
-            "[TerraformPipeline] generation complete project=%s artifact=%s files=%d",
-            project.id, result.id, len(persisted),
+        WorkflowOrchestrationService._capture_context_best_effort(
+            db, project_id=project.id, state=state, phase="TERRAFORM",
+            generated_by="TerraformAgent",
         )
-        return state, persisted
+
+        logger.info(
+            "[TerraformPipeline] generation complete project=%s artifact=%s files=%d "
+            "status=%s validation=%s classification=%s",
+            project.id, artifact_id, len(tf_files), status,
+            validation_status, failure_classification,
+        )
+        return state, [a.id for a in artifacts]
 
     @staticmethod
     def _enqueue_terraform_job(
@@ -476,6 +750,7 @@ class WorkflowOrchestrationService:
         results: List[dict],
         artifact_id: Optional[str] = None,
         error: Optional[str] = None,
+        failure_classification: Optional[str] = None,
         plan_json: Optional[str] = None,
         infrastructure_summary: Optional[dict] = None,
     ) -> None:
@@ -504,6 +779,7 @@ class WorkflowOrchestrationService:
             "artifact_id": artifact_id,
             "ok": ok,
             "error": error,
+            "failure_classification": failure_classification,
         }
         if phase == PHASE_TF_PLAN and ok and infrastructure_summary is not None:
             phase_extra["infrastructure_summary"] = infrastructure_summary
@@ -532,6 +808,7 @@ class WorkflowOrchestrationService:
                 tf_state[phase] = {
                     "ok": ok,
                     "error": error,
+                    "failure_classification": failure_classification,
                     "results": results,
                 }
                 if phase == PHASE_TF_PLAN and infrastructure_summary is not None:
@@ -543,7 +820,14 @@ class WorkflowOrchestrationService:
             import json as _json
 
             report = _json.dumps(
-                {"ok": ok, "error": error, "results": results}, indent=2, default=str
+                {
+                    "ok": ok,
+                    "error": error,
+                    "failure_classification": failure_classification,
+                    "results": results,
+                },
+                indent=2,
+                default=str,
             )
             _APS.upsert_artifact(
                 db,

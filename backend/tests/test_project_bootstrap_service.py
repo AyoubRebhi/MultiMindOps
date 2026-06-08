@@ -117,7 +117,7 @@ def test_bootstrap_happy_path_transitions_through_all_states():
 
     with patch(
         "backend.app.services.core.project_bootstrap_service."
-        "WorkflowOrchestrationService.start_workflow",
+        "WorkflowOrchestrationService.get_or_create_workflow",
         return_value=(fake_workflow, fake_task, fake_state),
     ) as start_wf:
         ProjectBootstrapService.run_bootstrap_analysis(
@@ -126,7 +126,7 @@ def test_bootstrap_happy_path_transitions_through_all_states():
             user_id="u1",
         )
 
-    # start_workflow must have been called exactly once
+    # get_or_create_workflow must have been called exactly once
     assert start_wf.call_count == 1
 
     # Final state is ready, with no error
@@ -154,7 +154,7 @@ def test_bootstrap_records_structured_failure_on_orchestrator_error():
 
     with patch(
         "backend.app.services.core.project_bootstrap_service."
-        "WorkflowOrchestrationService.start_workflow",
+        "WorkflowOrchestrationService.get_or_create_workflow",
         side_effect=boom,
     ):
         # Bootstrap MUST NOT re-raise — it runs in a background task and the
@@ -177,10 +177,10 @@ def test_bootstrap_short_circuits_when_no_repository_url():
     user = _FakeUser()
     factory, session = _make_session_factory(project, user)
 
-    # Even though we patch start_workflow, it must NOT be called.
+    # Even though we patch get_or_create_workflow, it must NOT be called.
     with patch(
         "backend.app.services.core.project_bootstrap_service."
-        "WorkflowOrchestrationService.start_workflow",
+        "WorkflowOrchestrationService.get_or_create_workflow",
     ) as start_wf:
         ProjectBootstrapService.run_bootstrap_analysis(
             session_factory=factory,

@@ -16,10 +16,12 @@ returns immediately.
 
 Important design notes
 ----------------------
-1. The bootstrap REUSES ``WorkflowOrchestrationService.start_workflow``. We
-   do NOT re-implement orchestration; we wrap it. If a future bootstrap step
-   needs a deviation from the workflow path, add a hook here — do not fork
-   the orchestrator.
+1. The bootstrap REUSES ``WorkflowOrchestrationService.get_or_create_workflow``.
+   We do NOT re-implement orchestration; we wrap it. Going through
+   get_or_create (rather than start_workflow directly) enforces one active
+   workflow per project, so the bootstrap and the explicit API endpoint can
+   never both create one. If a future bootstrap step needs a deviation from the
+   workflow path, add a hook here — do not fork the orchestrator.
 2. Background tasks run OUTSIDE the request scope. Callers MUST pass a
    factory that yields a fresh ``Session`` (``SessionLocal``) — never reuse
    the request-scoped session. The factory is wired in the route.
@@ -165,7 +167,11 @@ class ProjectBootstrapService:
             logger.info("[BOOTSTRAP] project=%s status=%s", project.id, STATUS_ANALYZING)
 
             try:
-                workflow, task, state = WorkflowOrchestrationService.start_workflow(
+                # get_or_create enforces one active workflow per project: if the
+                # user already kicked off a workflow via the API before this
+                # background bootstrap ran, we reuse it instead of creating a
+                # duplicate (and vice-versa).
+                workflow, task, state = WorkflowOrchestrationService.get_or_create_workflow(
                     db,
                     project=project,
                     user=user,

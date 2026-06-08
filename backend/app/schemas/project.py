@@ -163,15 +163,15 @@ class SelectPlanRequest(BaseModel):
     plan_id: str = Field(..., min_length=1)
 
 
+# Canonical workflow phases. The standalone LLM-only "TERRAFORM" phase was
+# collapsed into the unified TERRAFORM_GENERATION (LLM → DB → rehydrate →
+# validate → plan). CI/CD and KUBERNETES are deactivated — not part of the
+# supported workflow (ANALYSIS → INFRASTRUCTURE → DOCKER).
 PhaseName = Literal[
-    "DOCKER",
-    "TERRAFORM",
-    "KUBERNETES",
-    "CICD",
-    # Infrastructure Lifecycle phases (template-driven MVP pipeline).
     "TERRAFORM_GENERATION",
     "TERRAFORM_VALIDATION",
     "TERRAFORM_PLAN",
+    "DOCKER",
 ]
 
 

@@ -28,7 +28,11 @@
       "Bash(Select-Object Name, FullName)",
       "Bash(Head -30)",
       "Bash(python -c \"import ast; ast.parse\\(open\\(r'backend/app/services/llm/token_strategy.py', encoding='utf-8'\\).read\\(\\)\\); print\\('token_strategy.py OK'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\(r'backend/app/services/llm/openai_provider.py', encoding='utf-8'\\).read\\(\\)\\); print\\('openai_provider.py OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\(r'backend/app/services/llm/openai_provider.py', encoding='utf-8'\\).read\\(\\)\\); print\\('openai_provider.py OK'\\)\")",
+      "Bash(where terraform *)",
+      "Bash(\"C:\\\\terraform\\\\terraform.exe\" -version)",
+      "Bash(docker version *)",
+      "Bash(PYTHONIOENCODING=utf-8 ./venv/Scripts/python.exe \"C:/Users/ayoub/AppData/Local/Temp/qa_e2e2.py\" setup)"
     ]
   }
 }

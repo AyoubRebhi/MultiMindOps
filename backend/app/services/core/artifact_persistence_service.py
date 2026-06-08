@@ -40,11 +40,30 @@ def compute_content_hash(content: str) -> str:
 # ─── Classification ──────────────────────────────────────────────────────────
 
 # Order matters: more specific rules first. The first matching rule wins.
+#
+# Build inputs are keyed in orchestrator state by CANONICAL KEY (e.g.
+# ``dockerignore``, ``docker_compose``, ``env_example``) — NOT by on-disk
+# filename. Earlier rules only matched the filename forms (``.dockerignore``,
+# ``docker-compose``), so compose/env/.dockerignore silently failed to persist
+# and lived ONLY in the editable scratch store / build temp dir. The canonical-key
+# rules below close that gap: every Docker build input is now a DB-backed Artifact.
 _CLASSIFICATION_RULES: List[Tuple[str, str]] = [
     # (substring or extension to match in lowercase filename, artifact_type)
     ("dockerfile",        "docker"),
     (".dockerignore",     "docker"),
+    ("dockerignore",      "docker"),   # canonical state key (no leading dot)
     ("docker-compose",    "docker"),
+    ("docker_compose",    "docker"),   # canonical state key (underscore)
+    ("compose.yaml",      "docker"),
+    ("compose.yml",       "docker"),
+    ("env_example",       "docker"),   # canonical state key for .env.example
+    (".env",              "docker"),   # .env / .env.example / .env.* filenames
+    # Canonical TerraformAgent state keys (terraform_main, terraform_providers,
+    # terraform_outputs, terraform_variables, terraform_tfvars, terraform_backend,
+    # terraform_vpc/eks/ecs). These are NOT on-disk filenames, so the .tf/.tfvars
+    # rules below never matched them and ALL terraform artifacts were dropped from
+    # the DB. The prefix rule maps every terraform_* key → terraform.
+    ("terraform_",        "terraform"),
     (".tf",               "terraform"),
     (".tfvars",           "terraform"),
     (".tfstate",          "terraform"),
@@ -77,6 +96,42 @@ def classify_artifact(filename: str) -> Optional[str]:
     # Fallback: any .yaml/.yml file generated alongside k8s artifacts is also k8s
     if lower.endswith((".yaml", ".yml")):
         return "kubernetes"
+    return None
+
+
+# Canonical TerraformAgent artifact key → on-disk filename. The DB preserves the
+# canonical key as ``artifact_subtype`` (granularity), but terraform must run
+# against real ``.tf`` files, so the rehydration adapter (``get_terraform_files``)
+# translates the key back to its filename. Mirrors terraform_generation's map.
+_TF_KEY_TO_FILENAME: Dict[str, str] = {
+    "terraform_providers": "providers.tf",
+    "terraform_main":      "main.tf",
+    "terraform_vpc":       "vpc.tf",
+    "terraform_eks":       "eks.tf",
+    "terraform_ecs":       "ecs.tf",
+    "terraform_variables": "variables.tf",
+    "terraform_tfvars":    "terraform.tfvars",
+    "terraform_outputs":   "outputs.tf",
+    "terraform_backend":   "backend.tf",
+}
+
+
+def _terraform_subtype_to_filename(subtype: str) -> Optional[str]:
+    """Map a stored terraform ``artifact_subtype`` to an on-disk filename.
+
+    Accepts both the canonical key (``terraform_main``) and an already-resolved
+    filename (``main.tf``). Returns ``None`` for values that are neither.
+    """
+    if not subtype:
+        return None
+    if subtype in _TF_KEY_TO_FILENAME:
+        return _TF_KEY_TO_FILENAME[subtype]
+    low = subtype.lower()
+    if low.endswith((".tf", ".tfvars", ".tfstate")):
+        return subtype  # already a filename
+    if low.startswith("terraform_"):
+        # Unknown terraform_* key — best-effort: strip prefix + .tf extension.
+        return subtype[len("terraform_"):] + ".tf"
     return None
 
 
@@ -116,11 +171,17 @@ class ArtifactPersistenceService:
         state: dict,
         generated_by_agent: Optional[str] = None,
         validation_status: str = "pending",
+        commit: bool = True,
     ) -> List[Artifact]:
         """Persist every classifiable artifact in state.
 
         Returns the list of ``Artifact`` rows that were created or updated.
         Unclassifiable files are silently skipped — they're not artifacts.
+
+        ``commit=False`` lets a caller fold this persistence into a larger
+        single-transaction phase (the upserts are flushed but not committed),
+        so artifact rows and the ``Workflow.phases_state`` update land
+        atomically — either both or neither.
         """
         artifacts_map = extract_artifacts_from_state(state)
         if not artifacts_map:
@@ -145,12 +206,100 @@ class ArtifactPersistenceService:
             )
             persisted.append(row)
 
-        db.commit()
+        if commit:
+            db.commit()
         logger.info(
-            "[ArtifactPersistence] persisted %d artifacts for project=%s workflow=%s",
-            len(persisted), project_id, workflow_id,
+            "[ArtifactPersistence] persisted %d artifacts for project=%s workflow=%s (commit=%s)",
+            len(persisted), project_id, workflow_id, commit,
         )
         return persisted
+
+    @staticmethod
+    def get_terraform_files(
+        db: Session,
+        *,
+        project_id: str,
+        workflow_id: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Return ``{filename: content}`` for the project's Terraform artifacts.
+
+        The DB is the source of truth for generated HCL. Each ``terraform``
+        ``Artifact`` row carries the canonical TerraformAgent key in
+        ``artifact_subtype`` (e.g. ``terraform_main``) — this method translates
+        it back to the on-disk filename (``main.tf``) so the rehydrated working
+        directory contains real ``.tf`` files terraform can init/validate/plan.
+        Rows already stored under a filename subtype (legacy) pass through.
+
+        ``workflow_id`` is accepted for symmetry but NOT used to filter: the
+        upsert key is ``(project_id, artifact_type, artifact_subtype)``, so
+        there is exactly one canonical terraform file-set per project.
+        """
+        rows = (
+            db.query(Artifact)
+            .filter(
+                Artifact.project_id == project_id,
+                Artifact.artifact_type == "terraform",
+            )
+            .all()
+        )
+        files: Dict[str, str] = {}
+        for row in rows:
+            if not isinstance(row.content, str) or not row.artifact_subtype:
+                continue
+            filename = _terraform_subtype_to_filename(row.artifact_subtype)
+            if filename:
+                files[filename] = row.content
+        return files
+
+    @staticmethod
+    def get_docker_artifacts(
+        db: Session,
+        *,
+        project_id: str,
+        workflow_id: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Return ``{canonical_key: content}`` for the project's Docker artifacts.
+
+        Symmetric to :meth:`get_terraform_files`. The DB is the source of truth
+        for build inputs: each ``docker`` ``Artifact`` row carries the canonical
+        key (``dockerfile`` / ``dockerignore`` / ``docker_compose`` /
+        ``env_example``) in ``artifact_subtype``. Subtypes persisted as on-disk
+        filenames (``.dockerignore``, ``docker-compose.yml``, ``.env.example``)
+        are normalised back to the canonical key the DockerExecutor expects.
+
+        Used by replay so a build re-runs from DB artifacts ONLY — never from a
+        regenerated Dockerfile or transient on-disk state.
+        """
+        # filename → canonical key (mirrors ArtifactService FILENAME map).
+        _FILENAME_TO_KEY = {
+            "dockerfile": "dockerfile",
+            ".dockerignore": "dockerignore",
+            "docker-compose.yml": "docker_compose",
+            "docker-compose.yaml": "docker_compose",
+            "compose.yml": "docker_compose",
+            "compose.yaml": "docker_compose",
+            ".env.example": "env_example",
+            ".env": "env_example",
+        }
+        _CANONICAL = {"dockerfile", "dockerignore", "docker_compose", "env_example"}
+
+        rows = (
+            db.query(Artifact)
+            .filter(
+                Artifact.project_id == project_id,
+                Artifact.artifact_type == "docker",
+            )
+            .all()
+        )
+        files: Dict[str, str] = {}
+        for row in rows:
+            if not isinstance(row.content, str) or not row.artifact_subtype:
+                continue
+            sub = row.artifact_subtype
+            key = sub if sub in _CANONICAL else _FILENAME_TO_KEY.get(sub.lower())
+            if key:
+                files[key] = row.content
+        return files
 
     @staticmethod
     def upsert_artifact(

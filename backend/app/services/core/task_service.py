@@ -217,8 +217,28 @@ class TaskService:
         return task
 
     @staticmethod
+    def stage_workflow_state(task: Task, state: dict) -> Task:
+        """Scrub + assign workflow_state WITHOUT committing.
+
+        Lets a caller fold the scratch-state write into a larger single
+        transaction (e.g. ``WorkflowOrchestrationService.run_phase``) so the
+        scratch state, the persisted artifacts, and the authoritative
+        ``Workflow.phases_state`` update commit atomically — all or nothing.
+        The secret scrub still applies.
+        """
+        task.workflow_state = _sanitize_for_json(state)
+        return task
+
+    @staticmethod
     def save_workflow_state(db: Session, task: Task, state: dict) -> Task:
-        """Persist the full OrchestratorState so it can be resumed later."""
+        """Persist the orchestrator's working state (EXECUTION SCRATCH).
+
+        NOTE: ``Task.workflow_state`` is the orchestrator's scratch carrier,
+        NOT a source of truth. The authoritative phase record is
+        ``Workflow.phases_state``. This persists the scratch so a later phase
+        method can resume from it; it must not be read as the canonical
+        workflow status.
+        """
         task.workflow_state = _sanitize_for_json(state)
         db.commit()
         db.refresh(task)
