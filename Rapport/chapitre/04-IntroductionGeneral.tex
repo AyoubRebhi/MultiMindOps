@@ -1,21 +1,88 @@
-\chapter*{INTRODUCTION GÉNÉRALE}
-\markboth{\MakeUppercase{INTRODUCTION GÉNÉRALE}}{}
-\addcontentsline{toc}{chapter}{INTRODUCTION GÉNÉRALE}
+\chapter*{Introduction Générale}
+\markboth{\MakeUppercase{Introduction Générale}}{}
+\addcontentsline{toc}{chapter}{Introduction Générale}
 \adjustmtc
 \thispagestyle{MyStyle}
 
-% Guide pour la rédaction de l’Introduction Générale
+Les organisations qui développent des applications modernes font face à un défi
+croissant~: la complexité des environnements cloud s'est considérablement accrue ces
+dernières années, au point que configurer et déployer une infrastructure correcte est
+devenu une tâche qui mobilise des équipes entières. Docker, Kubernetes, Terraform,
+pipelines CI/CD~--- chaque couche technologique ajoute sa propre couche de
+configuration, d'erreurs potentielles, et de coûts difficiles à anticiper.
 
-L’\textbf{Introduction Générale} sert à introduire le projet et à donner une vision globale du travail réalisé. Elle doit inclure les éléments suivants :
+Dans ce contexte, les pratiques DevSecOps ont émergé comme une réponse à cette
+fragmentation~: l'idée est d'intégrer la sécurité, l'automatisation et la livraison
+continue dans un même flux de travail cohérent. En théorie, cela permet de déployer
+plus vite, plus sûrement, et avec moins d'interventions manuelles. En pratique,
+mettre en place ce flux demande un niveau d'expertise que beaucoup d'équipes n'ont
+pas~--- ou n'ont pas le temps d'acquérir.
+
+Les outils basés sur l'intelligence artificielle ont tenté d'apporter une réponse à
+cette problématique. Certains assistent la génération de code, d'autres analysent des
+pipelines CI/CD ou génèrent des configurations d'infrastructure. Mais ces solutions
+restent partielles. Un outil qui génère un Dockerfile n'analyse pas votre dépôt pour
+comprendre votre stack. Un assistant qui propose une architecture ne vérifie pas si
+elle est cohérente avec vos contraintes de budget. Et quand un déploiement échoue,
+vous êtes souvent seul face aux logs.
+
+C'est à partir de ce constat que ce projet a été initié, dans le cadre d'un stage de
+fin d'études au sein de Talan Tunisie Consulting~: concevoir une plateforme capable
+d'accompagner l'utilisateur de bout en bout dans la création et le déploiement d'une
+infrastructure cloud moderne. Non pas comme un simple générateur de fichiers, mais
+comme un système capable d'analyser, de raisonner, de générer et de corriger~---
+automatiquement, et de manière cohérente.
+
+La plateforme développée s'appuie sur une architecture multi-agents IA, où chaque
+agent est spécialisé dans une étape précise du workflow DevSecOps~: analyse du code
+source, décision architecturale, estimation des coûts AWS, génération des artefacts
+(Docker, Terraform, Kubernetes, CI/CD), et correction automatique des erreurs
+d'exécution. Ces agents ne fonctionnent pas de manière isolée~; ils partagent un
+contexte commun et collaborent autour d'un workflow orchestré, ce qui garantit la
+cohérence globale des artefacts produits.
+
+Pour limiter les hallucinations inhérentes aux modèles de langage, nous avons adopté
+une approche de génération contrainte baptisée \textit{Structured Constrained
+Generation}. Plutôt que de laisser le LLM générer librement un fichier entier, le
+système découpe la génération en sections indépendantes, guidées par des
+\textit{blueprints} structurés et enrichies par un système RAG spécialisé. Cette
+approche s'est avérée plus stable et plus fiable que la génération classique, en
+particulier pour les configurations Terraform et Kubernetes.
+
+L'objectif principal de ce travail est donc de fournir une plateforme intelligente,
+utilisable concrètement, qui réduit la charge cognitive et le temps de mise en place
+des infrastructures cloud~--- en s'appuyant sur l'IA non pas comme un gadget, mais
+comme un véritable assistant d'ingénierie.
+
+\bigskip
+
+\noindent Ce rapport est organisé comme suit :
 
 \begin{itemize}
-    \item \textbf{Contexte :} Présentez le domaine dans lequel s'inscrit votre projet et les problématiques existantes.
-    \item \textbf{Problématique :} Définissez la problématique spécifique que vous cherchez à résoudre.
-    \item \textbf{Objectifs :} Expliquez les objectifs de votre projet et les bénéfices attendus.
-    \item \textbf{Méthodologie :} Mentionnez brièvement les étapes suivies pour mener à bien le projet.
-    \item \textbf{Plan du rapport :} Décrivez la structure du document en expliquant le contenu de chaque chapitre.
+    \item \textbf{Chapitre 1 --- Cadre général du projet~:} présentation de
+    l'organisme d'accueil, contexte et problématique, analyse des solutions
+    existantes, description de la solution proposée, analyse des besoins et
+    méthodologie adoptée.
+
+    \item \textbf{Chapitre 2 --- Concepts fondamentaux~:} état de l'art des
+    technologies utilisées~: architectures multi-agents, LLM, RAG, DevSecOps,
+    Infrastructure as Code, orchestration cloud.
+
+    \item \textbf{Chapitre 3 --- Analyse et conception~:} modélisation de
+    l'architecture globale du système, diagrammes UML, choix technologiques et
+    conception détaillée des agents et des workflows.
+
+    \item \textbf{Chapitre 4 --- Étude expérimentale~:} protocoles de validation,
+    tests fonctionnels et d'intégration, analyse des résultats et évaluation des
+    performances de la plateforme.
+
+    \item \textbf{Chapitre 5 --- Réalisation~:} implémentation des agents IA,
+    génération des artefacts DevSecOps, interfaces utilisateur et démonstration
+    des fonctionnalités de la plateforme.
 \end{itemize}
 
-\noindent Cette introduction doit être rédigée de manière claire et concise, en mettant en avant l’importance du projet et son impact.
+\bigskip
 
-
+\noindent Ce rapport se clôt par une conclusion générale qui synthétise les
+contributions de ce travail et ouvre sur des perspectives d'évolution de la
+plateforme.
