@@ -1,38 +1,336 @@
-\chapter{Chapitre 3 : Titre du chapitre} % Ajoute un titre au chapitre
+\chapter{Analyse des besoins et conception}
 \begin{spacing}{1.2}
-\minitoc % Affiche la minitoc du chapitre
+\minitoc
 \thispagestyle{MyStyle}
 \end{spacing}
 \clearpage
 
-\section{Introduction}  
-Cette section introduit le contenu du chapitre et présente les objectifs principaux. 
+\section{Introduction}
 
-\section{Section 1 : Titre de la section}
-\subsection{Subsection 1 : Titre de la sous-section}
-\subsubsection{Subsubsection 1 : Titre} 
-Texte explicatif ici...
-\subsubsection{Subsubsection 2 : Titre}
-Texte explicatif ici...
+Après avoir présenté le cadre général du projet et les concepts technologiques sur
+lesquels il repose, ce chapitre s'attache à formaliser les besoins de la plateforme
+et à poser les bases de sa conception. Dans un premier temps, nous identifions les
+acteurs qui interagissent avec le système ainsi que les besoins fonctionnels et non
+fonctionnels qui découlent du contexte présenté au chapitre précédent. Dans un second
+temps, nous proposons une modélisation UML du système permettant de représenter ses
+aspects fonctionnels, structurels et dynamiques. Cette modélisation constitue la base
+sur laquelle s'appuiera l'implémentation des différents agents et workflows présentée
+dans les chapitres suivants.
 
-\subsection{Subsection 2 : Titre de la sous-section}
-Texte explicatif ici...
+\section{Expression des besoins}
 
-\section{Section 2 : Titre de la section}
-\subsection{Subsection 1}
-\subsubsection{Subsubsection 1 : Titre}
-Texte explicatif ici...
-\subsubsection{Subsubsection 2 : Titre}
-Texte explicatif ici...
+\subsection{Identification des acteurs}
 
-\section{Section 3 : Titre de la section}
-\subsection{Subsection 1}
-\subsubsection{Subsubsection 1 : Titre}
-Texte explicatif ici...
-\subsubsection{Subsubsection 2 : Titre}
-Texte explicatif ici...
+L'analyse des besoins commence par l'identification des utilisateurs qui interagissent
+directement avec la plateforme. Contrairement à une première itération du projet qui
+envisageait un nombre plus large de profils, le périmètre actuel se concentre sur deux
+acteurs principaux~: l'\textbf{Ingénieur DevOps} et l'\textbf{Administrateur}. Ce
+recentrage reflète l'usage réel observé pendant le développement~: la plateforme est
+avant tout un outil de travail individuel pour un ingénieur qui souhaite automatiser
+la conception et le déploiement d'une infrastructure, complété par un rôle de gestion
+et de supervision globale assuré par un administrateur.
+
+\subsubsection{Ingénieur DevOps}
+
+L'ingénieur DevOps est l'utilisateur principal de la plateforme. C'est lui qui initie
+un projet, fournit les informations relatives au dépôt applicatif à analyser, et
+échange avec le système au fil des différentes étapes du workflow.
+
+Concrètement, ses interactions couvrent l'ensemble du cycle proposé par la
+plateforme~:
+
+\begin{itemize}
+    \item décrire le besoin d'automatisation et fournir les informations du dépôt
+    cible~;
+    \item consulter les résultats de l'analyse du projet applicatif réalisée par les
+    agents~;
+    \item examiner les stratégies d'architecture proposées et choisir celle qui
+    correspond le mieux à ses contraintes~;
+    \item valider, ou demander la régénération, des artefacts produits (Dockerfile,
+    fichiers Terraform, manifestes Kubernetes, pipelines CI/CD)~;
+    \item déclencher les opérations de build, de validation et de planification
+    Terraform~;
+    \item suivre l'avancement du workflow en temps réel et, en cas d'échec, examiner
+    les corrections proposées par le \textit{Corrector Agent} avant de les approuver.
+\end{itemize}
+
+Un point important est que l'ingénieur DevOps n'a pas besoin de maîtriser en détail la
+syntaxe de chaque outil~: la plateforme se charge de produire les artefacts, son rôle
+étant de guider, valider et arbitrer les décisions importantes.
+
+\subsubsection{Administrateur}
+
+L'administrateur dispose d'une vue transverse sur la plateforme. Son rôle ne porte pas
+sur la conception d'une infrastructure en particulier, mais sur le bon fonctionnement
+général du système~:
+
+\begin{itemize}
+    \item gestion des projets enregistrés sur la plateforme (création, consultation,
+    suppression)~;
+    \item suivi global de l'état des workflows en cours ou terminés, tous projets
+    confondus~;
+    \item supervision des artefacts générés et de l'historique des exécutions~;
+    \item accès aux informations de configuration du système (par exemple les
+    fournisseurs LLM utilisés et leur disponibilité).
+\end{itemize}
+
+En pratique, l'administrateur correspond davantage à un profil de responsable
+technique ou de \textit{lead} DevOps qui souhaite avoir une visibilité d'ensemble sur
+l'utilisation de la plateforme, sans nécessairement intervenir sur chaque projet.
+
+\subsection{Besoins fonctionnels}
+
+Les besoins fonctionnels ont été regroupés par module, en cohérence avec
+l'architecture multi-agents présentée au chapitre précédent. Chaque module correspond
+à une étape du pipeline DevSecOps automatisé par la plateforme.
+
+\begin{itemize}
+    \item \textbf{Gestion des projets~:} le système doit permettre la création d'un
+    projet à partir d'un dépôt GitHub, la consultation de son état d'avancement et
+    l'accès à l'historique des workflows associés.
+
+    \item \textbf{Analyse du code~:} le système doit analyser le dépôt fourni afin
+    d'identifier le langage, le framework, les dépendances et les éléments
+    structurants du projet (présence d'un Dockerfile existant, d'un fichier de
+    dépendances, d'une base de données, etc.).
+
+    \item \textbf{Génération d'architecture~:} à partir de l'analyse du projet, le
+    système doit proposer plusieurs stratégies d'architecture cloud (par exemple
+    \textit{Low Cost}, \textit{Balanced}, \textit{High Performance}), accompagnées
+    d'une estimation de coût, et permettre à l'utilisateur d'en sélectionner une.
+
+    \item \textbf{Génération Docker~:} le système doit générer automatiquement un
+    Dockerfile adapté au projet analysé, en tenant compte du langage, du gestionnaire
+    de dépendances et des bonnes pratiques de sécurité et d'optimisation d'image.
+
+    \item \textbf{Génération Terraform~:} le système doit générer les fichiers
+    Terraform correspondant à l'architecture sélectionnée, en respectant les
+    conventions HCL et la cohérence entre les ressources déclarées.
+
+    \item \textbf{Validation Terraform~:} le système doit pouvoir exécuter une
+    validation des fichiers Terraform générés (\texttt{terraform validate}) et
+    remonter les éventuelles erreurs de syntaxe ou de configuration.
+
+    \item \textbf{Planification Terraform~:} le système doit pouvoir produire un plan
+    d'exécution (\texttt{terraform plan}) afin de présenter à l'utilisateur les
+    ressources qui seraient créées, modifiées ou supprimées avant tout déploiement
+    réel.
+
+    \item \textbf{Gestion des artefacts~:} le système doit conserver les artefacts
+    générés (Dockerfile, fichiers Terraform, manifestes Kubernetes, configurations
+    CI/CD) de manière persistante, versionnée et associée au projet correspondant.
+
+    \item \textbf{Suivi des workflows~:} le système doit permettre à l'utilisateur de
+    suivre, étape par étape et en temps réel, l'état d'exécution du workflow
+    (en attente, en cours, terminé, en erreur), ainsi que les actions de correction
+    déclenchées en cas d'échec.
+\end{itemize}
+
+\subsection{Besoins non fonctionnels}
+
+Au-delà des fonctionnalités attendues, plusieurs exigences de qualité conditionnent la
+viabilité de la plateforme dans un usage réel.
+
+\begin{itemize}
+    \item \textbf{Sécurité~:} les artefacts générés doivent respecter les bonnes
+    pratiques DevSecOps (utilisateurs non-root dans les conteneurs, absence de
+    secrets en clair, permissions minimales pour les ressources cloud). Les échanges
+    avec les fournisseurs LLM ne doivent exposer que les informations strictement
+    nécessaires à la génération.
+
+    \item \textbf{Performance~:} les opérations d'analyse et de génération doivent
+    rester dans des temps de réponse compatibles avec une utilisation interactive,
+    malgré la dépendance à des appels LLM dont la latence peut varier.
+
+    \item \textbf{Disponibilité~:} la plateforme doit limiter l'impact des
+    indisponibilités ponctuelles d'un fournisseur LLM grâce à un mécanisme de
+    \textit{fallback} entre plusieurs providers, afin de ne pas bloquer un workflow en
+    cours.
+
+    \item \textbf{Extensibilité~:} l'architecture multi-agents doit permettre
+    d'ajouter de nouveaux agents spécialisés (par exemple pour un nouveau type
+    d'artefact ou un nouveau fournisseur cloud) sans remettre en cause les agents
+    existants.
+
+    \item \textbf{Maintenabilité~:} chaque agent doit rester responsable d'un
+    périmètre clairement délimité, afin de faciliter la correction de bugs et
+    l'évolution indépendante de chaque module.
+
+    \item \textbf{Traçabilité~:} chaque étape du workflow, chaque artefact généré et
+    chaque correction appliquée doivent être enregistrés, afin de pouvoir reconstituer
+    a posteriori le déroulement complet d'une exécution.
+
+    \item \textbf{Ergonomie~:} l'interface doit présenter l'avancement du workflow de
+    manière claire et progressive, en évitant de confronter l'utilisateur à des
+    détails techniques (logs bruts, sorties d'outils) tant qu'une intervention de sa
+    part n'est pas nécessaire.
+\end{itemize}
+
+\section{Modélisation du système}
+
+Les besoins exprimés ci-dessus restent, par nature, descriptifs. Pour passer d'une
+liste d'exigences à une conception exploitable, nous nous appuyons sur le langage de
+modélisation UML, qui permet de représenter le système selon plusieurs points de vue
+complémentaires. La vue fonctionnelle met en évidence les interactions entre les
+acteurs et le système~; la vue structurelle décrit l'organisation interne et le
+déploiement de la plateforme~; la vue dynamique illustre le déroulement temporel des
+scénarios d'exécution les plus représentatifs. Ces trois vues, bien que partielles
+prises isolément, permettent ensemble de couvrir les aspects essentiels de la
+conception du système.
+
+\subsection{Vue fonctionnelle}
+
+\subsubsection{Diagramme global de cas d'utilisation}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{images/Use_Case_Diagram.png}
+    \caption{Diagramme global de cas d'utilisation de la plateforme}
+    \label{fig:use-case-global}
+\end{figure}
+
+Le diagramme de la figure~\ref{fig:use-case-global} représente les principales
+fonctionnalités offertes par la plateforme, ici désignée \textit{MultiMinds IA}, ainsi
+que les acteurs qui y participent. L'ingénieur DevOps reste l'acteur déclencheur~:
+c'est lui qui décrit le besoin d'automatisation et fournit les informations du dépôt
+cible. À partir de ces deux cas d'utilisation initiaux, le système prend le relais à
+travers deux acteurs secondaires représentant les sous-systèmes internes~: le
+\textit{système multi-agents}, responsable de l'analyse du projet, de la génération
+des artefacts DevOps et de la proposition d'architectures, et le \textit{système
+d'exécution}, responsable de l'exécution effective des artefacts et pipelines, ainsi
+que de la détection et de la correction des erreurs.
+
+Ce choix de représenter les sous-systèmes comme des acteurs n'est pas anodin~: il
+permet de matérialiser la frontière entre ce qui relève de la décision humaine et ce
+qui relève de l'automatisation. On observe par exemple que le cas d'utilisation
+\textit{Choisir une architecture} est relié par une relation \texttt{<<include>>} au
+cas \textit{Proposer des architectures}~: l'ingénieur DevOps ne peut faire un choix que
+si le système a préalablement généré des propositions. De la même manière, les cas
+\textit{Valider les artefacts générés} et \textit{Déclencher le déploiement} placent
+explicitement l'utilisateur en position de contrôle avant toute action irréversible,
+ce qui correspond directement au besoin non fonctionnel de validation humaine
+multi-étapes évoqué précédemment. Enfin, le cas \textit{Détecter et corriger les
+erreurs}, porté par le système d'exécution, illustre la boucle de correction
+automatique qui sera détaillée plus loin dans la vue dynamique.
+
+\subsection{Vue structurelle}
+
+\subsubsection{Diagramme de classes d'analyse}
+
+Le diagramme de classes d'analyse a pour objectif de représenter les principales
+entités manipulées par le système~--- projets, workflows, artefacts, agents,
+stratégies d'architecture~--- ainsi que les relations qui les structurent. Il
+constitue une étape intermédiaire entre l'expression des besoins et la conception
+détaillée~: il ne décrit pas encore l'implémentation (modèles de données, ORM,
+schémas de base de données), mais identifie les concepts métier et leurs
+responsabilités respectives, ce qui facilite ensuite la traduction vers les modèles
+effectivement utilisés dans le code.
+
+Au moment de la rédaction de ce chapitre, ce diagramme est encore en cours
+d'élaboration, certaines entités du système (notamment celles liées au module de
+correction et à la gestion des workflows) ayant évolué en parallèle de
+l'implémentation.
+
+% TODO: intégrer le diagramme de classes d'analyse une fois finalisé
+% (entités : Project, Workflow, Artifact, ArchitectureStrategy, AgentExecution, ...)
+
+\subsubsection{Diagramme de déploiement}
+
+La modélisation du déploiement vise à représenter la répartition physique et logique
+des composants de la plateforme~: interface utilisateur, backend applicatif, agents
+IA, base de données, et environnements d'exécution sollicités lors de la génération
+des artefacts (moteur Docker, environnement Terraform, cluster Kubernetes le cas
+échéant).
+
+L'architecture générale du projet repose sur une séparation classique entre un
+frontend, un backend exposant une API et orchestrant les agents, une base de données
+pour la persistance des projets et des workflows, et des environnements d'exécution
+externes (Docker, Terraform) sollicités à la demande lors des étapes de génération et
+de validation. Cette séparation permet d'envisager différents modes de déploiement,
+allant d'un environnement de développement local jusqu'à un déploiement distribué sur
+une infrastructure cloud.
+
+% TODO: intégrer le diagramme de déploiement détaillé dans une prochaine itération
+% (nœuds : poste client, serveur backend, base de données, hôte Docker / runner CI)
+
+\subsection{Vue dynamique}
+
+\subsubsection{Diagramme de séquence}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{images/Diag Sequence.png}
+    \caption{Diagramme de séquence~--- génération et correction d'un Dockerfile}
+    \label{fig:sequence-docker}
+\end{figure}
+
+La figure~\ref{fig:sequence-docker} illustre le scénario de génération d'un Dockerfile
+et de sa correction automatique en cas d'échec de build, scénario qui correspond
+directement au fonctionnement du \textit{Corrector Agent} introduit au chapitre
+précédent.
+
+L'action déclenchante est la soumission d'un prompt par l'ingénieur DevOps via le
+frontend (étape 1). Ce prompt est transmis à l'\textit{Orchestrator Agent}, qui sollicite
+l'\textit{Infrastructure Agent} pour générer un Dockerfile adapté au projet (étapes 2 et
+2.1). Le Dockerfile généré est ensuite soumis à un build via le \textit{Docker Engine}
+(étape 3), à l'intérieur d'une boucle bornée à trois tentatives au maximum.
+
+Si le build échoue, le système entre dans un bloc alternatif~: l'erreur de build est
+remontée à l'orchestrateur (étape 4), qui transmet les logs d'erreur au
+\textit{Corrector Agent} (étape 5). Ce dernier analyse l'erreur et génère une
+proposition de correction (étapes 6 et 7), qui est affichée à l'utilisateur (étape 8).
+L'ingénieur DevOps peut alors valider ou modifier la correction proposée (étape 9),
+avant que le Dockerfile ne soit régénéré (étapes 10 et 10.1) et qu'un nouveau build ne
+soit lancé (étape 11).
+
+Lorsque le build aboutit, le résultat final est remonté jusqu'à l'utilisateur (étapes
+12 et 13). Ce diagramme met en évidence un point central de la conception~: la
+correction d'erreur n'est jamais totalement automatique~--- elle reste soumise à la
+validation de l'ingénieur DevOps, conformément au principe de validation humaine
+multi-étapes identifié dans les besoins non fonctionnels.
+
+\subsubsection{Diagramme d'activité}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{images/Diag activité.png}
+    \caption{Diagramme d'activité~--- déroulement global du workflow}
+    \label{fig:activite-workflow}
+\end{figure}
+
+La figure~\ref{fig:activite-workflow} représente le déroulement global du workflow,
+depuis la soumission de la requête par l'ingénieur DevOps jusqu'à la production du
+rapport final. Après récupération du dépôt GitHub, une première condition vérifie que
+l'analyse du projet s'est correctement déroulée~; en cas d'échec, le workflow se
+termine immédiatement sur une erreur.
+
+Si l'analyse réussit, l'\textit{Architecture Decision Agent} propose plusieurs
+stratégies d'architecture (\textit{Low}, \textit{Balanced}, \textit{High}), que
+l'utilisateur consulte avant de valider~--- ou non~--- l'architecture retenue. Tant que
+l'architecture n'est pas validée, le workflow revient à l'étape de consultation des
+stratégies, ce qui correspond à un point de décision itératif plutôt qu'à un choix
+figé.
+
+Une fois l'architecture validée, le système procède à la génération des artefacts
+DevOps (Dockerfile, Terraform, manifestes Kubernetes, configuration CI/CD). Ces
+artefacts sont à leur tour soumis à validation. En cas d'échec, le \textit{Corrector
+Agent} intervient pour proposer une correction~: si celle-ci est approuvée, les
+artefacts sont régénérés et un nouveau cycle de validation est lancé, dans la limite
+d'un nombre maximal de tentatives~; au-delà, le workflow se termine en échec. Si la
+correction n'est pas approuvée par l'utilisateur, le workflow s'arrête également.
+
+Lorsque les artefacts sont validés, le workflow se termine par la production d'un
+rapport final. Ce diagramme synthétise ainsi, à l'échelle du projet entier, les deux
+boucles de validation~--- architecture et artefacts~--- qui structurent l'ensemble du
+pipeline DevSecOps automatisé par la plateforme.
 
 \section{Conclusion}
-Cette section résume les points clés abordés dans ce chapitre et ouvre la discussion sur la suite du rapport.
 
-
+Ce chapitre a permis de formaliser les besoins de la plateforme en s'appuyant sur le
+contexte établi précédemment, puis de poser les premières bases de sa conception à
+travers une modélisation UML couvrant les vues fonctionnelle et dynamique du système.
+Certains éléments de la vue structurelle, en particulier le diagramme de classes
+d'analyse et le diagramme de déploiement, restent à finaliser et seront intégrés dans
+une prochaine itération du document. Les chapitres suivants s'appuieront sur cette
+base pour détailler l'étude expérimentale et la réalisation effective de la
+plateforme.
