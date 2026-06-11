@@ -79,7 +79,12 @@ class Settings(BaseSettings):
     # OpenAI — PRIMARY provider for infrastructure agents (GPT-5-mini)
     # Set OPENAI_KEY to enable; if absent the system falls back to Groq silently.
     OPENAI_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-5.4-mini"
+    # gpt-5-mini is the real catalog model (Responses API, reasoning family).
+    # The previous default "gpt-5.4-mini" is NOT a real OpenAI model id — a fresh
+    # deployment without the .env override would 404 on every primary call and
+    # silently run Groq-only. .env already sets gpt-5-mini; this keeps the
+    # code-default in sync so the override is no longer load-bearing.
+    OPENAI_MODEL: str = "gpt-5-mini"
     OPENAI_TIMEOUT: float = 120.0
     OPENAI_MAX_RETRIES: int = 2
 

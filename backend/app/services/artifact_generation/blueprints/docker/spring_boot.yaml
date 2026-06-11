@@ -172,4 +172,4 @@ sections:
       - jvm-flags
     validation_hints:
       - exec_form_double_quotes_only
-      - example: '["java", "-jar", "app.jar"]'
+      - 'example: ["java", "-jar", "app.jar"]'

@@ -97,9 +97,10 @@ class BlueprintSelector:
             framework, language,
         )
 
-        # 1. Framework exact match
+        # 1. Framework exact match (separator/case-insensitive: "Spring Boot",
+        #    "spring-boot", "springBoot" all resolve to the same blueprint).
         if framework:
-            blueprint = self._try_load(_FRAMEWORK_MAP.get(framework.lower(), ""))
+            blueprint = self._try_load(self._lookup(_FRAMEWORK_MAP, framework))
             if blueprint:
                 logger.info(
                     "[BlueprintSelector] Matched by framework %r → %s",
@@ -109,7 +110,7 @@ class BlueprintSelector:
 
         # 2. Language fallback
         if language:
-            blueprint = self._try_load(_LANGUAGE_MAP.get(language.lower(), ""))
+            blueprint = self._try_load(self._lookup(_LANGUAGE_MAP, language))
             if blueprint:
                 logger.info(
                     "[BlueprintSelector] Matched by language %r → %s",
@@ -135,6 +136,26 @@ class BlueprintSelector:
         raise ValueError(
             "No blueprints available. Ensure blueprints/docker/*.yaml files exist."
         )
+
+    # ── Lookup ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _lookup(table: Dict[str, str], raw: str) -> str:
+        """Resolve a framework/language string to a blueprint stem, tolerant of
+        case and separators. 'Spring Boot', 'spring-boot', 'springBoot' and
+        'spring_boot' all collapse to the same key before lookup."""
+        key = raw.strip().lower()
+        if key in table:
+            return table[key]
+        # Normalize separators: drop spaces/hyphens/underscores/dots entirely and
+        # compare against equally-normalized table keys.
+        def _norm(s: str) -> str:
+            return s.replace(" ", "").replace("-", "").replace("_", "").replace(".", "")
+        nkey = _norm(key)
+        for table_key, stem in table.items():
+            if _norm(table_key) == nkey:
+                return stem
+        return ""
 
     # ── Context extraction ────────────────────────────────────────────────────
 

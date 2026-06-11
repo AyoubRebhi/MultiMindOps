@@ -3,70 +3,90 @@
 \contentsline {chapter}{LISTE DES FIGURES}{vi}{chapter*.4}%
 \contentsline {chapter}{LISTE DES TABLEAUX}{vii}{chapter*.5}%
 \contentsline {chapter}{LISTE DES ABRÉVIATIONS}{viii}{chapter*.6}%
-\contentsline {chapter}{INTRODUCTION GÉNÉRALE}{1}{chapter*.7}%
-\contentsline {chapter}{\numberline {1}Chapitre 1 : Titre du chapitre}{2}{chapter.1}%
-\contentsline {section}{\numberline {1.1}Introduction}{3}{section.1.1}%
-\contentsline {section}{\numberline {1.2}Section 1 : Titre de la section}{3}{section.1.2}%
-\contentsline {subsection}{\numberline {1.2.1}Subsection 1 : Titre de la sous-section}{3}{subsection.1.2.1}%
-\contentsline {subsubsection}{\numberline {1.2.1.1}Subsubsection 1 : Titre}{3}{subsubsection.1.2.1.1}%
-\contentsline {subsubsection}{\numberline {1.2.1.2}Subsubsection 2 : Titre}{3}{subsubsection.1.2.1.2}%
-\contentsline {subsection}{\numberline {1.2.2}Subsection 2 : Titre de la sous-section}{3}{subsection.1.2.2}%
-\contentsline {section}{\numberline {1.3}Section 2 : Titre de la section}{3}{section.1.3}%
-\contentsline {subsection}{\numberline {1.3.1}Subsection 1}{3}{subsection.1.3.1}%
-\contentsline {subsubsection}{\numberline {1.3.1.1}Subsubsection 1 : Titre}{3}{subsubsection.1.3.1.1}%
-\contentsline {subsubsection}{\numberline {1.3.1.2}Subsubsection 2 : Titre}{3}{subsubsection.1.3.1.2}%
-\contentsline {section}{\numberline {1.4}Section 3 : Titre de la section}{4}{section.1.4}%
-\contentsline {subsection}{\numberline {1.4.1}Subsection 1}{4}{subsection.1.4.1}%
-\contentsline {subsubsection}{\numberline {1.4.1.1}Subsubsection 1 : Titre}{4}{subsubsection.1.4.1.1}%
-\contentsline {subsubsection}{\numberline {1.4.1.2}Subsubsection 2 : Titre}{4}{subsubsection.1.4.1.2}%
-\contentsline {section}{\numberline {1.5}Conclusion}{4}{section.1.5}%
-\contentsline {chapter}{\numberline {2}Chapitre 2 : Titre du chapitre}{5}{chapter.2}%
-\contentsline {section}{\numberline {2.1}Introduction}{6}{section.2.1}%
-\contentsline {section}{\numberline {2.2}Section 1 : Titre de la section}{6}{section.2.2}%
-\contentsline {subsection}{\numberline {2.2.1}Subsection 1 : Titre de la sous-section}{6}{subsection.2.2.1}%
-\contentsline {subsubsection}{\numberline {2.2.1.1}Subsubsection 1 : Titre}{6}{subsubsection.2.2.1.1}%
-\contentsline {subsubsection}{\numberline {2.2.1.2}Subsubsection 2 : Titre}{6}{subsubsection.2.2.1.2}%
-\contentsline {subsection}{\numberline {2.2.2}Subsection 2 : Titre de la sous-section}{6}{subsection.2.2.2}%
-\contentsline {section}{\numberline {2.3}Section 2 : Titre de la section}{6}{section.2.3}%
-\contentsline {subsection}{\numberline {2.3.1}Subsection 1}{6}{subsection.2.3.1}%
-\contentsline {subsubsection}{\numberline {2.3.1.1}Subsubsection 1 : Titre}{6}{subsubsection.2.3.1.1}%
-\contentsline {subsubsection}{\numberline {2.3.1.2}Subsubsection 2 : Titre}{6}{subsubsection.2.3.1.2}%
-\contentsline {section}{\numberline {2.4}Section 3 : Titre de la section}{7}{section.2.4}%
-\contentsline {subsection}{\numberline {2.4.1}Subsection 1}{7}{subsection.2.4.1}%
-\contentsline {subsubsection}{\numberline {2.4.1.1}Subsubsection 1 : Titre}{7}{subsubsection.2.4.1.1}%
-\contentsline {subsubsection}{\numberline {2.4.1.2}Subsubsection 2 : Titre}{7}{subsubsection.2.4.1.2}%
-\contentsline {section}{\numberline {2.5}Conclusion}{7}{section.2.5}%
-\contentsline {chapter}{\numberline {3}Chapitre 3 : Titre du chapitre}{8}{chapter.3}%
-\contentsline {section}{\numberline {3.1}Introduction}{9}{section.3.1}%
-\contentsline {section}{\numberline {3.2}Section 1 : Titre de la section}{9}{section.3.2}%
-\contentsline {subsection}{\numberline {3.2.1}Subsection 1 : Titre de la sous-section}{9}{subsection.3.2.1}%
-\contentsline {subsubsection}{\numberline {3.2.1.1}Subsubsection 1 : Titre}{9}{subsubsection.3.2.1.1}%
-\contentsline {subsubsection}{\numberline {3.2.1.2}Subsubsection 2 : Titre}{9}{subsubsection.3.2.1.2}%
-\contentsline {subsection}{\numberline {3.2.2}Subsection 2 : Titre de la sous-section}{9}{subsection.3.2.2}%
-\contentsline {section}{\numberline {3.3}Section 2 : Titre de la section}{9}{section.3.3}%
-\contentsline {subsection}{\numberline {3.3.1}Subsection 1}{9}{subsection.3.3.1}%
-\contentsline {subsubsection}{\numberline {3.3.1.1}Subsubsection 1 : Titre}{9}{subsubsection.3.3.1.1}%
-\contentsline {subsubsection}{\numberline {3.3.1.2}Subsubsection 2 : Titre}{9}{subsubsection.3.3.1.2}%
-\contentsline {section}{\numberline {3.4}Section 3 : Titre de la section}{10}{section.3.4}%
-\contentsline {subsection}{\numberline {3.4.1}Subsection 1}{10}{subsection.3.4.1}%
-\contentsline {subsubsection}{\numberline {3.4.1.1}Subsubsection 1 : Titre}{10}{subsubsection.3.4.1.1}%
-\contentsline {subsubsection}{\numberline {3.4.1.2}Subsubsection 2 : Titre}{10}{subsubsection.3.4.1.2}%
-\contentsline {section}{\numberline {3.5}Conclusion}{10}{section.3.5}%
-\contentsline {chapter}{\numberline {4}Chapitre 4 : Titre du chapitre}{11}{chapter.4}%
-\contentsline {section}{\numberline {4.1}Introduction}{12}{section.4.1}%
-\contentsline {section}{\numberline {4.2}Section 1 : Titre de la section}{12}{section.4.2}%
-\contentsline {subsection}{\numberline {4.2.1}Subsection 1 : Titre de la sous-section}{12}{subsection.4.2.1}%
-\contentsline {subsubsection}{\numberline {4.2.1.1}Subsubsection 1 : Titre}{12}{subsubsection.4.2.1.1}%
-\contentsline {subsubsection}{\numberline {4.2.1.2}Subsubsection 2 : Titre}{12}{subsubsection.4.2.1.2}%
-\contentsline {subsection}{\numberline {4.2.2}Subsection 2 : Titre de la sous-section}{12}{subsection.4.2.2}%
-\contentsline {section}{\numberline {4.3}Section 2 : Titre de la section}{12}{section.4.3}%
-\contentsline {subsection}{\numberline {4.3.1}Subsection 1}{12}{subsection.4.3.1}%
-\contentsline {subsubsection}{\numberline {4.3.1.1}Subsubsection 1 : Titre}{12}{subsubsection.4.3.1.1}%
-\contentsline {subsubsection}{\numberline {4.3.1.2}Subsubsection 2 : Titre}{12}{subsubsection.4.3.1.2}%
-\contentsline {section}{\numberline {4.4}Section 3 : Titre de la section}{13}{section.4.4}%
-\contentsline {subsection}{\numberline {4.4.1}Subsection 1}{13}{subsection.4.4.1}%
-\contentsline {subsubsection}{\numberline {4.4.1.1}Subsubsection 1 : Titre}{13}{subsubsection.4.4.1.1}%
-\contentsline {subsubsection}{\numberline {4.4.1.2}Subsubsection 2 : Titre}{13}{subsubsection.4.4.1.2}%
-\contentsline {section}{\numberline {4.5}Conclusion}{13}{section.4.5}%
-\contentsline {chapter}{CONCLUSION GÉNÉRALE}{14}{chapter*.8}%
-\contentsline {chapter}{WEBOGRAPHIE}{14}{chapter*.8}%
+\contentsline {chapter}{Introduction Générale}{ix}{chapter*.7}%
+\contentsline {chapter}{\numberline {1}Cadre général du projet}{3}{chapter.1}%
+\contentsline {section}{\numberline {1.1}Introduction}{4}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Présentation de l'organisme d'accueil}{4}{section.1.2}%
+\contentsline {subsection}{\numberline {1.2.1}Services et domaines d'expertise}{4}{subsection.1.2.1}%
+\contentsline {subsection}{\numberline {1.2.2}Clients et partenariats stratégiques}{5}{subsection.1.2.2}%
+\contentsline {subsection}{\numberline {1.2.3}Bootcamp : Talan Innovation Factory}{5}{subsection.1.2.3}%
+\contentsline {section}{\numberline {1.3}Présentation du projet}{6}{section.1.3}%
+\contentsline {subsection}{\numberline {1.3.1}Contexte du projet}{6}{subsection.1.3.1}%
+\contentsline {subsection}{\numberline {1.3.2}Énoncé du problème}{6}{subsection.1.3.2}%
+\contentsline {subsection}{\numberline {1.3.3}Objectifs du projet}{7}{subsection.1.3.3}%
+\contentsline {subsection}{\numberline {1.3.4}Analyse des approches existantes}{8}{subsection.1.3.4}%
+\contentsline {subsubsection}{\numberline {1.3.4.1}Harness (AIDA)}{8}{subsubsection.1.3.4.1}%
+\contentsline {subsubsection}{\numberline {1.3.4.2}Pulumi Insights}{9}{subsubsection.1.3.4.2}%
+\contentsline {subsubsection}{\numberline {1.3.4.3}Claude Code (Anthropic)}{9}{subsubsection.1.3.4.3}%
+\contentsline {subsection}{\numberline {1.3.5}Évaluation critique des systèmes existants}{10}{subsection.1.3.5}%
+\contentsline {subsection}{\numberline {1.3.6}Solution proposée}{12}{subsection.1.3.6}%
+\contentsline {section}{\numberline {1.4}Méthodologie de travail}{13}{section.1.4}%
+\contentsline {subsection}{\numberline {1.4.1}Étude comparative des méthodologies}{13}{subsection.1.4.1}%
+\contentsline {subsection}{\numberline {1.4.2}Choix de Kanban pour le projet}{14}{subsection.1.4.2}%
+\contentsline {subsection}{\numberline {1.4.3}Planning du projet en Kanban}{15}{subsection.1.4.3}%
+\contentsline {subsection}{\numberline {1.4.4}Diagramme de Gantt}{15}{subsection.1.4.4}%
+\contentsline {section}{\numberline {1.5}Conclusion}{16}{section.1.5}%
+\contentsline {chapter}{\numberline {2}Concepts Fondamentaux}{17}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Introduction}{18}{section.2.1}%
+\contentsline {section}{\numberline {2.2}DevSecOps : culture et pratiques}{18}{section.2.2}%
+\contentsline {subsection}{\numberline {2.2.1}Origines et définition}{18}{subsection.2.2.1}%
+\contentsline {subsection}{\numberline {2.2.2}Principes clés}{18}{subsection.2.2.2}%
+\contentsline {subsection}{\numberline {2.2.3}DevSecOps et intelligence artificielle}{19}{subsection.2.2.3}%
+\contentsline {section}{\numberline {2.3}Cloud Computing et Infrastructure as Code}{19}{section.2.3}%
+\contentsline {subsection}{\numberline {2.3.1}Cloud Computing : rappel des modèles}{19}{subsection.2.3.1}%
+\contentsline {subsection}{\numberline {2.3.2}Infrastructure as Code}{20}{subsection.2.3.2}%
+\contentsline {subsection}{\numberline {2.3.3}Estimation des coûts cloud}{20}{subsection.2.3.3}%
+\contentsline {section}{\numberline {2.4}Intégration et Déploiement Continus (CI/CD)}{21}{section.2.4}%
+\contentsline {subsection}{\numberline {2.4.1}Principes du CI/CD}{21}{subsection.2.4.1}%
+\contentsline {subsection}{\numberline {2.4.2}Structure d'un pipeline CI/CD}{21}{subsection.2.4.2}%
+\contentsline {subsection}{\numberline {2.4.3}CI/CD et DevSecOps}{22}{subsection.2.4.3}%
+\contentsline {section}{\numberline {2.5}Conteneurisation et Orchestration}{22}{section.2.5}%
+\contentsline {subsection}{\numberline {2.5.1}Docker et la conteneurisation}{22}{subsection.2.5.1}%
+\contentsline {subsection}{\numberline {2.5.2}Kubernetes et l'orchestration de conteneurs}{23}{subsection.2.5.2}%
+\contentsline {subsection}{\numberline {2.5.3}Architecture cloud-native}{23}{subsection.2.5.3}%
+\contentsline {section}{\numberline {2.6}Intelligence Artificielle appliquée à l'automatisation DevSecOps}{23}{section.2.6}%
+\contentsline {subsection}{\numberline {2.6.1}Large Language Models et génération de code}{23}{subsection.2.6.1}%
+\contentsline {subsection}{\numberline {2.6.2}Architectures multi-agents}{24}{subsection.2.6.2}%
+\contentsline {subsection}{\numberline {2.6.3}Retrieval-Augmented Generation (RAG)}{24}{subsection.2.6.3}%
+\contentsline {subsection}{\numberline {2.6.4}Structured Constrained Generation}{25}{subsection.2.6.4}%
+\contentsline {section}{\numberline {2.7}Sécurité dans les environnements DevOps}{25}{section.2.7}%
+\contentsline {subsection}{\numberline {2.7.1}Sécurité des images et des conteneurs}{25}{subsection.2.7.1}%
+\contentsline {subsection}{\numberline {2.7.2}Sécurité de l'Infrastructure as Code}{25}{subsection.2.7.2}%
+\contentsline {subsection}{\numberline {2.7.3}Gestion des secrets}{26}{subsection.2.7.3}%
+\contentsline {section}{\numberline {2.8}Conclusion}{26}{section.2.8}%
+\contentsline {chapter}{\numberline {3}Analyse des besoins et conception}{27}{chapter.3}%
+\contentsline {section}{\numberline {3.1}Introduction}{28}{section.3.1}%
+\contentsline {section}{\numberline {3.2}Expression des besoins}{28}{section.3.2}%
+\contentsline {subsection}{\numberline {3.2.1}Identification des acteurs}{28}{subsection.3.2.1}%
+\contentsline {subsubsection}{\numberline {3.2.1.1}Ingénieur DevOps}{28}{subsubsection.3.2.1.1}%
+\contentsline {subsubsection}{\numberline {3.2.1.2}Administrateur}{29}{subsubsection.3.2.1.2}%
+\contentsline {subsection}{\numberline {3.2.2}Besoins fonctionnels}{30}{subsection.3.2.2}%
+\contentsline {subsection}{\numberline {3.2.3}Besoins non fonctionnels}{31}{subsection.3.2.3}%
+\contentsline {section}{\numberline {3.3}Modélisation du système}{32}{section.3.3}%
+\contentsline {subsection}{\numberline {3.3.1}Vue fonctionnelle}{33}{subsection.3.3.1}%
+\contentsline {subsubsection}{\numberline {3.3.1.1}Diagramme global de cas d'utilisation}{33}{subsubsection.3.3.1.1}%
+\contentsline {subsection}{\numberline {3.3.2}Vue structurelle}{34}{subsection.3.3.2}%
+\contentsline {subsubsection}{\numberline {3.3.2.1}Diagramme de classes d'analyse}{34}{subsubsection.3.3.2.1}%
+\contentsline {subsubsection}{\numberline {3.3.2.2}Diagramme de déploiement}{35}{subsubsection.3.3.2.2}%
+\contentsline {subsection}{\numberline {3.3.3}Vue dynamique}{36}{subsection.3.3.3}%
+\contentsline {subsubsection}{\numberline {3.3.3.1}Diagramme de séquence}{36}{subsubsection.3.3.3.1}%
+\contentsline {subsubsection}{\numberline {3.3.3.2}Diagramme d'activité}{38}{subsubsection.3.3.3.2}%
+\contentsline {section}{\numberline {3.4}Conclusion}{39}{section.3.4}%
+\contentsline {chapter}{\numberline {4}Chapitre 4 : Titre du chapitre}{40}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Introduction}{41}{section.4.1}%
+\contentsline {section}{\numberline {4.2}Section 1 : Titre de la section}{41}{section.4.2}%
+\contentsline {subsection}{\numberline {4.2.1}Subsection 1 : Titre de la sous-section}{41}{subsection.4.2.1}%
+\contentsline {subsubsection}{\numberline {4.2.1.1}Subsubsection 1 : Titre}{41}{subsubsection.4.2.1.1}%
+\contentsline {subsubsection}{\numberline {4.2.1.2}Subsubsection 2 : Titre}{41}{subsubsection.4.2.1.2}%
+\contentsline {subsection}{\numberline {4.2.2}Subsection 2 : Titre de la sous-section}{41}{subsection.4.2.2}%
+\contentsline {section}{\numberline {4.3}Section 2 : Titre de la section}{41}{section.4.3}%
+\contentsline {subsection}{\numberline {4.3.1}Subsection 1}{41}{subsection.4.3.1}%
+\contentsline {subsubsection}{\numberline {4.3.1.1}Subsubsection 1 : Titre}{41}{subsubsection.4.3.1.1}%
+\contentsline {subsubsection}{\numberline {4.3.1.2}Subsubsection 2 : Titre}{41}{subsubsection.4.3.1.2}%
+\contentsline {section}{\numberline {4.4}Section 3 : Titre de la section}{42}{section.4.4}%
+\contentsline {subsection}{\numberline {4.4.1}Subsection 1}{42}{subsection.4.4.1}%
+\contentsline {subsubsection}{\numberline {4.4.1.1}Subsubsection 1 : Titre}{42}{subsubsection.4.4.1.1}%
+\contentsline {subsubsection}{\numberline {4.4.1.2}Subsubsection 2 : Titre}{42}{subsubsection.4.4.1.2}%
+\contentsline {section}{\numberline {4.5}Conclusion}{42}{section.4.5}%
+\contentsline {chapter}{CONCLUSION GÉNÉRALE}{43}{chapter*.18}%
+\contentsline {chapter}{WEBOGRAPHIE}{43}{chapter*.18}%

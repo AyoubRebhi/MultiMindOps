@@ -173,6 +173,27 @@ def build_gpt5_responses_payload(
     if response_format:
         # Responses API uses text.format instead of response_format.
         text_options["format"] = response_format
+        # JSON prompt contract — the Responses API hard-rejects (400) a
+        # json_object / json_schema request whose INPUT MESSAGES do NOT contain
+        # the literal word "json":
+        #   "Response input messages must contain the word 'json' in some form
+        #    to use 'text.format' of type 'json_object'."
+        # IMPORTANT: OpenAI counts only the `input` messages — NOT `instructions`
+        # (the system prompt). So we must check the input content alone; a prompt
+        # that mentions "json" only in its system prompt still 400s. Guaranteeing
+        # the token HERE — the single chokepoint every json caller flows through —
+        # means individual prompts no longer have to remember it. Without this
+        # guard the InfrastructureAgent ReAct-refinement prompt 400s and silently
+        # degrades OpenAI → Groq (wasted cost + lost quality).
+        fmt_type = response_format.get("type") if isinstance(response_format, dict) else None
+        if fmt_type in ("json_object", "json_schema") and payload["input"]:
+            input_corpus = " ".join(
+                str(msg.get("content", "")) for msg in payload["input"]
+            ).lower()
+            if "json" not in input_corpus:
+                payload["input"][-1]["content"] = (
+                    f"{payload['input'][-1]['content']}\n\nRespond with valid JSON only."
+                )
     payload["text"] = text_options
     return payload
 
@@ -325,7 +346,7 @@ class OpenAIProvider(BaseLLMProvider):
     def __init__(
         self,
         api_key: str,
-        model: str = "gpt-5.4-mini",
+        model: str = "gpt-5-mini",
         timeout: float = 120.0,
         max_retries: int = 2,
     ) -> None:

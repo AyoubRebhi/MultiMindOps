@@ -112,6 +112,139 @@ class QdrantService:
             logger.error("Erreur création collection : %s", exc)
             return False
 
+    def list_collections(self) -> list[str]:
+        """Return the names of all collections, or [] when unavailable."""
+        if self._client is None:
+            return []
+        try:
+            return [c.name for c in self._client.get_collections().collections]
+        except Exception as exc:
+            logger.warning("Impossible de lister les collections Qdrant : %s", exc)
+            return []
+
+    def get_collection_dim(self, name: str) -> int | None:
+        """Return the configured vector dimension of an existing collection."""
+        if self._client is None:
+            return None
+        try:
+            info = self._client.get_collection(name)
+            vectors = info.config.params.vectors
+            size = getattr(vectors, "size", None)
+            if size is None and isinstance(vectors, dict):  # named-vector collections
+                first = next(iter(vectors.values()), None)
+                size = getattr(first, "size", None)
+            return int(size) if size is not None else None
+        except Exception:
+            return None
+
+    def set_collection(self, name: str) -> None:
+        """Repoint this service at a different collection (used by the resolver)."""
+        self._collection = name
+
+    def resolve_and_prepare(
+        self,
+        expected_dim: int,
+        aliases: list[str] | None = None,
+        auto_create: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Resolve the effective collection with graceful fallback, then ensure it
+        exists. This is the deterministic RAG-drift guard:
+
+          1. configured collection exists + dim matches embedder → use it.
+          2. configured missing → fall back to an existing ALIAS collection whose
+             dim matches the embedder (e.g. legacy/renamed knowledge base).
+          3. an alias exists but with an incompatible dim → loud warning (data is
+             present but unqueryable by the current embedder; re-ingest needed).
+          4. nothing usable → auto-create the configured collection (empty) so
+             queries degrade to "no_results" instead of a hard "collection_not_found".
+
+        Never raises. Returns a structured report for startup logging.
+        """
+        report: dict[str, Any] = {
+            "configured": self._collection,
+            "resolved": None,
+            "action": None,
+            "expected_dim": expected_dim,
+            "warnings": [],
+        }
+        if self._client is None:
+            report["action"] = "client_unavailable"
+            report["warnings"].append("Qdrant client unavailable — RAG retrieval disabled")
+            logger.warning("[RAGBootstrap] Qdrant client unavailable — RAG retrieval disabled")
+            return report
+
+        existing = self.list_collections()
+        configured = self._collection
+
+        # 1) configured collection present
+        if configured in existing:
+            dim = self.get_collection_dim(configured)
+            report["resolved"] = configured
+            if dim is not None and dim != expected_dim:
+                msg = (
+                    f"Collection '{configured}' dim={dim} != embedder dim={expected_dim} — "
+                    "vector search will fail; re-ingest with the matching embedder."
+                )
+                report["action"] = "configured_dim_mismatch"
+                report["warnings"].append(msg)
+                logger.warning("[RAGBootstrap] %s", msg)
+            else:
+                report["action"] = "configured_ok"
+                logger.info(
+                    "[RAGBootstrap] Using configured collection '%s' (dim=%s).",
+                    configured, dim,
+                )
+            return report
+
+        # 2/3) configured missing — inspect aliases
+        compatible: list[tuple[str, int | None]] = []
+        incompatible: list[tuple[str, int | None]] = []
+        for alias in [a for a in (aliases or []) if a and a != configured]:
+            if alias in existing:
+                dim = self.get_collection_dim(alias)
+                (compatible if (dim is None or dim == expected_dim) else incompatible).append((alias, dim))
+
+        if compatible:
+            chosen, dim = compatible[0]
+            self.set_collection(chosen)
+            report["resolved"] = chosen
+            report["action"] = "fallback_alias"
+            msg = (
+                f"Configured collection '{configured}' not found — falling back to existing "
+                f"compatible collection '{chosen}' (dim={dim})."
+            )
+            report["warnings"].append(msg)
+            logger.warning("[RAGBootstrap] %s", msg)
+            return report
+
+        if incompatible:
+            name, dim = incompatible[0]
+            msg = (
+                f"Configured collection '{configured}' not found. Existing collection "
+                f"'{name}' has data but dim={dim} != embedder dim={expected_dim}; it cannot be "
+                "queried by the current embedder. Re-ingest with the matching embedder, or "
+                "align the retrieval embedder to the ingested dimension."
+            )
+            report["warnings"].append(msg)
+            logger.warning("[RAGBootstrap] %s", msg)
+
+        # 4) auto-create the configured collection (empty) for graceful degradation
+        if auto_create:
+            created = self.create_collection(recreate=False)
+            if created:
+                report["resolved"] = configured
+                report["action"] = "auto_created_empty"
+                logger.warning(
+                    "[RAGBootstrap] Auto-created empty collection '%s' (dim=%d). RAG returns "
+                    "no results until the knowledge base is ingested.",
+                    configured, self._vector_size,
+                )
+            else:
+                report["action"] = "create_failed"
+                logger.error("[RAGBootstrap] Failed to auto-create collection '%s'.", configured)
+        return report
+
     def _ensure_payload_indexes(self) -> None:
         """Create keyword payload indexes on filterable fields for fast metadata filtering."""
         if self._client is None:

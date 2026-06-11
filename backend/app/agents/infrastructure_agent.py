@@ -36,6 +36,7 @@ from backend.app.services.cicd.artifact_contract_service import ArtifactContract
 from backend.app.services.artifact_generation.validators.docker_static_validator import DockerBuildStaticValidator
 from backend.app.services.infrastructure.build_context_resolver import BuildContextResolver
 from backend.app.services.infrastructure.compose_topology_analyzer import ComposeTopologyAnalyzer
+from backend.app.services.infrastructure.dockerfile_healthcheck import normalize_healthcheck
 from backend.app.services.infrastructure.infrastructure_artifact_builder_service import (
     InfrastructureArtifactBuilderService,
 )
@@ -487,6 +488,24 @@ Approved artifacts to generate (Docker artifacts only):
         if _template_sanitized:
             fallback_used = True
             fallback_reasons.setdefault("dockerfile", "template_token_sanitized")
+
+        # ── 7-pre-b. HEALTHCHECK escape-injection repair (Docker parse safety) ─
+        # A literal "\n" serialized into a HEALTHCHECK line makes `docker build`
+        # fail at parse time with `unknown instruction: \nCMD`. Repair any such
+        # corruption — wherever it originated (LLM section value or fallback) —
+        # so the persisted Dockerfile is always parseable.
+        _dockerfile_content = artifacts.get("dockerfile")
+        if isinstance(_dockerfile_content, str) and _dockerfile_content.strip():
+            _repaired, _hc_repairs = normalize_healthcheck(_dockerfile_content)
+            if _hc_repairs:
+                artifacts["dockerfile"] = _repaired
+                fallback_reasons.setdefault("dockerfile", "healthcheck_escape_repaired")
+                logger.warning(
+                    "[InfrastructureAgent] Repaired %d HEALTHCHECK escape issue(s) "
+                    "before persistence: %s",
+                    len(_hc_repairs),
+                    "; ".join(_hc_repairs),
+                )
 
         # ── 7a. Dockerfile guarantee — the Docker phase MUST yield a Dockerfile ─
         # Selection above can still leave the Dockerfile empty when BOTH the LLM

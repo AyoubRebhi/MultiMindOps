@@ -134,6 +134,22 @@ def create_app() -> FastAPI:
         # surfaces with structured diagnostics at startup, not on first request.
         validate_runtime_workspace()
 
+        # Validate + prepare the RAG knowledge-base collection at startup so
+        # collection drift (missing / renamed / wrong-dimension) is surfaced with
+        # an actionable warning here — and auto-healed (fallback or auto-create) —
+        # instead of silently degrading every retrieval to "collection_not_found".
+        try:
+            from backend.app.services.rag.rag_pipeline_service import bootstrap_rag_collection
+            rag_report = bootstrap_rag_collection()
+            logger.info(
+                "[startup] RAG collection resolved: configured=%s resolved=%s action=%s",
+                rag_report.get("configured"), rag_report.get("resolved"), rag_report.get("action"),
+            )
+            for warning in rag_report.get("warnings", []):
+                logger.warning("[startup] RAG: %s", warning)
+        except Exception as exc:  # never block startup on RAG bootstrap
+            logger.warning("[startup] RAG collection bootstrap skipped (%s)", type(exc).__name__)
+
         rows = []
         for route in app.routes:
             methods = ",".join(sorted(getattr(route, "methods", None) or []))

@@ -2,7 +2,7 @@
 ProviderFactory — multi-provider LLM orchestration layer.
 
 Architecture:
-  PRIMARY  : OpenAI GPT-5.4-mini  (Responses API for GPT-5 family)
+  PRIMARY  : OpenAI GPT-5-mini  (Responses API for GPT-5 family)
   FALLBACK : Groq (existing LLMService with multi-key rotation)
 
 Provider routing by agent:
@@ -177,7 +177,40 @@ class ProviderFactory:
         if self._agent_token_config:
             temperature = self._agent_token_config.temperature
             response_format = response_format or {"type": "json_object"}
+
+        # ── Phase E instrumentation — pre-request diagnostic (every call path) ──
+        # Single chokepoint for chat() / chat_json() / generate_with_fallback().
+        # Logs provider, model, prompt size, estimated input tokens, the resolved
+        # output-token budget, the workflow stage, and the agent. No business
+        # logic changes — observability only.
+        self._log_request_diagnostics(system_prompt, user_prompt, resolved_tokens)
+
         return resolved_tokens, temperature, response_format, telemetry
+
+    def _log_request_diagnostics(
+        self,
+        system_prompt: Optional[str],
+        user_prompt: Optional[str],
+        max_output_tokens: int,
+    ) -> None:
+        """Emit a single pre-request diagnostic line for token/rate-limit triage."""
+        provider = "openai" if self._primary is not None else "groq"
+        prompt_chars = len(system_prompt or "") + len(user_prompt or "")
+        # ~4 chars/token is the standard rough heuristic for English+code prompts.
+        est_input_tokens = prompt_chars // 4
+        logger.info(
+            "[LLMDiagnostic] PROVIDER=%s MODEL=%s AGENT=%s STAGE=%s "
+            "PROMPT_CHARS=%d EST_INPUT_TOKENS=%d MAX_OUTPUT_TOKENS=%d "
+            "EST_TOTAL_TOKENS=%d",
+            provider,
+            self.model,
+            self._agent_name or "unknown",
+            _stage_for_agent(self._agent_name),
+            prompt_chars,
+            est_input_tokens,
+            max_output_tokens,
+            est_input_tokens + max_output_tokens,
+        )
 
     # ── Async interface ───────────────────────────────────────────────────────
 
@@ -475,6 +508,26 @@ def get_provider_factory() -> ProviderFactory:
     if _default_factory is None:
         _default_factory = ProviderFactory()
     return _default_factory
+
+
+# ── Diagnostics ───────────────────────────────────────────────────────────────
+
+# Maps the agent that owns the request to the workflow stage it serves, so the
+# pre-request diagnostic line is greppable by stage (e.g. STAGE=docker_generation).
+_AGENT_STAGE_MAP: Dict[str, str] = {
+    "InfrastructureAgent": "docker_generation",
+    "TerraformAgent": "terraform_generation",
+    "KubernetesAgent": "kubernetes_generation",
+    "PlannerAgent": "planning",
+    "CostEstimationAgent": "cost_estimation",
+    "DockerCorrectorAgent": "docker_correction",
+}
+
+
+def _stage_for_agent(agent_name: Optional[str]) -> str:
+    if not agent_name:
+        return "unknown"
+    return _AGENT_STAGE_MAP.get(agent_name, agent_name)
 
 
 # ── Error classification ──────────────────────────────────────────────────────

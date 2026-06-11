@@ -22,20 +22,64 @@ from typing import Any, Dict, List, Optional
 from backend.app.schemas.blueprint import InfrastructureBlueprint
 
 
-_SAFE_NAME_RE = re.compile(r"[^a-z0-9-]")
+_INVALID_NAME_CHARS_RE = re.compile(r"[^a-z0-9-]")
+_MULTI_HYPHEN_RE = re.compile(r"-{2,}")
+_LEADING_NON_ALPHA_RE = re.compile(r"^[^a-z]+")
+
+# Tightest common AWS resource-name ceiling. ALB names cap at 32 chars, RDS
+# identifiers at 63 — 32 is the universally safe bound for a name that the
+# templates suffix into "${project_name}-alb", "${project_name}-db", etc.
+TERRAFORM_NAME_MAX_LENGTH = 32
+
+
+def sanitize_terraform_name(
+    raw: Optional[str],
+    *,
+    fallback: str = "app",
+    max_length: int = TERRAFORM_NAME_MAX_LENGTH,
+) -> str:
+    """
+    Coerce an arbitrary repo/project string into an AWS-safe resource name.
+
+    The result satisfies the *union* of the ALB, RDS, ECS and ELB naming rules,
+    so it is a safe prefix for every name the Terraform templates derive from it
+    (ALB ``${project_name}-alb``, RDS ``${project_name}-db``, …):
+
+      • lowercased
+      • only ``[a-z0-9-]``
+      • starts with a letter      — RDS identifiers and ALB names reject a
+                                    leading digit or hyphen
+      • no consecutive hyphens    — RDS rejects ``--``
+      • no leading/trailing hyphen
+      • 1..``max_length`` chars    — default 32, the tightest common ceiling (ALB)
+
+    Never raises: malformed input is coerced, not rejected — this is naming, not
+    policy. When nothing usable survives sanitization, ``fallback`` is used.
+    """
+    candidate = (raw or "").strip().lower()
+    # 1. Replace every illegal character with a hyphen, collapse runs, trim ends.
+    candidate = _INVALID_NAME_CHARS_RE.sub("-", candidate)
+    candidate = _MULTI_HYPHEN_RE.sub("-", candidate).strip("-")
+    # 2. Must start with a letter — drop any leading digits/hyphens.
+    candidate = _LEADING_NON_ALPHA_RE.sub("", candidate)
+    # 3. If nothing usable remains, derive from the fallback (same rules).
+    if not candidate:
+        candidate = _INVALID_NAME_CHARS_RE.sub("-", (fallback or "app").lower())
+        candidate = _MULTI_HYPHEN_RE.sub("-", candidate).strip("-")
+        candidate = _LEADING_NON_ALPHA_RE.sub("", candidate) or "app"
+    # 4. Enforce the length ceiling, re-stripping any hyphen the cut exposed.
+    candidate = candidate[:max_length].rstrip("-")
+    return candidate or "app"
 
 
 def _normalize_project_name(raw: Optional[str], task_id: Optional[str]) -> str:
     """
-    AWS resource names must be lowercase, alphanumeric + hyphens, 3-63 chars.
-    Fall back to the task_id if no name is provided. Never raises — bad
-    characters are stripped, not rejected, because this is naming, not policy.
+    Derive a safe project name from project metadata, falling back to task_id.
+
+    Delegates to :func:`sanitize_terraform_name` so every consumer (templates
+    and any LLM injection) sees an ALB/RDS-compliant name.
     """
-    candidate = (raw or task_id or "devsecops-app").lower()
-    candidate = _SAFE_NAME_RE.sub("-", candidate).strip("-")
-    if len(candidate) < 3:
-        candidate = (candidate + "-app")[:32]
-    return candidate[:32]  # AWS resource name ceilings vary; 32 is universally safe.
+    return sanitize_terraform_name(raw or task_id, fallback="devsecops-app")
 
 
 def _allocate_subnet_cidrs(

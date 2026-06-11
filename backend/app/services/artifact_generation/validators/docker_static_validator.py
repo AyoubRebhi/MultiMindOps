@@ -123,6 +123,11 @@ class DockerBuildStaticValidator:
         # where non-root containers cannot mkdir/write at runtime.
         self._validate_runtime_permissions(dockerfile_content, framework, result)
 
+        # JVM multi-stage validation also runs regardless of known_files — it is a
+        # deterministic structural check that catches the unbuildable Java pattern
+        # (RUN mvn/gradle on a single-stage / JRE-runtime image → "mvn: not found").
+        self._validate_jvm_multistage(dockerfile_content, result)
+
         if not known_files:
             result.warnings.append(
                 "known_files not provided — COPY path validation skipped (metadata mode only)"
@@ -206,8 +211,8 @@ class DockerBuildStaticValidator:
             stripped = line.strip()
             if not stripped.upper().startswith("COPY"):
                 continue
-            if re.search(r"COPY\s+--from=", stripped, re.IGNORECASE):
-                continue  # multi-stage copy — not a context source
+            if re.search(r"COPY\b[^\n]*--from=", stripped, re.IGNORECASE):
+                continue  # multi-stage copy (any flag order) — not a context source
             clean = re.sub(r"--\w+(?:=\S+)?\s*", "", stripped, flags=re.IGNORECASE)
             parts = clean.split()[1:]
             if len(parts) < 2:
@@ -375,6 +380,73 @@ class DockerBuildStaticValidator:
             "Suggested: 'RUN mkdir -p /app/workspace/repos && chown -R "
             f"{user_target}:{user_target.replace('user', 'group')} /app' before "
             "the USER directive."
+        )
+
+    # ── JVM multi-stage validation ────────────────────────────────────────────
+
+    # A RUN line that invokes a JVM build tool. These tools (Maven/Gradle) exist
+    # only in JDK + build-tool images, never in a `-jre` runtime image.
+    _JVM_BUILD_RE = re.compile(
+        r"(?im)^\s*RUN\b.*(\bmvn\b|\./mvnw\b|\bmvnw\b|\bgradle\b|\./gradlew\b|\bgradlew\b)"
+    )
+
+    def _validate_jvm_multistage(
+        self,
+        dockerfile: str,
+        result: StaticValidationResult,
+    ) -> None:
+        """
+        Deterministic rule: a Dockerfile that compiles a JVM project (RUN mvn /
+        gradle / mvnw / gradlew) MUST be multi-stage — a JDK+build-tool *builder*
+        stage to produce the jar, then a slim *runtime* (JRE) stage that pulls the
+        jar in via ``COPY --from=<builder>``.
+
+        Running the build tool directly in a single stage (the common failure:
+        ``FROM eclipse-temurin:17-jre`` + ``RUN mvn ...``) is unbuildable —
+        ``/bin/sh: 1: mvn: not found`` (exit 127) — because the JRE image ships no
+        compiler or build tool. This guard exists so that pattern can never ship
+        silently again, even if a blueprint fails to load or an LLM fallback path
+        emits it.
+        """
+        if not dockerfile or not self._JVM_BUILD_RE.search(dockerfile):
+            return  # not a JVM build — rule does not apply
+
+        from_count = len(re.findall(r"(?im)^\s*FROM\s+", dockerfile))
+        # Match `--from=` ANYWHERE on a COPY line — flags like --chown may precede
+        # it (e.g. `COPY --chown=app:app --from=builder /build/target/*.jar app.jar`).
+        has_copy_from = bool(re.search(r"(?im)^\s*COPY\b[^\n]*--from=", dockerfile))
+        is_multistage = from_count >= 2 and has_copy_from
+        if is_multistage:
+            return  # builder → runtime structure present; correct
+
+        result.issues.append(ValidationIssue(
+            copy_instruction="<JVM build (mvn/gradle)>",
+            source_path="<dockerfile structure>",
+            build_context="(jvm multi-stage)",
+            rule="jvm_build_requires_multistage",
+            severity="critical",
+            message=(
+                "Dockerfile runs a JVM build tool (mvn/gradle) but is NOT multi-stage "
+                f"(FROM count={from_count}, has COPY --from={has_copy_from}). The build "
+                "tool is absent from a JRE runtime image, so this fails at build time "
+                "with 'mvn: not found' (exit 127). Use a JDK+Maven/Gradle builder stage "
+                "to produce the jar, then a JRE runtime stage that copies it via "
+                "'COPY --from=builder <jar> app.jar'."
+            ),
+            suggested_fix=(
+                "FROM maven:3.9-eclipse-temurin-17 AS builder\\n"
+                "WORKDIR /build\\nCOPY pom.xml .\\nRUN mvn -q dependency:go-offline\\n"
+                "COPY src ./src\\nRUN mvn -q -DskipTests package\\n"
+                "FROM eclipse-temurin:17-jre AS runtime\\nWORKDIR /app\\n"
+                "COPY --from=builder /build/target/*.jar app.jar\\n"
+                'ENTRYPOINT ["java", "-jar", "app.jar"]'
+            ),
+        ))
+        result.valid = False
+        logger.warning(
+            "[StaticValidator] JVM build is not multi-stage (FROM=%d copy_from=%s) — "
+            "unbuildable (mvn/gradle absent from runtime image)",
+            from_count, has_copy_from,
         )
 
     def _copy_chown_fix(self, copy_line: str, user_target: str) -> str:

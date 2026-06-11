@@ -34,6 +34,27 @@ class AgentTokenConfig:
     verbosity: str = "low"
 
 
+# Hard ceiling on the OUTPUT budget reserved for any single LLM request.
+#
+# Why this exists (root-cause fix for the Docker-phase rate-limit failures):
+#   The per-tier budgets below are *floors* — resolve_output_token_budget()
+#   inflates a caller's small max_tokens up to the tier value so complex repos
+#   are not starved. But the large tier (12 000–14 000) is:
+#     • >= the smallest fallback provider's per-request limit (Groq free tier =
+#       12 000 TPM), so a SINGLE Groq request — output budget alone — already
+#       exceeded the TPM ceiling and failed before it was even sent; and
+#     • reserved in full against OpenAI's per-minute token budget at admission
+#       (reasoning models reserve max_output_tokens up-front), so the 3-call
+#       Docker burst (section batch + self-critique + ReAct) reserved ~36k+
+#       output tokens in seconds and tripped rate_limit_exceeded(tokens).
+#   Capping the reserved output keeps every single request comfortably under the
+#   Groq 12k TPM (cap + typical ~2–3.5k input < 12k) and cuts the OpenAI burst
+#   reservation ~2.4x. Truncation is still detected and retried ONCE with a
+#   larger budget (ProviderFactory._TRUNCATION_RETRY_MULTIPLIER), so this cap
+#   cannot silently truncate a genuinely large artifact.
+MAX_SINGLE_REQUEST_OUTPUT_TOKENS = 6_000
+
+
 # Per-agent overrides. K8s and Terraform agents lean larger because their
 # artifact output is heavier (YAML manifests, multi-resource HCL).
 AGENT_TOKEN_CONFIG: dict[str, AgentTokenConfig] = {
@@ -178,12 +199,24 @@ def resolve_output_token_budget(
     # while we'd allocate 3500), allow the higher of the two — never starve.
     budget = max(budget, requested_tokens)
 
+    # Hard cap: never reserve more output than a single request can safely use
+    # against the smallest fallback provider's per-minute token limit. See
+    # MAX_SINGLE_REQUEST_OUTPUT_TOKENS for the full rationale. This is the line
+    # that stops a single Docker-phase request from reserving ~12k output tokens
+    # (which exceeded Groq's 12k TPM outright and burned OpenAI's TPM budget).
+    capped_budget = min(budget, MAX_SINGLE_REQUEST_OUTPUT_TOKENS)
+    budget_was_capped = capped_budget < budget
+    budget = capped_budget
+
     telemetry = {
         "agent": agent_name,
         "configured": True,
         "repo_size": repo_size,
         "signals": signals,
         "requested_tokens": requested_tokens,
+        "tier_budget": budget if not budget_was_capped else None,
+        "output_cap": MAX_SINGLE_REQUEST_OUTPUT_TOKENS,
+        "budget_capped": budget_was_capped,
         "allocated_tokens": budget,
         "single_request": config.single_request_mode,
         "retry_on_truncation": config.retry_on_truncation,
@@ -193,10 +226,10 @@ def resolve_output_token_budget(
     }
     logger.info(
         "[TokenStrategy] agent=%s repo_size=%s services=%d frameworks=%d "
-        "deps=%d k8s=%d tf=%d chars=%d requested=%d allocated=%d",
+        "deps=%d k8s=%d tf=%d chars=%d requested=%d allocated=%d cap=%d capped=%s",
         agent_name, repo_size,
         signals["services"], signals["frameworks"], signals["deps"],
         signals["k8s"], signals["tf"], signals["chars"],
-        requested_tokens, budget,
+        requested_tokens, budget, MAX_SINGLE_REQUEST_OUTPUT_TOKENS, budget_was_capped,
     )
     return budget, telemetry

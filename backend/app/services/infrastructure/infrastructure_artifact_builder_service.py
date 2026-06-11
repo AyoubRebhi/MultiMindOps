@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Any
 
+from backend.app.services.infrastructure.dockerfile_healthcheck import normalize_healthcheck
+
 
 class InfrastructureArtifactBuilderService:
     def build_fallback_artifacts(self, mapped_context: dict[str, Any]) -> dict[str, str]:
@@ -66,7 +68,7 @@ class InfrastructureArtifactBuilderService:
             dependency_file = dependency_files[0] if dependency_files else "requirements.txt"
 
         if language == "java":
-            return self._build_java_dockerfile(mapped_context, dependency_file)
+            return self._finalize_dockerfile(self._build_java_dockerfile(mapped_context, dependency_file))
 
         port = main_service.get("port") or 8000
         run_command = main_service.get("run_command") or "python app.py"
@@ -85,9 +87,32 @@ class InfrastructureArtifactBuilderService:
             "",
             "ENV PYTHONUNBUFFERED=1",
             f"EXPOSE {port}",
+            self._python_healthcheck_line(port),
             cmd,
         ]
-        return "\n".join(lines)
+        return self._finalize_dockerfile("\n".join(lines))
+
+    def _python_healthcheck_line(self, port: Any) -> str:
+        """
+        A dependency-free, single-line HEALTHCHECK for the Python fallback image.
+
+        Emitted as ONE physical line on purpose: a single-line HEALTHCHECK needs
+        no ``\\`` continuation, so it cannot acquire the literal-``\\n`` corruption
+        that breaks multi-line HEALTHCHECK assembly. The probe is a plain TCP
+        connect via the interpreter that python:3.11-slim already ships — no curl
+        or wget install required — so it is build- and runtime-safe.
+        """
+        probe = (
+            "python -c \"import socket,sys; s=socket.socket(); s.settimeout(3); "
+            f"sys.exit(0 if s.connect_ex(('127.0.0.1', {port}))==0 else 1)\""
+        )
+        return f"HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD {probe}"
+
+    @staticmethod
+    def _finalize_dockerfile(content: str) -> str:
+        """Guarantee no raw escape injection survives into a persisted Dockerfile."""
+        normalized, _repairs = normalize_healthcheck(content)
+        return normalized
 
     def _build_java_dockerfile(
         self,

@@ -26,6 +26,39 @@ from backend.app.services.rag.qdrant_service import QdrantService
 
 logger = logging.getLogger(__name__)
 
+# Known legacy / alternate collection names to fall back to when the configured
+# collection is absent (drift between the ingestion pipeline and retrieval config).
+_RAG_COLLECTION_ALIASES = ["devsecops_kb", "infra_templates"]
+
+# Process-wide cache: resolve the effective collection exactly once.
+_RESOLUTION: dict[str, Any] | None = None
+
+
+def bootstrap_rag_collection(force: bool = False) -> dict[str, Any]:
+    """Resolve + prepare the effective Qdrant collection once per process.
+
+    Deterministic RAG-drift guard: handles a missing/renamed collection by
+    falling back to a compatible existing one, or auto-creating an empty
+    collection so retrieval degrades to "no_results" instead of a hard
+    "collection_not_found". Safe to call at startup (explicit validation) and
+    lazily from RAGPipelineService.__init__; cached so repeated agent
+    instantiations do not re-hit Qdrant. Returns the structured report.
+    """
+    global _RESOLUTION
+    if _RESOLUTION is not None and not force:
+        return _RESOLUTION
+    qdrant = QdrantService(
+        url=rag_config.qdrant_url,
+        collection_name=rag_config.qdrant_collection,
+        vector_size=rag_config.qdrant_vector_size,
+    )
+    _RESOLUTION = qdrant.resolve_and_prepare(
+        expected_dim=rag_config.qdrant_vector_size,
+        aliases=_RAG_COLLECTION_ALIASES,
+        auto_create=True,
+    )
+    return _RESOLUTION
+
 
 class RAGPipelineService:
     """Pipeline RAG production-grade : query → embed → search → context."""
@@ -40,6 +73,11 @@ class RAGPipelineService:
             collection_name=rag_config.qdrant_collection,
             vector_size=rag_config.qdrant_vector_size,
         )
+        # Apply the once-resolved effective collection (handles config drift:
+        # missing / renamed collection → fallback or auto-create). Cached.
+        resolved = bootstrap_rag_collection().get("resolved")
+        if resolved and resolved != self._qdrant._collection:
+            self._qdrant.set_collection(resolved)
         self._top_k = rag_config.top_k
 
     # ── API principale ───────────────────────────────────────────────────────

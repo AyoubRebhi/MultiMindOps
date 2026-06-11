@@ -558,17 +558,23 @@ class DockerExecutor:
         await self._emit(LogLevel.INFO, "═" * 60)
         await self._emit(LogLevel.INFO, f"Workspace prepared: {self._workspace}")
 
-        # ── 3. Per-source COPY check (visible in live logs) ───────────────────
+        # ── 3. Per-source COPY check (against the RESOLVED build context) ──────
+        # Validate against the context docker build will actually use — for a
+        # monorepo this is the project subdir (e.g. TP-Projet), NOT the mirror
+        # root — so the check matches reality instead of failing on files that
+        # live one directory down.
+        build_ctx = self._resolved_build_context_path or ws
         for src in self._copy_sources:
-            resolved = (ws / src).resolve()
+            resolved = (build_ctx / src).resolve()
             exists = resolved.exists()
             await self._emit(
                 LogLevel.INFO if exists else LogLevel.ERROR,
                 f"[COPY CHECK] source={src} resolved_path={resolved} exists={str(exists).lower()}",
             )
 
-        # ── 4. Hard validation: every COPY source must exist in workspace ────
-        missing = self._collect_missing_copy_sources(ws, dockerfile_content)
+        # ── 4. Hard validation: every COPY source must exist in the resolved
+        #       build context ──────────────────────────────────────────────────
+        missing = self._collect_missing_copy_sources(build_ctx, dockerfile_content)
         if missing:
             details = "\n".join(
                 f"    COPY {m['src']} → not found at {m['expected_abs']}"
@@ -740,49 +746,76 @@ class DockerExecutor:
         dockerfile: str,
     ) -> Path:
         """
-        Decide which directory will be used as ``docker build``'s context.
+        Decide which directory will be used as ``docker build``'s context, by
+        EVIDENCE (where the COPY sources actually exist) rather than by assuming
+        a bare filename is repo-root-relative.
 
-        Rules (first match wins):
-          1. If any COPY source resolves at the repo root (bare filename OR
-             explicit root-level path that exists on disk), the build context
-             must be the repo root.
-          2. Otherwise stick with whatever context the build strategy named
-             (already mirrored into self._workspace).
+        Rules (first resolvable COPY source wins):
+          1. Source exists at the repo root                 → context = repo root
+             (monolith: ``COPY pom.xml`` with pom.xml at root).
+          2. Source missing at root but present under the strategy's configured
+             context subdir, OR under exactly ONE immediate child directory
+             (monorepo: ``COPY pom.xml`` where pom.xml lives in ``TP-Projet/``)
+                                                            → context = that subdir.
+          3. Nothing resolvable                             → configured / repo root.
+
+        Why this matters
+        ----------------
+        The previous logic forced ``repo_root`` for ANY bare filename without
+        checking it existed there. For a monorepo whose project sits in a
+        subdirectory, that pointed the context at the repo root where the file is
+        absent → ``Pre-execution COPY check failed: missing pom.xml`` → exit 1.
+        The fix is evidence-based, so the monolith case is unchanged (file at
+        root → repo root) and the monorepo case self-corrects to the subdir.
 
         Sets and returns ``self._resolved_build_context_path``.
         """
         repo_root = Path(repo_root).resolve()
         sources = self._extract_copy_sources(dockerfile)
-        for src in sources:
-            # Bare filename (no slash) → always repo-root-relative.
-            if "/" not in src and "\\" not in src:
-                self._resolved_build_context_path = repo_root
-                logger.info(
-                    "[BuildContext] resolved context=repo_root (bare-name COPY %r → %s)",
-                    src, repo_root,
-                )
-                return repo_root
-            # Otherwise check on disk
-            candidate = (repo_root / src).resolve()
-            try:
-                candidate.relative_to(repo_root)
-            except ValueError:
-                continue
-            if candidate.exists():
-                self._resolved_build_context_path = repo_root
-                logger.info(
-                    "[BuildContext] resolved context=repo_root (COPY %r → %s exists)",
-                    src, candidate,
-                )
-                return repo_root
 
-        # No root-relative COPY → keep the configured strategy context.
-        ctx = Path(self._build_strategy.get("context_path") or repo_root)
-        if not ctx.is_absolute():
-            ctx = (repo_root / ctx).resolve()
-        self._resolved_build_context_path = ctx
-        logger.info("[BuildContext] resolved context=%s (no root-relative COPY)", ctx)
-        return ctx
+        configured = Path(self._build_strategy.get("context_path") or repo_root)
+        if not configured.is_absolute():
+            configured = (repo_root / configured).resolve()
+
+        for src in sources:
+            src_norm = src.replace("\\", "/").lstrip("./").rstrip("/")
+            if not src_norm:
+                continue
+            # 1) Exists at the repo root → repo-root context (monolith).
+            if (repo_root / src_norm).exists():
+                self._resolved_build_context_path = repo_root
+                logger.info(
+                    "[BuildContext] resolved context=repo_root (COPY %r exists at root)", src,
+                )
+                return repo_root
+            # 2a) Exists under the strategy's configured subdir context.
+            if configured != repo_root and (configured / src_norm).exists():
+                self._resolved_build_context_path = configured
+                logger.info(
+                    "[BuildContext] resolved context=%s (COPY %r under configured subdir)",
+                    configured, src,
+                )
+                return configured
+            # 2b) Exists under exactly ONE immediate child dir (monorepo auto-detect).
+            try:
+                matches = [
+                    d for d in repo_root.iterdir()
+                    if d.is_dir() and (d / src_norm).exists()
+                ]
+            except OSError:
+                matches = []
+            if len(matches) == 1:
+                self._resolved_build_context_path = matches[0]
+                logger.info(
+                    "[BuildContext] resolved context=%s (COPY %r found in unique subdir → monorepo)",
+                    matches[0], src,
+                )
+                return matches[0]
+
+        # 3) Nothing resolvable → keep the configured (or repo-root) context.
+        self._resolved_build_context_path = configured
+        logger.info("[BuildContext] resolved context=%s (no resolvable root-relative COPY)", configured)
+        return configured
 
     def _collect_missing_copy_sources(
         self,
@@ -843,12 +876,19 @@ class DockerExecutor:
     async def _run_docker_build(self) -> int:
         """Run `docker build -f <dockerfile> -t <tag> <context>` and stream output."""
         dockerfile_path = str(Path(self._workspace) / "Dockerfile")  # type: ignore[arg-type]
+        # Use the EVIDENCE-RESOLVED build context (set in _write_artifacts via
+        # _resolve_final_build_context). For a monolith this equals the workspace
+        # (repo root); for a monorepo it is the project subdir, so the project's
+        # bare-COPY Dockerfile resolves correctly. The Dockerfile lives at the
+        # workspace root and is passed with -f (docker allows it to sit outside
+        # the context).
+        build_context = str(self._resolved_build_context_path or self._workspace)
         cmd = [
             "docker", "build",
             "--progress=plain",
             "-f", dockerfile_path,
             "-t", self.image_tag,
-            str(self._workspace),
+            build_context,
         ]
         self._docker_command = " ".join(cmd)
         logger.info(

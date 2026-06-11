@@ -26,7 +26,7 @@ frontend-React/node_modules
 #Source code des projets de test
 workspace/
 
-# pRapport/
+Rapport/
 rag/corpus/
 
 
@@ -41,3 +41,19 @@ generated_terraform/
 .claude/
 
 .vscode/
+
+# LaTeX auxiliary files
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.log
+*.lot
+*.maf
+*.mtc*
+*.out
+*.pdf
+*.synctex.gz
+*.toc
