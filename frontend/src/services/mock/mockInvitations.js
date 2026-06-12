@@ -1,0 +1,92 @@
+/* ============================================================================
+   mockInvitations.js — invitations in every lifecycle state for the
+   Invitations page (pending / accepted / expired / rejected).
+   ========================================================================== */
+
+export const mockInvitations = [
+  {
+    id: 'inv-001',
+    email: 'karim.devops@acme.io',
+    role: 'DEVOPS_ENGINEER',
+    status: 'pending',
+    invitedBy: 'Ayoub Rebhi',
+    message: 'Welcome aboard! You will be working on the Payments platform.',
+    token: 'tok_karim_8a3f',
+    sentAt: '2026-06-11T16:42:00Z',
+    expiresAt: '2026-06-18T16:42:00Z',
+  },
+  {
+    id: 'inv-002',
+    email: 'lina.ops@acme.io',
+    role: 'DEVOPS_ENGINEER',
+    status: 'pending',
+    invitedBy: 'Ayoub Rebhi',
+    message: 'Joining the data platform squad.',
+    token: 'tok_lina_2b7c',
+    sentAt: '2026-06-12T09:00:00Z',
+    expiresAt: '2026-06-19T09:00:00Z',
+  },
+  {
+    id: 'inv-003',
+    email: 'mariem.b@acme.io',
+    role: 'DEVOPS_ENGINEER',
+    status: 'accepted',
+    invitedBy: 'Ayoub Rebhi',
+    message: '',
+    token: 'tok_mariem_9f01',
+    sentAt: '2026-06-09T10:00:00Z',
+    expiresAt: '2026-06-16T10:00:00Z',
+    acceptedAt: '2026-06-12T08:10:00Z',
+  },
+  {
+    id: 'inv-004',
+    email: 'sami.t@acme.io',
+    role: 'DEVOPS_ENGINEER',
+    status: 'accepted',
+    invitedBy: 'Ayoub Rebhi',
+    message: '',
+    token: 'tok_sami_4d22',
+    sentAt: '2026-04-30T08:00:00Z',
+    expiresAt: '2026-05-07T08:00:00Z',
+    acceptedAt: '2026-05-02T10:30:00Z',
+  },
+  {
+    id: 'inv-005',
+    email: 'old.contractor@acme.io',
+    role: 'DEVOPS_ENGINEER',
+    status: 'expired',
+    invitedBy: 'Ayoub Rebhi',
+    message: 'Short-term engagement.',
+    token: 'tok_old_7e55',
+    sentAt: '2026-05-01T08:00:00Z',
+    expiresAt: '2026-05-08T08:00:00Z',
+  },
+  {
+    id: 'inv-006',
+    email: 'declined.dev@acme.io',
+    role: 'DEVOPS_ENGINEER',
+    status: 'rejected',
+    invitedBy: 'Ayoub Rebhi',
+    message: '',
+    token: 'tok_decl_1a99',
+    sentAt: '2026-05-20T08:00:00Z',
+    expiresAt: '2026-05-27T08:00:00Z',
+    rejectedAt: '2026-05-21T15:00:00Z',
+  },
+];
+
+/** A single invitation used by the public InvitationLandingPage demo. */
+export const mockPendingInvitation = {
+  id: 'inv-001',
+  email: 'karim.devops@acme.io',
+  role: 'DEVOPS_ENGINEER',
+  status: 'pending',
+  invitedBy: 'Ayoub Rebhi',
+  invitedByEmail: 'rebhi.ayoub@esprit.tn',
+  workspaceName: 'CloudForge HQ',
+  company: 'CloudForge Inc.',
+  message: 'Welcome aboard! You will be working on the Payments platform.',
+  token: 'tok_karim_8a3f',
+  sentAt: '2026-06-11T16:42:00Z',
+  expiresAt: '2026-06-18T16:42:00Z',
+};

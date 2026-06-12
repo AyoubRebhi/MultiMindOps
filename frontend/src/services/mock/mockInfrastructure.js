@@ -1,0 +1,98 @@
+/* ============================================================================
+   mockInfrastructure.js — provisioned infrastructure summary across projects:
+   provider totals, live resources, regions and a cost breakdown.
+   ========================================================================== */
+
+export const mockInfrastructure = {
+  totals: {
+    monthlyCost: 1800,
+    resources: 47,
+    regions: 5,
+    providers: 3,
+    drift: 2,
+  },
+  providerBreakdown: [
+    { provider: 'aws', resources: 28, monthlyCost: 880, percent: 49 },
+    { provider: 'gcp', resources: 12, monthlyCost: 736, percent: 41 },
+    { provider: 'azure', resources: 7, monthlyCost: 184, percent: 10 },
+  ],
+  costBreakdown: [
+    { category: 'Compute', amount: 742, icon: 'fa-microchip', color: '#8b5cf6' },
+    { category: 'Database', amount: 388, icon: 'fa-database', color: '#3b82f6' },
+    { category: 'Networking', amount: 264, icon: 'fa-network-wired', color: '#34d399' },
+    { category: 'Storage', amount: 196, icon: 'fa-hard-drive', color: '#fbbf24' },
+    { category: 'Other', amount: 210, icon: 'fa-ellipsis', color: '#60a5fa' },
+  ],
+  resources: [
+    {
+      id: 'res-001',
+      name: 'payments-api-ecs',
+      type: 'ECS Service',
+      provider: 'aws',
+      region: 'eu-west-1',
+      project: 'Payments API',
+      status: 'healthy',
+      monthlyCost: 220,
+    },
+    {
+      id: 'res-002',
+      name: 'payments-api-db',
+      type: 'RDS PostgreSQL',
+      provider: 'aws',
+      region: 'eu-west-1',
+      project: 'Payments API',
+      status: 'healthy',
+      monthlyCost: 192,
+    },
+    {
+      id: 'res-003',
+      name: 'customer-portal-alb',
+      type: 'Application LB',
+      provider: 'aws',
+      region: 'us-east-1',
+      project: 'Customer Portal',
+      status: 'provisioning',
+      monthlyCost: 26,
+    },
+    {
+      id: 'res-004',
+      name: 'data-pipeline-gke',
+      type: 'GKE Cluster',
+      provider: 'gcp',
+      region: 'europe-west1',
+      project: 'Data Pipeline',
+      status: 'degraded',
+      monthlyCost: 612,
+    },
+    {
+      id: 'res-005',
+      name: 'data-pipeline-bq',
+      type: 'BigQuery Dataset',
+      provider: 'gcp',
+      region: 'europe-west1',
+      project: 'Data Pipeline',
+      status: 'healthy',
+      monthlyCost: 124,
+    },
+    {
+      id: 'res-006',
+      name: 'auth-service-aks',
+      type: 'AKS Cluster',
+      provider: 'azure',
+      region: 'westeurope',
+      project: 'Auth Service',
+      status: 'healthy',
+      monthlyCost: 142,
+    },
+    {
+      id: 'res-007',
+      name: 'auth-service-kv',
+      type: 'Key Vault',
+      provider: 'azure',
+      region: 'westeurope',
+      project: 'Auth Service',
+      status: 'healthy',
+      monthlyCost: 42,
+    },
+  ],
+};

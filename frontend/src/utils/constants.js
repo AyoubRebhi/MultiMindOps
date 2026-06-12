@@ -1,0 +1,328 @@
+/* ============================================================================
+   constants.js — shared, presentation-level constants for the platform.
+   Kept free of business logic; these are labels, icons, ordering and the
+   metadata used to render statuses consistently across pages/components.
+   ========================================================================== */
+
+/** App-wide identity (used in the sidebar logo, page titles, etc.). */
+export const APP_NAME = 'CloudForge AI';
+export const APP_TAGLINE = 'AI Cloud Engineering Platform';
+
+/**
+ * Sidebar navigation. Grouped into sections; each item maps to a route.
+ * `end` forces exact matching for the index route so it isn't always active.
+ */
+export const NAV_SECTIONS = [
+  {
+    title: 'Platform',
+    items: [
+      { label: 'Dashboard', icon: 'fa-gauge-high', to: '/', end: true },
+      { label: 'Projects', icon: 'fa-folder-tree', to: '/projects' },
+      { label: 'Workflows', icon: 'fa-diagram-project', to: '/workflows' },
+    ],
+  },
+  {
+    title: 'Engineering',
+    items: [
+      { label: 'Architecture', icon: 'fa-sitemap', to: '/architecture' },
+      {
+        label: 'Infrastructure',
+        icon: 'fa-server',
+        to: '/infrastructure',
+        badge: 'IaC',
+      },
+    ],
+  },
+  {
+    title: 'Workspace',
+    items: [{ label: 'Settings', icon: 'fa-gear', to: '/settings' }],
+  },
+];
+
+/**
+ * Ordered workflow pipeline phases, mirroring the backend roadmap. Used by the
+ * workflow timeline, project details and the phase status badge.
+ */
+export const WORKFLOW_PHASES = [
+  {
+    key: 'REPO_ANALYSIS',
+    label: 'Repository Analysis',
+    icon: 'fa-magnifying-glass-chart',
+    description: 'Detect stack, services, dependencies and build context.',
+  },
+  {
+    key: 'ARCHITECTURE',
+    label: 'Architecture Planning',
+    icon: 'fa-sitemap',
+    description: 'Propose and compare candidate cloud architectures.',
+  },
+  {
+    key: 'DOCKER_GENERATION',
+    label: 'Container Build',
+    icon: 'fa-docker',
+    brand: true,
+    description: 'Generate, validate and build Dockerfiles per service.',
+  },
+  {
+    key: 'COST_ESTIMATION',
+    label: 'Cost Estimation',
+    icon: 'fa-coins',
+    description: 'Estimate monthly cloud spend and optimization tips.',
+  },
+  {
+    key: 'TERRAFORM_GENERATION',
+    label: 'Terraform Provisioning',
+    icon: 'fa-cubes',
+    description: 'Generate, validate and plan Terraform infrastructure.',
+  },
+  {
+    key: 'K8S_GENERATION',
+    label: 'Kubernetes Manifests',
+    icon: 'fa-dharmachakra',
+    description: 'Render deployment, service and ingress manifests.',
+  },
+  {
+    key: 'CORRECTOR_REVIEW',
+    label: 'AI Corrector Review',
+    icon: 'fa-wand-magic-sparkles',
+    description: 'Diagnose failures and propose remediation for review.',
+  },
+  {
+    key: 'DEPLOY',
+    label: 'Deployment',
+    icon: 'fa-rocket',
+    description: 'Apply infrastructure and roll out the workload.',
+  },
+];
+
+/** Lookup the phase metadata by key (falls back to a generic descriptor). */
+export function getPhaseMeta(key) {
+  return (
+    WORKFLOW_PHASES.find((p) => p.key === key) || {
+      key,
+      label: key,
+      icon: 'fa-circle-nodes',
+      description: '',
+    }
+  );
+}
+
+/**
+ * Status metadata — drives the StatusBadge / PhaseStatusBadge colors and icons.
+ * `variant` maps to the badge-* classes defined in app.css.
+ */
+export const STATUS_META = {
+  // Generic lifecycle
+  completed: { label: 'Completed', variant: 'success', icon: 'fa-circle-check' },
+  succeeded: { label: 'Succeeded', variant: 'success', icon: 'fa-circle-check' },
+  passed: { label: 'Passed', variant: 'success', icon: 'fa-circle-check' },
+  healthy: { label: 'Healthy', variant: 'success', icon: 'fa-heart-pulse' },
+  active: { label: 'Active', variant: 'success', icon: 'fa-circle-play' },
+  deployed: { label: 'Deployed', variant: 'success', icon: 'fa-circle-check' },
+  approved: { label: 'Approved', variant: 'success', icon: 'fa-thumbs-up' },
+
+  running: { label: 'Running', variant: 'running', icon: 'fa-spinner' },
+  in_progress: { label: 'In Progress', variant: 'running', icon: 'fa-spinner' },
+  building: { label: 'Building', variant: 'running', icon: 'fa-hammer' },
+  provisioning: {
+    label: 'Provisioning',
+    variant: 'running',
+    icon: 'fa-cloud-arrow-up',
+  },
+
+  pending: { label: 'Pending', variant: 'pending', icon: 'fa-clock' },
+  queued: { label: 'Queued', variant: 'pending', icon: 'fa-clock' },
+  not_started: { label: 'Not Started', variant: 'pending', icon: 'fa-minus' },
+  draft: { label: 'Draft', variant: 'pending', icon: 'fa-pen-ruler' },
+
+  degraded: {
+    label: 'Degraded',
+    variant: 'warning',
+    icon: 'fa-triangle-exclamation',
+  },
+  warning: {
+    label: 'Warning',
+    variant: 'warning',
+    icon: 'fa-triangle-exclamation',
+  },
+  human_review: {
+    label: 'Needs Review',
+    variant: 'warning',
+    icon: 'fa-user-check',
+  },
+  awaiting_approval: {
+    label: 'Awaiting Approval',
+    variant: 'warning',
+    icon: 'fa-hourglass-half',
+  },
+
+  failed: { label: 'Failed', variant: 'danger', icon: 'fa-circle-xmark' },
+  error: { label: 'Error', variant: 'danger', icon: 'fa-circle-xmark' },
+  blocked: { label: 'Blocked', variant: 'danger', icon: 'fa-ban' },
+  suspended: { label: 'Suspended', variant: 'danger', icon: 'fa-user-slash' },
+
+  // Members / invitations / credentials
+  invited: { label: 'Invited', variant: 'info', icon: 'fa-paper-plane' },
+  accepted: { label: 'Accepted', variant: 'success', icon: 'fa-circle-check' },
+  expired: { label: 'Expired', variant: 'pending', icon: 'fa-hourglass-end' },
+  rejected: { label: 'Rejected', variant: 'danger', icon: 'fa-circle-xmark' },
+  revoked: { label: 'Revoked', variant: 'danger', icon: 'fa-ban' },
+  valid: { label: 'Valid', variant: 'success', icon: 'fa-shield-halved' },
+  connected: { label: 'Connected', variant: 'success', icon: 'fa-plug-circle-check' },
+  invalid: { label: 'Invalid', variant: 'danger', icon: 'fa-shield-virus' },
+  not_configured: {
+    label: 'Not Configured',
+    variant: 'pending',
+    icon: 'fa-circle-minus',
+  },
+};
+
+/** Resolve status metadata, normalizing case/spacing, with a sane fallback. */
+export function getStatusMeta(status) {
+  if (!status) return { label: '—', variant: 'pending', icon: 'fa-minus' };
+  const key = String(status).toLowerCase().replace(/[\s-]+/g, '_');
+  return (
+    STATUS_META[key] || {
+      label: String(status),
+      variant: 'info',
+      icon: 'fa-circle-info',
+    }
+  );
+}
+
+/** Cloud provider display metadata. */
+export const CLOUD_PROVIDERS = {
+  aws: { label: 'AWS', icon: 'fa-aws', color: '#ff9900' },
+  azure: { label: 'Azure', icon: 'fa-microsoft', color: '#3b82f6' },
+  gcp: { label: 'Google Cloud', icon: 'fa-google', color: '#34a853' },
+};
+
+/** Artifact type display metadata. */
+export const ARTIFACT_TYPES = {
+  dockerfile: { label: 'Dockerfile', icon: 'fa-docker', brand: true },
+  compose: { label: 'Docker Compose', icon: 'fa-layer-group' },
+  terraform: { label: 'Terraform', icon: 'fa-cubes' },
+  kubernetes: { label: 'Kubernetes', icon: 'fa-dharmachakra' },
+  helm: { label: 'Helm Chart', icon: 'fa-ship' },
+  cicd: { label: 'CI/CD Pipeline', icon: 'fa-code-branch' },
+};
+
+/* ===========================================================================
+   Auth / workspace roles
+   ========================================================================= */
+
+export const ROLES = {
+  ADMIN: 'ADMIN',
+  DEVOPS_ENGINEER: 'DEVOPS_ENGINEER',
+};
+
+/** Role display metadata — drives <RoleBadge />. */
+export const ROLE_META = {
+  ADMIN: {
+    label: 'Admin',
+    short: 'Admin',
+    icon: 'fa-crown',
+    color: '#a78bfa',
+    description: 'Owns the workspace, manages members, AWS & billing.',
+  },
+  DEVOPS_ENGINEER: {
+    label: 'DevOps Engineer',
+    short: 'Engineer',
+    icon: 'fa-user-gear',
+    color: '#60a5fa',
+    description: 'Builds and ships infrastructure within the workspace.',
+  },
+};
+
+export function getRoleMeta(role) {
+  return (
+    ROLE_META[role] || {
+      label: role || 'Member',
+      short: 'Member',
+      icon: 'fa-user',
+      color: 'var(--tx2)',
+      description: '',
+    }
+  );
+}
+
+/* ===========================================================================
+   Role-based sidebar navigation (Phase 8)
+   ========================================================================= */
+
+export const ROLE_NAV = {
+  ADMIN: [
+    {
+      title: 'Platform',
+      items: [
+        { label: 'Dashboard', icon: 'fa-gauge-high', to: '/', end: true },
+        { label: 'Projects', icon: 'fa-folder-tree', to: '/projects' },
+        { label: 'Workflows', icon: 'fa-diagram-project', to: '/workflows' },
+      ],
+    },
+    {
+      title: 'Administration',
+      items: [
+        { label: 'Members', icon: 'fa-users', to: '/members' },
+        { label: 'Invitations', icon: 'fa-paper-plane', to: '/invitations' },
+        {
+          label: 'AWS Credentials',
+          icon: 'fa-aws',
+          brand: true,
+          to: '/aws-credentials',
+        },
+      ],
+    },
+    {
+      title: 'Workspace',
+      items: [{ label: 'Settings', icon: 'fa-gear', to: '/settings' }],
+    },
+  ],
+  DEVOPS_ENGINEER: [
+    {
+      title: 'Platform',
+      items: [
+        { label: 'Dashboard', icon: 'fa-gauge-high', to: '/', end: true },
+        { label: 'Projects', icon: 'fa-folder-tree', to: '/projects' },
+        { label: 'Workflows', icon: 'fa-diagram-project', to: '/workflows' },
+      ],
+    },
+    {
+      title: 'Engineering',
+      items: [
+        { label: 'Artifacts', icon: 'fa-file-code', to: '/artifacts' },
+        {
+          label: 'Infrastructure',
+          icon: 'fa-server',
+          to: '/infrastructure',
+          badge: 'IaC',
+        },
+      ],
+    },
+    {
+      title: 'Workspace',
+      items: [{ label: 'Settings', icon: 'fa-gear', to: '/settings' }],
+    },
+  ],
+};
+
+/** Resolve nav for a role, defaulting to the admin layout. */
+export function getNavForRole(role) {
+  return ROLE_NAV[role] || ROLE_NAV.ADMIN;
+}
+
+/* ===========================================================================
+   AWS regions (for workspace setup + credentials dropdowns)
+   ========================================================================= */
+
+export const AWS_REGIONS = [
+  { value: 'us-east-1', label: 'US East (N. Virginia) · us-east-1' },
+  { value: 'us-east-2', label: 'US East (Ohio) · us-east-2' },
+  { value: 'us-west-2', label: 'US West (Oregon) · us-west-2' },
+  { value: 'eu-west-1', label: 'EU (Ireland) · eu-west-1' },
+  { value: 'eu-west-3', label: 'EU (Paris) · eu-west-3' },
+  { value: 'eu-central-1', label: 'EU (Frankfurt) · eu-central-1' },
+  { value: 'ap-south-1', label: 'Asia Pacific (Mumbai) · ap-south-1' },
+  { value: 'ap-southeast-1', label: 'Asia Pacific (Singapore) · ap-southeast-1' },
+  { value: 'ap-northeast-1', label: 'Asia Pacific (Tokyo) · ap-northeast-1' },
+];
