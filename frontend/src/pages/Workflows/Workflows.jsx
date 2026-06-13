@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import ContentContainer from '@/components/layout/ContentContainer';
 import PageHeader from '@/components/layout/PageHeader';
 import WorkflowCard from '@/components/workflow/WorkflowCard';
@@ -42,6 +43,12 @@ export default function Workflows() {
         title="Workflows"
         subtitle="Every run of the AI infrastructure pipeline across your projects."
         breadcrumbs={[{ label: 'Workflows' }]}
+        actions={
+          <Link to="/workflows/analysis" className="bgrd btn px-3 py-2" style={{ fontSize: '.85rem' }}>
+            <i className="fa-solid fa-play me-2" />
+            Run Workflow
+          </Link>
+        }
       />
 
       <div className="row g-3 mb-4">

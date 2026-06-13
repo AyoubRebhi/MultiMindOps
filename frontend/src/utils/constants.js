@@ -5,7 +5,7 @@
    ========================================================================== */
 
 /** App-wide identity (used in the sidebar logo, page titles, etc.). */
-export const APP_NAME = 'CloudForge AI';
+export const APP_NAME = 'MultiMinds AI';
 export const APP_TAGLINE = 'AI Cloud Engineering Platform';
 
 /**
@@ -326,3 +326,45 @@ export const AWS_REGIONS = [
   { value: 'ap-southeast-1', label: 'Asia Pacific (Singapore) · ap-southeast-1' },
   { value: 'ap-northeast-1', label: 'Asia Pacific (Tokyo) · ap-northeast-1' },
 ];
+
+/* ===========================================================================
+   Workflow execution timeline (the live run experience, /workflows/*)
+
+   This is the user-facing pipeline shown by <WorkflowTimeline /> at the top of
+   every phase page. It is intentionally a *flat, ordered* list (distinct from
+   the richer backend roadmap in WORKFLOW_PHASES above) so the timeline reads
+   like a simple left-to-right journey. Each entry can map to a phase route;
+   future phases reuse this same definition.
+   ========================================================================= */
+
+export const WORKFLOW_TIMELINE_PHASES = [
+  { key: 'analysis', label: 'Analysis', icon: 'fa-magnifying-glass-chart', to: '/workflows/analysis' },
+  { key: 'planning', label: 'Planning', icon: 'fa-clipboard-list', to: '/workflows/planning' },
+  { key: 'docker', label: 'Docker', icon: 'fa-docker', brand: true, to: '/workflows/docker' },
+  { key: 'terraform', label: 'Terraform', icon: 'fa-cubes', to: '/workflows/terraform' },
+  { key: 'cicd', label: 'GitHub Actions', icon: 'fa-github', brand: true, to: '/workflows/cicd' },
+  { key: 'execution', label: 'Execution Center', icon: 'fa-tower-broadcast', to: '/workflows/execution' },
+  { key: 'infrastructure', label: 'Infrastructure Dashboard', icon: 'fa-server', to: '/workflows/infrastructure-dashboard' },
+];
+
+/** Index of a phase within the timeline (−1 if unknown). */
+export function getTimelineIndex(key) {
+  return WORKFLOW_TIMELINE_PHASES.findIndex((p) => p.key === key);
+}
+
+/**
+ * Derive a {key: status} map for the timeline from the *current* phase, where
+ * everything before it is completed, the current phase is running and the rest
+ * are not started. Callers can pass `overrides` to pin specific phases (e.g.
+ * mark the current phase completed or failed).
+ */
+export function deriveTimelineStatuses(currentKey, overrides = {}) {
+  const currentIdx = getTimelineIndex(currentKey);
+  const map = {};
+  WORKFLOW_TIMELINE_PHASES.forEach((phase, idx) => {
+    if (idx < currentIdx) map[phase.key] = 'completed';
+    else if (idx === currentIdx) map[phase.key] = 'running';
+    else map[phase.key] = 'not_started';
+  });
+  return { ...map, ...overrides };
+}

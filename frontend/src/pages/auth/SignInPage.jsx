@@ -34,7 +34,7 @@ export default function SignInPage() {
     <div className="fade-in">
       <h1 style={{ fontSize: '1.6rem', fontWeight: 700, marginBottom: 6 }}>Welcome back</h1>
       <p style={{ fontSize: '.88rem', color: 'var(--tx3)', marginBottom: 28 }}>
-        Sign in to your CloudForge AI workspace.
+        Sign in to your MultiMinds AI workspace.
       </p>
 
       {error && (

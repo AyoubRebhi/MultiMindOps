@@ -35,6 +35,15 @@ const Infrastructure = lazy(() => import('@/pages/Infrastructure/Infrastructure'
 const Artifacts = lazy(() => import('@/pages/Artifacts/Artifacts'));
 const Settings = lazy(() => import('@/pages/Settings/Settings'));
 
+// Workflow execution (live run experience)
+const ProjectAnalysisPage = lazy(() => import('@/pages/workflow/ProjectAnalysisPage'));
+const PlanningPage = lazy(() => import('@/pages/workflow/PlanningPage'));
+const DockerPhasePage = lazy(() => import('@/pages/workflow/DockerPhasePage'));
+const TerraformPhasePage = lazy(() => import('@/pages/workflow/TerraformPhasePage'));
+const CicdPhasePage = lazy(() => import('@/pages/workflow/CicdPhasePage'));
+const ExecutionCenterPage = lazy(() => import('@/pages/workflow/ExecutionCenterPage'));
+const InfrastructureDashboardPage = lazy(() => import('@/pages/workflow/InfrastructureDashboardPage'));
+
 // Admin
 const UserManagementPage = lazy(() => import('@/pages/admin/UserManagementPage'));
 const InvitationsPage = lazy(() => import('@/pages/admin/InvitationsPage'));
@@ -67,6 +76,14 @@ export default function AppRoutes() {
           <Route path="projects" element={<Projects />} />
           <Route path="projects/:id" element={<ProjectDetails />} />
           <Route path="workflows" element={<Workflows />} />
+          {/* Workflow execution phases (reuse the shared timeline/phase UI) */}
+          <Route path="workflows/analysis" element={<ProjectAnalysisPage />} />
+          <Route path="workflows/planning" element={<PlanningPage />} />
+          <Route path="workflows/docker" element={<DockerPhasePage />} />
+          <Route path="workflows/terraform" element={<TerraformPhasePage />} />
+          <Route path="workflows/cicd" element={<CicdPhasePage />} />
+          <Route path="workflows/execution" element={<ExecutionCenterPage />} />
+          <Route path="workflows/infrastructure-dashboard" element={<InfrastructureDashboardPage />} />
           <Route path="architecture" element={<Architecture />} />
           <Route path="infrastructure" element={<Infrastructure />} />
           <Route path="artifacts" element={<Artifacts />} />
