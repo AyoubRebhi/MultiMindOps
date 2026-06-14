@@ -1,75 +1,126 @@
 /* ============================================================================
-   authApi.js — authentication & registration. MOCK ONLY.
-   No JWT, no real credentials check, no email sending. Every call resolves with
-   a believable shape so the UI flow can be exercised end-to-end.
+   authApi.js — REAL backend authentication + invitation acceptance (Phase 1).
+
+   Talks to the live FastAPI auth surface (see backend/app/api/routes/auth.py
+   and invitations.py). The Axios client injects the JWT and handles refresh,
+   so this module only shapes requests and maps the backend payloads into the
+   frontend's user/invitation shapes.
+
+   Backend contract:
+     POST /auth/register {email,password,display_name} -> { user, tokens }
+     POST /auth/login    {email,password}              -> { user, tokens }
+     POST /auth/logout   {refresh_token?}              -> { revoked_sessions }
+     GET  /auth/me                                     -> UserPublic
+     GET  /invitations/:token                          -> InvitationLanding
+     POST /invitations/:token/accept {password,...}    -> { user, tokens }
    ========================================================================== */
-import { mockCurrentUser, mockEngineerUser } from '@/services/mock/mockCurrentUser';
-import { mockPendingInvitation } from '@/services/mock/mockInvitations';
-import { mockResponse, mockError } from './mockAdapter';
-// import apiClient, { USE_MOCK } from './client';
+import apiClient from './client';
+
+/* ── Mappers ─────────────────────────────────────────────────────────────── */
+
+/** Map a backend UserPublic into the shape the UI (navbar/sidebar/badges) uses. */
+export function normalizeUser(apiUser) {
+  if (!apiUser) return null;
+  const workspace = apiUser.workspace || null;
+  return {
+    id: apiUser.id,
+    email: apiUser.email,
+    name: apiUser.display_name || apiUser.email,
+    displayName: apiUser.display_name || null,
+    role: apiUser.role || 'DEVOPS_ENGINEER',
+    avatarUrl: apiUser.avatar_url || null,
+    accountStatus: apiUser.account_status || 'active',
+    emailVerified: apiUser.email_verified === 'true' || apiUser.email_verified === true,
+    // Invited engineers get a temp password and must set their own before
+    // normal access — drives the forced password-change redirect.
+    mustChangePassword:
+      apiUser.must_change_password === 'true' || apiUser.must_change_password === true,
+    workspaceId: apiUser.workspace_id || workspace?.id || null,
+    workspaceName: workspace?.name || null,
+    workspace: workspace ? { id: workspace.id, name: workspace.name, plan: workspace.plan } : null,
+  };
+}
+
+/** Map the public invitation landing payload into the UI shape. */
+export function normalizeInvitation(api) {
+  if (!api) return null;
+  return {
+    token: api.token,
+    email: api.email,
+    role: api.role,
+    status: api.status,
+    workspaceName: api.workspace_name,
+    company: api.workspace_name, // no separate company entity in this build
+    invitedBy: api.invited_by || api.invited_by_email || 'A workspace admin',
+    invitedByEmail: api.invited_by_email || '',
+    message: api.message || '',
+    expiresAt: api.expires_at,
+  };
+}
+
+/* ── API ─────────────────────────────────────────────────────────────────── */
 
 export const authApi = {
-  /** POST /auth/sign-in — returns the mock user (admin by default). */
-  async signIn({ email } = {}) {
-    // if (!USE_MOCK) return apiClient.post('/auth/sign-in', { email, password });
-    const user =
-      email && email.toLowerCase() === mockEngineerUser.email
-        ? mockEngineerUser
-        : mockCurrentUser;
-    return mockResponse({ user, token: 'mock.jwt.token' });
+  /** POST /auth/login — returns { user, tokens }. */
+  async signIn({ email, password } = {}) {
+    return apiClient.post('/auth/login', { email, password });
   },
 
-  /** POST /auth/sign-up — admin account creation (pre-workspace). */
-  async signUp(payload) {
-    // if (!USE_MOCK) return apiClient.post('/auth/sign-up', payload);
-    return mockResponse({
-      user: {
-        ...mockCurrentUser,
-        ...payload,
-        name: `${payload.firstName || ''} ${payload.lastName || ''}`.trim(),
-        role: 'ADMIN',
-        workspaceId: null,
-      },
-      token: 'mock.jwt.token',
+  /** POST /auth/register — admin account creation (auto-provisions workspace). */
+  async signUp({ email, password, displayName, display_name } = {}) {
+    return apiClient.post('/auth/register', {
+      email,
+      password,
+      display_name: display_name ?? displayName ?? null,
     });
   },
 
-  /** POST /auth/forgot-password — pretends to send a reset email. */
-  async forgotPassword({ email }) {
-    // if (!USE_MOCK) return apiClient.post('/auth/forgot-password', { email });
-    if (!email) return mockError('Email is required', 400);
-    return mockResponse({ sent: true, email });
+  /** GET /auth/me — the authenticated user (UserPublic). */
+  async getCurrentUser() {
+    return apiClient.get('/auth/me');
   },
 
-  /** POST /auth/reset-password */
-  async resetPassword(payload) {
-    // if (!USE_MOCK) return apiClient.post('/auth/reset-password', payload);
-    return mockResponse({ success: true, token: payload?.token ?? null });
+  /** POST /auth/change-password — change the caller's password (also clears a
+   *  forced-change requirement). Returns the refreshed UserPublic. */
+  async changePassword({ currentPassword, newPassword, current_password, new_password } = {}) {
+    return apiClient.post('/auth/change-password', {
+      current_password: current_password ?? currentPassword,
+      new_password: new_password ?? newPassword,
+    });
   },
 
-  /** GET /invitations/:token — public lookup for the invitation landing page. */
+  /** POST /auth/logout — best-effort session revoke. */
+  async signOut({ refresh_token } = {}) {
+    return apiClient.post('/auth/logout', refresh_token ? { refresh_token } : {});
+  },
+
+  /** GET /invitations/:token — public landing-page lookup. */
   async getInvitation(token) {
-    // if (!USE_MOCK) return apiClient.get(`/invitations/${token}`);
-    return mockResponse({ ...mockPendingInvitation, token });
+    const data = await apiClient.get(`/invitations/${encodeURIComponent(token)}`);
+    return normalizeInvitation(data);
   },
 
-  /** POST /invitations/:token/accept — engineer completes registration. */
-  async completeRegistration(token, payload) {
-    // if (!USE_MOCK) return apiClient.post(`/invitations/${token}/accept`, payload);
-    return mockResponse({
-      user: {
-        ...mockEngineerUser,
-        ...payload,
-        name: `${payload.firstName || ''} ${payload.lastName || ''}`.trim(),
-        role: 'DEVOPS_ENGINEER',
-      },
+  /** POST /invitations/:token/accept — invitee sets a password + name. */
+  async acceptInvitation(token, { password, displayName, display_name } = {}) {
+    return apiClient.post(`/invitations/${encodeURIComponent(token)}/accept`, {
+      password,
+      display_name: display_name ?? displayName ?? null,
     });
   },
 
-  /** POST /auth/sign-out */
-  async signOut() {
-    // if (!USE_MOCK) return apiClient.post('/auth/sign-out');
-    return mockResponse({ success: true }, { minMs: 80, maxMs: 160 });
+  /* Backward-compatible alias used by CompleteRegistrationPage. */
+  async completeRegistration(token, payload) {
+    return this.acceptInvitation(token, payload);
+  },
+
+  /* ── Not backend-backed yet (no reset endpoints). Kept as graceful no-ops so
+     the existing password-reset pages do not crash; they surface a neutral
+     "if an account exists…" style response. ───────────────────────────────── */
+  async forgotPassword({ email } = {}) {
+    return Promise.resolve({ sent: true, email });
+  },
+  async resetPassword(payload = {}) {
+    return Promise.resolve({ success: true, token: payload?.token ?? null });
   },
 };
 

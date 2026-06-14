@@ -52,6 +52,13 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., min_length=1)
 
 
+class ChangePasswordRequest(BaseModel):
+    # The current password is required even for a forced change so a stolen
+    # but unlocked session cannot silently re-key the account.
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
 class LogoutRequest(BaseModel):
     # Logout MAY supply the refresh token to revoke the specific session.
     # If omitted, every session for the caller is revoked (whole-account
@@ -67,6 +74,14 @@ class TokenPairResponse(BaseModel):
     expires_in: int  # seconds until access_token expires
 
 
+class WorkspacePublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    plan: Optional[str] = None
+
+
 class UserPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -78,6 +93,16 @@ class UserPublic(BaseModel):
     email_verified: str
     account_status: str
     last_login_at: Optional[datetime] = None
+    # Global role + resolved workspace. ``role`` reads straight off the User
+    # row; ``workspace`` is resolved in the service layer (User holds only a
+    # soft ``workspace_id``) and is None for users not attached to a workspace.
+    role: str = "DEVOPS_ENGINEER"
+    workspace_id: Optional[str] = None
+    workspace: Optional[WorkspacePublic] = None
+    # 'true' when the account was provisioned with a temporary password (invited
+    # engineers) and must set a new one before normal access. Drives the
+    # frontend's forced password-change redirect.
+    must_change_password: str = "false"
 
 
 class AuthSuccessResponse(BaseModel):

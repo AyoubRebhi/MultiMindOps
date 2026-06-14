@@ -190,6 +190,32 @@ class Settings(BaseSettings):
     # process environment so the actual `docker build` connects to it too.
     DOCKER_HOST_FALLBACK: str = ""
 
+    # ── Email / SMTP (invitation delivery) ───────────────────────────────────
+    # Outbound transactional email (workspace invitations). Configured for
+    # Gmail SMTP in .env. NOTE: Gmail's SMTP AUTH username MUST be the full
+    # Gmail address — if SMTP_USERNAME is a human-readable name (e.g. an app
+    # label) the EmailService falls back to EMAIL_FROM for the login and uses
+    # SMTP_USERNAME only as the From display name. See email_service.py.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    # Envelope/From address shown to recipients (and the Gmail login fallback).
+    EMAIL_FROM: str = ""
+    # Optional friendly From display name. Defaults to SMTP_USERNAME (when it is
+    # not an email) or APP_NAME.
+    EMAIL_FROM_NAME: str = ""
+    # Master switch — when false, invitation creation still succeeds but no
+    # email is dispatched (email_status recorded as 'SKIPPED'). Useful for
+    # local/dev/CI runs that must not hit the network.
+    EMAIL_ENABLED: bool = True
+    # Hard cap on a single SMTP transaction so a slow/unreachable relay cannot
+    # hang the admin's "create invitation" request indefinitely.
+    SMTP_TIMEOUT_SECONDS: float = 15.0
+    # Public base URL of the frontend, used to build the invitation acceptance
+    # link ({FRONTEND_URL}/invite/{token}).
+    FRONTEND_URL: str = "http://localhost:5173"
+
     # ── AWS credentials (Terraform plan) ─────────────────────────────────────
     # Long-term IAM user keys (from `aws configure`) the AWS provider uses when
     # Terraform runs init/plan. These are overlaid onto the terraform subprocess
@@ -253,6 +279,32 @@ class Settings(BaseSettings):
                 "generate_app_secret_key; print(generate_app_secret_key())\"`.",
                 env or "(empty)",
             )
+
+        # ── SMTP / email config check ──────────────────────────────────────
+        # Validate at startup so a misconfigured relay is visible in the boot
+        # log instead of only when the first invitation is sent. We do NOT hard
+        # raise (email is non-critical to app boot, and CI/dev can run with
+        # EMAIL_ENABLED=false) — but we list exactly which fields are missing.
+        if self.EMAIL_ENABLED:
+            missing = [
+                name
+                for name, value in (
+                    ("SMTP_HOST", self.SMTP_HOST),
+                    ("SMTP_PASSWORD", self.SMTP_PASSWORD),
+                    # Login resolves to SMTP_USERNAME (if it's an email) or
+                    # EMAIL_FROM — at least one must be present.
+                    ("EMAIL_FROM/SMTP_USERNAME", self.EMAIL_FROM or self.SMTP_USERNAME),
+                )
+                if not str(value or "").strip()
+            ]
+            if missing:
+                _cfg_logger.warning(
+                    "EMAIL_ENABLED=true but SMTP is incomplete (missing: %s). "
+                    "Invitation emails will be recorded as FAILED until these "
+                    "are set in .env, or set EMAIL_ENABLED=false to disable "
+                    "outbound email.",
+                    ", ".join(missing),
+                )
         return self
 
     def get_groq_api_keys(self) -> list[str]:

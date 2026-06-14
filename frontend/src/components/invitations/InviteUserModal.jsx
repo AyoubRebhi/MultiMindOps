@@ -99,11 +99,15 @@ export default function InviteUserModal({ open, onClose, onSend, sending = false
 
         <label className="form-label-sm">Role</label>
         <select className="oinp mb-3" value={role} onChange={(e) => setRole(e.target.value)}>
-          {Object.entries(ROLE_META).map(([key, meta]) => (
-            <option key={key} value={key}>
-              {meta.label}
-            </option>
-          ))}
+          {/* Only engineers can be invited — the workspace ADMIN is the
+              registrant/owner, so ADMIN is intentionally not invitable. */}
+          {Object.entries(ROLE_META)
+            .filter(([key]) => key !== ROLES.ADMIN)
+            .map(([key, meta]) => (
+              <option key={key} value={key}>
+                {meta.label}
+              </option>
+            ))}
         </select>
 
         <label className="form-label-sm">Message (optional)</label>

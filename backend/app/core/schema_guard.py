@@ -215,6 +215,82 @@ CRITICAL_COLUMNS: List[ColumnRequirement] = [
         ),
         purpose="audit pointer: who last updated this user",
     ),
+    # ── Auth integration — global role + workspace tenant ───────────────────
+    # See backend/migrations/auth_workspace_roles.sql for the canonical
+    # migration. Both are strictly additive on the existing users table.
+    ColumnRequirement(
+        table="users",
+        column="role",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS role "
+            "VARCHAR NOT NULL DEFAULT 'DEVOPS_ENGINEER'"
+        ),
+        purpose="global workspace role (ADMIN | DEVOPS_ENGINEER) driving UI + admin gates",
+    ),
+    ColumnRequirement(
+        table="users",
+        column="workspace_id",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS workspace_id VARCHAR"
+        ),
+        purpose="soft pointer to the owning Workspace tenant",
+    ),
+    # ── Invitation email delivery — forced password change + send tracking ──
+    # See backend/migrations/invitation_email_delivery.sql. Additive on the
+    # existing users + invitations tables.
+    ColumnRequirement(
+        table="users",
+        column="must_change_password",
+        repair_sql=(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password "
+            "VARCHAR NOT NULL DEFAULT 'false'"
+        ),
+        purpose="force-change flag for invited users provisioned with a temp password",
+    ),
+    ColumnRequirement(
+        table="invitations",
+        column="email_status",
+        repair_sql=(
+            "ALTER TABLE invitations ADD COLUMN IF NOT EXISTS email_status "
+            "VARCHAR NOT NULL DEFAULT 'PENDING'"
+        ),
+        purpose="invitation email delivery state (PENDING | SENT | FAILED | SKIPPED)",
+    ),
+    ColumnRequirement(
+        table="invitations",
+        column="email_error",
+        repair_sql=(
+            "ALTER TABLE invitations ADD COLUMN IF NOT EXISTS email_error TEXT"
+        ),
+        purpose="last SMTP delivery failure reason for the admin UI",
+    ),
+    ColumnRequirement(
+        table="invitations",
+        column="email_sent_at",
+        repair_sql=(
+            "ALTER TABLE invitations ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ"
+        ),
+        purpose="timestamp of the last successful invitation email send",
+    ),
+    # Canaries for the new tables create_all() makes — if they are somehow
+    # absent (older deployment, model not imported), the guard surfaces it at
+    # boot with a clear pointer instead of failing on first query.
+    ColumnRequirement(
+        table="workspaces",
+        column="owner_id",
+        repair_sql=(
+            "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS owner_id VARCHAR"
+        ),
+        purpose="workspace tenant table canary",
+    ),
+    ColumnRequirement(
+        table="invitations",
+        column="token",
+        repair_sql=(
+            "ALTER TABLE invitations ADD COLUMN IF NOT EXISTS token VARCHAR"
+        ),
+        purpose="workspace invitation table canary",
+    ),
     # ── Phase 4 — encrypted credentials canary ─────────────────────────────
     # The credentials table is created by SQLAlchemy at create_all() time.
     # We declare ONE canary column so the guard's missing-table path fires

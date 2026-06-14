@@ -5,9 +5,11 @@ from backend.app.api.routes.artifacts import router as artifacts_router
 from backend.app.api.routes.auth import router as auth_router
 from backend.app.api.routes.corrector import router as corrector_router
 from backend.app.api.routes.credentials import router as credentials_router
+from backend.app.api.routes.dashboard import router as dashboard_router
 from backend.app.api.routes.evaluation import router as evaluation_router
 from backend.app.api.routes.execution import router as execution_router
 from backend.app.api.routes.health import router as health_router
+from backend.app.api.routes.invitations import router as invitations_router
 from backend.app.api.routes.jobs import router as jobs_router
 from backend.app.api.routes.releases import router as releases_router
 from backend.app.api.routes.projects import router as projects_router
@@ -25,9 +27,15 @@ api_router.include_router(health_router)
 # Auth must be public — registered before any other API routes so it
 # is clearly visible in the route table and order-independent.
 api_router.include_router(auth_router)
+# Workspace invitations — admin create/list/resend/revoke (gated) + public
+# token landing/accept. Mounted near auth since it shares the identity layer.
+api_router.include_router(invitations_router)
 api_router.include_router(artifacts_router)
 api_router.include_router(tasks_router)
 api_router.include_router(evaluation_router)
+# Dashboard aggregation routes — read-only landing-page rollups
+# (/api/dashboard/...). First frontend↔backend integration surface.
+api_router.include_router(dashboard_router)
 # Project-centric routes — defines its own full /api/projects prefix. This is
 # the ONLY workflow surface.
 api_router.include_router(projects_router)

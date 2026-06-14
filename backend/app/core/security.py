@@ -62,6 +62,7 @@ def _ensure_dev_user(db: Session) -> User:
             auth_provider="dev",
             account_status="active",
             email_verified="true",
+            role="ADMIN",
         )
         db.add(user)
         db.commit()

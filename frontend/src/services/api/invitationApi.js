@@ -1,57 +1,58 @@
 /* ============================================================================
-   invitationApi.js — workspace invitations. MOCK ONLY (no email sending).
-   ========================================================================== */
-import { mockInvitations } from '@/services/mock/mockInvitations';
-import { mockResponse, mockError } from './mockAdapter';
-// import apiClient, { USE_MOCK } from './client';
+   invitationApi.js — REAL workspace invitations (admin, Phase 8).
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+   Talks to the live backend (backend/app/api/routes/invitations.py). Admin
+   routes are gated server-side by the ADMIN global role + scoped to the
+   caller's workspace. Creating an invitation provisions the engineer's account
+   and emails them their temporary credentials + acceptance link (Gmail SMTP);
+   `emailStatus` reflects whether that delivery succeeded.
+   ========================================================================== */
+import apiClient from './client';
+
+/** Map a backend admin-view invitation into the UI shape (camelCase). */
+function mapInvitation(api) {
+  if (!api) return null;
+  return {
+    id: api.id,
+    email: api.email,
+    role: api.role,
+    status: api.status,
+    invitedBy: api.invited_by || '—',
+    message: api.message || '',
+    token: api.token,
+    // Email delivery (Phase 8): PENDING | SENT | FAILED | SKIPPED.
+    emailStatus: api.email_status || 'PENDING',
+    emailError: api.email_error || null,
+    emailSentAt: api.email_sent_at || null,
+    sentAt: api.sent_at,
+    expiresAt: api.expires_at,
+    acceptedAt: api.accepted_at || null,
+  };
+}
 
 export const invitationApi = {
-  /** GET /invitations */
+  /** GET /invitations — all invitations in the admin's workspace. */
   async list() {
-    // if (!USE_MOCK) return apiClient.get('/invitations');
-    return mockResponse(mockInvitations);
+    const data = await apiClient.get('/invitations');
+    return (Array.isArray(data) ? data : []).map(mapInvitation);
   },
 
-  /** GET /invitations/:token */
-  async getByToken(token) {
-    // if (!USE_MOCK) return apiClient.get(`/invitations/${token}`);
-    const inv = mockInvitations.find((i) => i.token === token);
-    return inv ? mockResponse(inv) : mockError('Invitation not found');
+  /** POST /invitations — create (or refresh) a pending invitation. */
+  async create({ email, role, message } = {}) {
+    const data = await apiClient.post('/invitations', { email, role, message });
+    return mapInvitation(data);
   },
 
-  /** POST /invitations — send a new invitation. */
-  async create(payload) {
-    // if (!USE_MOCK) return apiClient.post('/invitations', payload);
-    const now = Date.now();
-    return mockResponse({
-      id: `inv-${now}`,
-      status: 'pending',
-      invitedBy: 'Ayoub Rebhi',
-      token: `tok_${Math.random().toString(36).slice(2, 8)}`,
-      sentAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + WEEK_MS).toISOString(),
-      ...payload,
-    });
-  },
-
-  /** POST /invitations/:id/resend */
+  /** POST /invitations/:id/resend — refresh the expiry window. */
   async resend(id) {
-    // if (!USE_MOCK) return apiClient.post(`/invitations/${id}/resend`);
-    const now = Date.now();
-    return mockResponse({
-      id,
-      status: 'pending',
-      sentAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + WEEK_MS).toISOString(),
-    });
+    const data = await apiClient.post(`/invitations/${encodeURIComponent(id)}/resend`);
+    return mapInvitation(data);
   },
 
   /** DELETE /invitations/:id — revoke a pending invitation. */
   async revoke(id) {
-    // if (!USE_MOCK) return apiClient.delete(`/invitations/${id}`);
-    return mockResponse({ id, status: 'revoked' });
+    const data = await apiClient.delete(`/invitations/${encodeURIComponent(id)}`);
+    return mapInvitation(data);
   },
 };
 

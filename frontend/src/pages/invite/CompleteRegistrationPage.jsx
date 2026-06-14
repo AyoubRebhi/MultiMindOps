@@ -24,18 +24,33 @@ export default function CompleteRegistrationPage() {
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
+  // Mirror the backend password policy for instant feedback.
+  const validatePassword = (pw) => {
+    if (pw.length < 8) return 'Password must be at least 8 characters.';
+    if (!/[a-z]/.test(pw) || !/[A-Z]/.test(pw) || !/[0-9]/.test(pw))
+      return 'Password must include an uppercase letter, a lowercase letter, and a digit.';
+    return '';
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const { firstName, lastName, password, confirm } = form;
     if (!firstName || !lastName || !password) return setError('Please fill in all fields.');
-    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    const pwError = validatePassword(password);
+    if (pwError) return setError(pwError);
     if (password !== confirm) return setError('Passwords do not match.');
     setError('');
     setLoading(true);
     try {
-      await authApi.completeRegistration(token, { firstName, lastName, password });
+      await authApi.acceptInvitation(token, {
+        password,
+        displayName: `${firstName} ${lastName}`.trim(),
+      });
       setDone(true);
+      // Per the product journey, the engineer signs in with their new password.
       setTimeout(() => navigate('/auth/signin'), 1800);
+    } catch (err) {
+      setError(err?.message || 'Could not complete registration. The invitation may have expired.');
     } finally {
       setLoading(false);
     }

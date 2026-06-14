@@ -1,16 +1,20 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { ROLES } from '@/utils/constants';
 
-/** SignInPage — email/password sign-in (mock). */
+/** SignInPage — email/password sign-in against the real backend (Phase 5). */
 export default function SignInPage() {
-  const { signIn, switchRole } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Where to go after a successful sign-in: the page they were bounced from,
+  // else the dashboard (which renders the right view for their role).
+  const redirectTo = location.state?.from?.pathname || '/';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -18,16 +22,20 @@ export default function SignInPage() {
     setError('');
     setLoading(true);
     try {
-      await signIn({ email, password });
-      navigate('/');
+      const user = await login({ email, password });
+      // Invited engineers sign in with a temporary password and must change it
+      // before anything else (Phase 7).
+      if (user?.mustChangePassword) {
+        navigate('/change-password', { replace: true });
+      } else {
+        navigate(redirectTo, { replace: true });
+      }
+    } catch (err) {
+      // Friendly, status-normalized message from the Axios client.
+      setError(err?.message || 'Sign in failed. Please try again.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const demoAs = (role) => {
-    switchRole(role);
-    navigate('/');
   };
 
   return (
@@ -55,6 +63,7 @@ export default function SignInPage() {
           placeholder="you@company.com"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          autoComplete="email"
         />
 
         <div className="d-flex align-items-center justify-content-between">
@@ -69,6 +78,7 @@ export default function SignInPage() {
           placeholder="••••••••"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          autoComplete="current-password"
         />
 
         <button className="bgrd btn w-100 py-3 fw-semibold mt-2" disabled={loading}>
@@ -91,23 +101,6 @@ export default function SignInPage() {
           Create one
         </Link>
       </p>
-
-      {/* Demo-only quick access (no backend) */}
-      <div className="d-flex align-items-center gap-2 my-3" style={{ color: 'var(--tx3)' }}>
-        <span style={{ flex: 1, height: 1, background: 'var(--bd)' }} />
-        <span style={{ fontSize: '.7rem' }}>QUICK DEMO ACCESS</span>
-        <span style={{ flex: 1, height: 1, background: 'var(--bd)' }} />
-      </div>
-      <div className="d-flex gap-2">
-        <button className="boc btn flex-fill py-2" style={{ fontSize: '.8rem' }} onClick={() => demoAs(ROLES.ADMIN)}>
-          <i className="fa-solid fa-crown me-2" style={{ color: '#a78bfa' }} />
-          Enter as Admin
-        </button>
-        <button className="boc btn flex-fill py-2" style={{ fontSize: '.8rem' }} onClick={() => demoAs(ROLES.DEVOPS_ENGINEER)}>
-          <i className="fa-solid fa-user-gear me-2" style={{ color: '#60a5fa' }} />
-          Enter as Engineer
-        </button>
-      </div>
     </div>
   );
 }

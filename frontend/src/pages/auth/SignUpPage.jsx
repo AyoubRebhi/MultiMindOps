@@ -2,9 +2,13 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 
-/** SignUpPage — Admin account creation (mock). Leads into workspace setup. */
+/**
+ * SignUpPage — Admin account creation against the real backend (Phase 4).
+ * A successful register auto-provisions the workspace and signs the admin in;
+ * we then land on the dashboard (which renders the admin view for their role).
+ */
 export default function SignUpPage() {
-  const { signUp } = useAuth();
+  const { register } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({
     firstName: '',
@@ -18,18 +22,34 @@ export default function SignUpPage() {
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
+  // Mirror the backend password policy (>=8 chars, upper + lower + digit) so the
+  // user gets immediate feedback instead of a round-trip 422.
+  const validatePassword = (pw) => {
+    if (pw.length < 8) return 'Password must be at least 8 characters.';
+    if (!/[a-z]/.test(pw) || !/[A-Z]/.test(pw) || !/[0-9]/.test(pw))
+      return 'Password must include an uppercase letter, a lowercase letter, and a digit.';
+    return '';
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const { firstName, lastName, email, password, confirm } = form;
     if (!firstName || !lastName || !email || !password)
       return setError('Please fill in all fields.');
-    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    const pwError = validatePassword(password);
+    if (pwError) return setError(pwError);
     if (password !== confirm) return setError('Passwords do not match.');
     setError('');
     setLoading(true);
     try {
-      await signUp({ firstName, lastName, email });
-      navigate('/onboarding/workspace');
+      await register({
+        email,
+        password,
+        displayName: `${firstName} ${lastName}`.trim(),
+      });
+      navigate('/', { replace: true });
+    } catch (err) {
+      setError(err?.message || 'Could not create your account. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -65,13 +85,13 @@ export default function SignUpPage() {
         </div>
 
         <label className="form-label-sm">Work email</label>
-        <input className="oinp mb-3" type="email" placeholder="you@company.com" value={form.email} onChange={set('email')} />
+        <input className="oinp mb-3" type="email" placeholder="you@company.com" value={form.email} onChange={set('email')} autoComplete="email" />
 
         <label className="form-label-sm">Password</label>
-        <input className="oinp mb-3" type="password" placeholder="Min. 8 characters" value={form.password} onChange={set('password')} />
+        <input className="oinp mb-3" type="password" placeholder="Min. 8 chars, with a capital & a number" value={form.password} onChange={set('password')} autoComplete="new-password" />
 
         <label className="form-label-sm">Confirm password</label>
-        <input className="oinp mb-3" type="password" placeholder="Re-enter password" value={form.confirm} onChange={set('confirm')} />
+        <input className="oinp mb-3" type="password" placeholder="Re-enter password" value={form.confirm} onChange={set('confirm')} autoComplete="new-password" />
 
         <button className="bgrd btn w-100 py-3 fw-semibold mt-2" disabled={loading}>
           {loading ? (

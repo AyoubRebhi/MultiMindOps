@@ -24,6 +24,7 @@ from backend.app.core.config import settings
 from backend.app.core.jwt import decode_token
 from backend.app.models.session import UserSession, hash_jti
 from backend.app.models.user import User
+from backend.app.models.workspace import Workspace
 from backend.app.services.core import auth_service
 
 
@@ -35,12 +36,14 @@ def db_session():
 
     We DO NOT call ``Base.metadata.create_all`` because some sibling
     models use Postgres-only types (JSONB) that SQLite cannot render.
-    The auth flow only touches users and user_sessions, so we create
+    The auth flow touches users, user_sessions and (since the workspace
+    layer) workspaces — register auto-provisions a Workspace — so we create
     just those.
     """
     engine = create_engine("sqlite:///:memory:")
     User.__table__.create(engine)
     UserSession.__table__.create(engine)
+    Workspace.__table__.create(engine)
     Session = sessionmaker(bind=engine)
     db = Session()
     try:

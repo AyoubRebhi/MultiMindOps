@@ -4,7 +4,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { useAuth } from '@/hooks/useAuth';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import { mockNotifications } from '@/services/mock/mockNotifications';
-import { getRoleMeta, ROLES } from '@/utils/constants';
+import { getRoleMeta } from '@/utils/constants';
 import { initials, timeAgo } from '@/utils/formatters';
 
 /**
@@ -18,7 +18,7 @@ import { initials, timeAgo } from '@/utils/formatters';
  */
 export default function TopNavbar({ onMenuClick = () => {} }) {
   const { theme, toggleTheme } = useTheme();
-  const { user, isAdmin, signOut, switchRole } = useAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [openMenu, setOpenMenu] = useState(null); // 'notif' | 'profile' | null
 
@@ -35,13 +35,8 @@ export default function TopNavbar({ onMenuClick = () => {} }) {
   };
   const handleSignOut = async () => {
     close();
-    await signOut();
-    navigate('/auth/signin');
-  };
-  const handleSwitchRole = () => {
-    close();
-    switchRole(isAdmin ? ROLES.DEVOPS_ENGINEER : ROLES.ADMIN);
-    navigate('/');
+    await logout();
+    navigate('/auth/signin', { replace: true });
   };
 
   return (
@@ -187,21 +182,23 @@ export default function TopNavbar({ onMenuClick = () => {} }) {
                 >
                   {initials(user?.name)}
                 </div>
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: '.9rem' }}>{user?.name}</div>
-                  <div style={{ fontSize: '.74rem', color: 'var(--tx3)' }}>{user?.email}</div>
+                  <div style={{ fontSize: '.74rem', color: 'var(--tx3)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {user?.email}
+                  </div>
+                  {user?.workspaceName && (
+                    <div style={{ fontSize: '.72rem', color: 'var(--tx3)', marginTop: 2 }}>
+                      <i className="fa-solid fa-building me-1" style={{ color: 'var(--pur)' }} />
+                      {user.workspaceName}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
             <div style={{ padding: '8px 10px' }}>
               <MenuItem icon="fa-user" color="var(--pur)" label="My Profile" onClick={() => go('/settings')} />
               <MenuItem icon="fa-gear" color="var(--tx3)" label="Settings" onClick={() => go('/settings')} />
-              <MenuItem
-                icon="fa-repeat"
-                color="#60a5fa"
-                label={`Switch to ${isAdmin ? 'Engineer' : 'Admin'} view`}
-                onClick={handleSwitchRole}
-              />
               <div style={{ height: 1, background: 'var(--bd)', margin: '8px 6px' }} />
               <MenuItem icon="fa-right-from-bracket" color="#f87171" label="Sign Out" danger onClick={handleSignOut} />
             </div>

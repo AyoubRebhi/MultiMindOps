@@ -37,6 +37,23 @@ class User(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     failed_login_attempts = Column(Integer, nullable=False, default=0)
 
+    # ── Workspace / global role ─────────────────────────────────────────────
+    # Global (workspace-level) role driving the frontend experience and the
+    # admin-only API gates. 'ADMIN' owns the workspace (self-registered);
+    # 'DEVOPS_ENGINEER' joins via an invitation. This is distinct from the
+    # project-scoped ProjectMember.role used by the workflow authorization
+    # layer — see backend/app/core/authorization.py.
+    role = Column(String, nullable=False, default="DEVOPS_ENGINEER")
+    # Soft pointer to the owning Workspace (no FK constraint to avoid a
+    # circular users<->workspaces dependency at create_all() time; the
+    # relationship is resolved by id in the service layer).
+    workspace_id = Column(String, nullable=True, index=True)
+    # Set 'true' when the account was provisioned with a system-generated
+    # temporary password (invited engineers). The frontend forces a password
+    # change on first sign-in and the change-password flow clears this flag.
+    # Stored as a string for consistency with is_active / email_verified.
+    must_change_password = Column(String, nullable=False, default="false")
+
     # Audit pointers — nullable because the first user, the dev seed, and
     # background-created users have no actor.
     created_by = Column(
@@ -63,3 +80,9 @@ class User(Base):
         """Truthy view of ``is_active`` regardless of how it was stored."""
         val = (self.is_active or "").strip().lower()
         return val in ("true", "1", "yes", "active")
+
+    @property
+    def must_change_password_bool(self) -> bool:
+        """Truthy view of ``must_change_password`` (string-stored boolean)."""
+        val = (self.must_change_password or "").strip().lower()
+        return val in ("true", "1", "yes")

@@ -8,6 +8,7 @@ import InvitationCard from '@/components/invitations/InvitationCard';
 import InviteUserModal from '@/components/invitations/InviteUserModal';
 import { useInvitations } from '@/hooks/useInvitations';
 import { invitationApi } from '@/services/api/invitationApi';
+import { useToast } from '@/hooks/useToast';
 
 const GROUPS = [
   { key: 'pending', label: 'Pending', icon: 'fa-hourglass-half' },
@@ -18,6 +19,7 @@ const GROUPS = [
 
 export default function InvitationsPage() {
   const { data, loading } = useInvitations();
+  const toast = useToast();
   const [rows, setRows] = useState([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -34,25 +36,56 @@ export default function InvitationsPage() {
     return g;
   }, [rows]);
 
+  // Surface the email-delivery outcome: the invitation row is always created,
+  // but the email may have failed (FAILED) or been skipped (email disabled).
+  const notifyDelivery = (inv, { resent = false } = {}) => {
+    const action = resent ? 'refreshed' : 'created';
+    if (inv.emailStatus === 'SENT') {
+      toast.success(`Invitation ${resent ? 're-sent' : 'sent'} to ${inv.email}.`);
+    } else if (inv.emailStatus === 'FAILED') {
+      toast.error(
+        `Invitation ${action}, but the email to ${inv.email} could not be sent: ` +
+          `${inv.emailError || 'SMTP delivery failed'}. You can resend it.`
+      );
+    } else {
+      // SKIPPED / PENDING — email delivery is off or not yet attempted.
+      toast.info(`Invitation ${action} for ${inv.email} (email delivery is disabled).`);
+    }
+  };
+
   const handleSend = async (payload) => {
     setSending(true);
     try {
       const created = await invitationApi.create(payload);
-      setRows((r) => [created, ...r]);
+      // Dedupe in case the backend refreshed an existing pending invite.
+      setRows((r) => [created, ...r.filter((i) => i.id !== created.id)]);
       setInviteOpen(false);
+      notifyDelivery(created);
+    } catch (err) {
+      toast.error(err?.message || 'Could not send the invitation.');
     } finally {
       setSending(false);
     }
   };
 
   const handleResend = async (inv) => {
-    const res = await invitationApi.resend(inv.id);
-    setRows((r) => r.map((i) => (i.id === inv.id ? { ...i, ...res } : i)));
+    try {
+      const res = await invitationApi.resend(inv.id);
+      setRows((r) => r.map((i) => (i.id === inv.id ? { ...i, ...res } : i)));
+      notifyDelivery(res, { resent: true });
+    } catch (err) {
+      toast.error(err?.message || 'Could not resend the invitation.');
+    }
   };
 
   const handleRevoke = async (inv) => {
-    await invitationApi.revoke(inv.id);
-    setRows((r) => r.filter((i) => i.id !== inv.id));
+    try {
+      await invitationApi.revoke(inv.id);
+      setRows((r) => r.filter((i) => i.id !== inv.id));
+      toast.info('Invitation revoked.');
+    } catch (err) {
+      toast.error(err?.message || 'Could not revoke the invitation.');
+    }
   };
 
   return (

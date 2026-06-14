@@ -4,6 +4,10 @@ import PlatformLayout from '@/layouts/PlatformLayout';
 import AuthLayout from '@/layouts/AuthLayout';
 import OnboardingLayout from '@/layouts/OnboardingLayout';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
+import ProtectedRoute from '@/components/auth/ProtectedRoute';
+import RoleProtectedRoute from '@/components/auth/RoleProtectedRoute';
+import PublicOnlyRoute from '@/components/auth/PublicOnlyRoute';
+import { ROLES } from '@/utils/constants';
 
 /*
  * Routes are code-split with React.lazy. Three shells:
@@ -19,6 +23,7 @@ const SignInPage = lazy(() => import('@/pages/auth/SignInPage'));
 const SignUpPage = lazy(() => import('@/pages/auth/SignUpPage'));
 const ForgotPasswordPage = lazy(() => import('@/pages/auth/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('@/pages/auth/ResetPasswordPage'));
+const ChangePasswordPage = lazy(() => import('@/pages/auth/ChangePasswordPage'));
 
 // Onboarding / invitation
 const WorkspaceSetupPage = lazy(() => import('@/pages/onboarding/WorkspaceSetupPage'));
@@ -55,43 +60,52 @@ export default function AppRoutes() {
   return (
     <Suspense fallback={<LoadingSpinner center label="Loading…" />}>
       <Routes>
-        {/* Auth */}
-        <Route element={<AuthLayout />}>
-          <Route path="auth/signin" element={<SignInPage />} />
-          <Route path="auth/signup" element={<SignUpPage />} />
-          <Route path="auth/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="auth/reset-password" element={<ResetPasswordPage />} />
+        {/* Auth — only reachable when NOT already signed in */}
+        <Route element={<PublicOnlyRoute />}>
+          <Route element={<AuthLayout />}>
+            <Route path="auth/signin" element={<SignInPage />} />
+            <Route path="auth/signup" element={<SignUpPage />} />
+            <Route path="auth/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="auth/reset-password" element={<ResetPasswordPage />} />
+          </Route>
         </Route>
 
-        {/* Onboarding + invitation acceptance */}
+        {/* Onboarding + invitation acceptance — public (token-scoped) */}
         <Route element={<OnboardingLayout />}>
           <Route path="onboarding/workspace" element={<WorkspaceSetupPage />} />
           <Route path="invite/:token" element={<InvitationLandingPage />} />
           <Route path="invite/:token/complete" element={<CompleteRegistrationPage />} />
         </Route>
 
-        {/* Authenticated platform */}
-        <Route element={<PlatformLayout />}>
-          <Route index element={<DashboardRouter />} />
-          <Route path="projects" element={<Projects />} />
-          <Route path="projects/:id" element={<ProjectDetails />} />
-          <Route path="workflows" element={<Workflows />} />
-          {/* Workflow execution phases (reuse the shared timeline/phase UI) */}
-          <Route path="workflows/analysis" element={<ProjectAnalysisPage />} />
-          <Route path="workflows/planning" element={<PlanningPage />} />
-          <Route path="workflows/docker" element={<DockerPhasePage />} />
-          <Route path="workflows/terraform" element={<TerraformPhasePage />} />
-          <Route path="workflows/cicd" element={<CicdPhasePage />} />
-          <Route path="workflows/execution" element={<ExecutionCenterPage />} />
-          <Route path="workflows/infrastructure-dashboard" element={<InfrastructureDashboardPage />} />
-          <Route path="architecture" element={<Architecture />} />
-          <Route path="infrastructure" element={<Infrastructure />} />
-          <Route path="artifacts" element={<Artifacts />} />
-          <Route path="members" element={<UserManagementPage />} />
-          <Route path="invitations" element={<InvitationsPage />} />
-          <Route path="aws-credentials" element={<AwsCredentialsPage />} />
-          <Route path="settings" element={<Settings />} />
-          <Route path="*" element={<NotFound />} />
+        {/* Authenticated platform — gated by ProtectedRoute */}
+        <Route element={<ProtectedRoute />}>
+          <Route element={<PlatformLayout />}>
+            <Route index element={<DashboardRouter />} />
+            {/* Forced/voluntary password change (Phase 7) */}
+            <Route path="change-password" element={<ChangePasswordPage />} />
+            <Route path="projects" element={<Projects />} />
+            <Route path="projects/:id" element={<ProjectDetails />} />
+            <Route path="workflows" element={<Workflows />} />
+            {/* Workflow execution phases (reuse the shared timeline/phase UI) */}
+            <Route path="workflows/analysis" element={<ProjectAnalysisPage />} />
+            <Route path="workflows/planning" element={<PlanningPage />} />
+            <Route path="workflows/docker" element={<DockerPhasePage />} />
+            <Route path="workflows/terraform" element={<TerraformPhasePage />} />
+            <Route path="workflows/cicd" element={<CicdPhasePage />} />
+            <Route path="workflows/execution" element={<ExecutionCenterPage />} />
+            <Route path="workflows/infrastructure-dashboard" element={<InfrastructureDashboardPage />} />
+            <Route path="architecture" element={<Architecture />} />
+            <Route path="infrastructure" element={<Infrastructure />} />
+            <Route path="artifacts" element={<Artifacts />} />
+            {/* Admin-only administration surfaces */}
+            <Route element={<RoleProtectedRoute roles={[ROLES.ADMIN]} />}>
+              <Route path="members" element={<UserManagementPage />} />
+              <Route path="invitations" element={<InvitationsPage />} />
+              <Route path="aws-credentials" element={<AwsCredentialsPage />} />
+            </Route>
+            <Route path="settings" element={<Settings />} />
+            <Route path="*" element={<NotFound />} />
+          </Route>
         </Route>
       </Routes>
     </Suspense>

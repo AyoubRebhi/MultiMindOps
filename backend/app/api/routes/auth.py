@@ -23,6 +23,7 @@ from backend.app.core.security import get_current_user, get_db
 from backend.app.models.user import User
 from backend.app.schemas.auth import (
     AuthSuccessResponse,
+    ChangePasswordRequest,
     LoginRequest,
     LogoutRequest,
     RefreshRequest,
@@ -56,9 +57,9 @@ def _user_agent(request: Request) -> Optional[str]:
     return ua[:255]  # cap to avoid storing absurd payloads
 
 
-def _success(user: User, access: str, refresh: str, expires_in: int) -> dict:
+def _success(db: Session, user: User, access: str, refresh: str, expires_in: int) -> dict:
     return {
-        "user": UserPublic.model_validate(user).model_dump(mode="json"),
+        "user": _auth_service.serialize_user(db, user),
         "tokens": TokenPairResponse(
             access_token=access,
             refresh_token=refresh,
@@ -96,7 +97,7 @@ def register(
             else status.HTTP_422_UNPROCESSABLE_ENTITY
         )
         raise HTTPException(status_code=code, detail=message)
-    return _success(user, access, refresh, expires_in)
+    return _success(db, user, access, refresh, expires_in)
 
 
 @router.post("/login", response_model=AuthSuccessResponse)
@@ -115,7 +116,7 @@ def login(
         )
     except AuthError as exc:
         raise unauthorized(str(exc))
-    return _success(user, access, refresh, expires_in)
+    return _success(db, user, access, refresh, expires_in)
 
 
 @router.post("/refresh", response_model=AuthSuccessResponse)
@@ -133,7 +134,7 @@ def refresh(
         )
     except AuthError as exc:
         raise unauthorized(str(exc))
-    return _success(user, access, refresh_token, expires_in)
+    return _success(db, user, access, refresh_token, expires_in)
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
@@ -154,6 +155,39 @@ def logout(
     return {"revoked_sessions": revoked}
 
 
+@router.post("/change-password", response_model=UserPublic)
+def change_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Change the caller's password (also used to satisfy a forced change).
+
+    Returns the refreshed UserPublic so the frontend sees
+    ``must_change_password=false`` and can release the forced-change gate.
+    """
+    try:
+        user = _auth_service.change_password(
+            db,
+            user=current_user,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+        )
+    except AuthError as exc:
+        message = str(exc)
+        # "incorrect" → 400 (bad credential); policy failures → 422.
+        code = (
+            status.HTTP_400_BAD_REQUEST
+            if "incorrect" in message.lower()
+            else status.HTTP_422_UNPROCESSABLE_ENTITY
+        )
+        raise HTTPException(status_code=code, detail=message)
+    return _auth_service.serialize_user(db, user)
+
+
 @router.get("/me", response_model=UserPublic)
-def me(current_user: User = Depends(get_current_user)):
-    return current_user
+def me(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _auth_service.serialize_user(db, current_user)

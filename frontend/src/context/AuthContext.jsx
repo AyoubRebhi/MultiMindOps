@@ -1,97 +1,147 @@
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
-import { authApi } from '@/services/api/authApi';
-import { mockCurrentUser, mockEngineerUser } from '@/services/mock/mockCurrentUser';
+import { authApi, normalizeUser } from '@/services/api/authApi';
+import { tokenStore } from '@/services/api/tokenStore';
 import { ROLES } from '@/utils/constants';
 
 /**
- * AuthContext — MOCK auth/session state for the demo.
+ * AuthContext — REAL, backend-driven session state (Phase 3).
  *
- * This deliberately does NOT implement real authentication, JWT handling or
- * authorization guards (out of scope for this UI phase). It just holds the
- * "signed-in" user so the layout/sidebar can react to role, and exposes the
- * mock auth actions the auth pages call. The session is seeded as an
- * authenticated Admin so the platform is immediately explorable; the role is
- * persisted to localStorage so a refresh keeps your place.
+ * Lifecycle / status:
+ *   'loading'         — bootstrapping: a token exists and /auth/me is in flight
+ *   'authenticated'   — a current user is loaded
+ *   'unauthenticated' — no token, or the token/refresh failed
+ *
+ * The token pair lives in tokenStore (localStorage); the Axios client injects
+ * it and transparently refreshes on 401. When refresh ultimately fails the
+ * client dispatches `auth:session-expired`, which we listen for here to drop
+ * the in-memory user (expired-session handling).
+ *
+ * Exposes: currentUser, role, workspace, login(), logout(), register(),
+ * refreshUser(), plus isAuthenticated / isAdmin / isLoading flags. The legacy
+ * `signIn`/`signUp`/`signOut` names are kept as aliases for existing callers.
  */
 // eslint-disable-next-line react-refresh/only-export-components
 export const AuthContext = createContext(null);
 
-const STORAGE_KEY = 'cloudforge.auth';
-
-function loadSession() {
-  if (typeof window === 'undefined') return { user: mockCurrentUser, isAuthenticated: true };
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed?.user) return { user: parsed.user, isAuthenticated: parsed.isAuthenticated ?? true };
-    }
-  } catch {
-    /* ignore corrupt storage */
-  }
-  return { user: mockCurrentUser, isAuthenticated: true };
-}
-
 export function AuthProvider({ children }) {
-  const [{ user, isAuthenticated }, setSession] = useState(loadSession);
+  const [user, setUser] = useState(null);
+  const [status, setStatus] = useState('loading'); // loading | authenticated | unauthenticated
 
+  // ── Bootstrap: resolve the session from a persisted token on first mount ──
   useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ user, isAuthenticated }));
-    } catch {
-      /* ignore */
+    let active = true;
+    async function bootstrap() {
+      if (!tokenStore.has()) {
+        if (active) setStatus('unauthenticated');
+        return;
+      }
+      try {
+        const apiUser = await authApi.getCurrentUser();
+        if (!active) return;
+        setUser(normalizeUser(apiUser));
+        setStatus('authenticated');
+      } catch {
+        // Token invalid/expired and unrefreshable — start clean.
+        if (!active) return;
+        tokenStore.clear();
+        setUser(null);
+        setStatus('unauthenticated');
+      }
     }
-  }, [user, isAuthenticated]);
+    bootstrap();
+    return () => {
+      active = false;
+    };
+  }, []);
 
-  const signIn = useCallback(async (credentials) => {
-    const { user: next } = await authApi.signIn(credentials);
-    setSession({ user: next, isAuthenticated: true });
+  // ── Expired-session handling: the Axios client tells us a refresh failed ──
+  useEffect(() => {
+    const onExpired = () => {
+      setUser(null);
+      setStatus('unauthenticated');
+    };
+    window.addEventListener('auth:session-expired', onExpired);
+    return () => window.removeEventListener('auth:session-expired', onExpired);
+  }, []);
+
+  const login = useCallback(async (credentials) => {
+    const { user: apiUser, tokens } = await authApi.signIn(credentials);
+    tokenStore.set(tokens);
+    const next = normalizeUser(apiUser);
+    setUser(next);
+    setStatus('authenticated');
     return next;
   }, []);
 
-  const signUp = useCallback(async (payload) => {
-    const { user: next } = await authApi.signUp(payload);
-    setSession({ user: next, isAuthenticated: true });
+  const register = useCallback(async (payload) => {
+    const { user: apiUser, tokens } = await authApi.signUp(payload);
+    tokenStore.set(tokens);
+    const next = normalizeUser(apiUser);
+    setUser(next);
+    setStatus('authenticated');
     return next;
   }, []);
 
-  const completeRegistration = useCallback(async (token, payload) => {
-    const { user: next } = await authApi.completeRegistration(token, payload);
-    setSession({ user: next, isAuthenticated: true });
+  const logout = useCallback(async () => {
+    try {
+      await authApi.signOut({ refresh_token: tokenStore.getRefresh() });
+    } catch {
+      /* best-effort — log out locally regardless */
+    }
+    tokenStore.clear();
+    setUser(null);
+    setStatus('unauthenticated');
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const apiUser = await authApi.getCurrentUser();
+    const next = normalizeUser(apiUser);
+    setUser(next);
+    setStatus('authenticated');
     return next;
   }, []);
 
-  const signOut = useCallback(async () => {
-    await authApi.signOut();
-    setSession((prev) => ({ ...prev, isAuthenticated: false }));
+  /** Change the current user's password. Also clears a forced-change
+   *  requirement (invited engineers) — the backend returns the refreshed user
+   *  with must_change_password=false, which we reflect in state. */
+  const changePassword = useCallback(async ({ currentPassword, newPassword }) => {
+    const apiUser = await authApi.changePassword({ currentPassword, newPassword });
+    const next = normalizeUser(apiUser);
+    setUser(next);
+    setStatus('authenticated');
+    return next;
   }, []);
 
-  /** Demo-only helper: jump between the Admin and DevOps Engineer experiences. */
-  const switchRole = useCallback((role) => {
-    setSession({
-      user: role === ROLES.DEVOPS_ENGINEER ? mockEngineerUser : mockCurrentUser,
-      isAuthenticated: true,
-    });
-  }, []);
-
-  /** Update the in-memory user (e.g. after editing profile / creating a workspace). */
+  /** Merge changes into the in-memory user (e.g. after a profile edit). Does
+   *  not persist on its own — callers that hit the backend should follow with
+   *  refreshUser() to reconcile. */
   const updateUser = useCallback((changes) => {
-    setSession((prev) => ({ ...prev, user: { ...prev.user, ...changes } }));
+    setUser((prev) => (prev ? { ...prev, ...changes } : prev));
   }, []);
 
   const value = useMemo(
     () => ({
       user,
-      isAuthenticated,
+      currentUser: user,
+      role: user?.role || null,
+      workspace: user?.workspace || null,
+      status,
+      isLoading: status === 'loading',
+      isAuthenticated: status === 'authenticated',
       isAdmin: user?.role === ROLES.ADMIN,
-      signIn,
-      signUp,
-      signOut,
-      completeRegistration,
-      switchRole,
+      mustChangePassword: !!user?.mustChangePassword,
+      login,
+      logout,
+      register,
+      refreshUser,
+      changePassword,
       updateUser,
+      // Backward-compatible aliases for existing components.
+      signIn: login,
+      signUp: register,
+      signOut: logout,
     }),
-    [user, isAuthenticated, signIn, signUp, signOut, completeRegistration, switchRole, updateUser]
+    [user, status, login, logout, register, refreshUser, changePassword, updateUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

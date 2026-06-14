@@ -9,9 +9,27 @@ import { formatDate, timeAgo } from '@/utils/formatters';
  *  - invitation: see mockInvitations shape
  *  - onResend, onRevoke: optional action callbacks (shown for pending only)
  */
+/** Small inline indicator for whether the invitation email was delivered. */
+function EmailDeliveryNote({ status, error }) {
+  const map = {
+    SENT: { icon: 'fa-circle-check', color: '#34d399', label: 'Email delivered' },
+    FAILED: { icon: 'fa-triangle-exclamation', color: '#f87171', label: 'Email failed' },
+    SKIPPED: { icon: 'fa-circle-minus', color: 'var(--tx3)', label: 'Email skipped' },
+    PENDING: { icon: 'fa-clock', color: '#fbbf24', label: 'Email pending' },
+  };
+  const meta = map[status] || map.PENDING;
+  return (
+    <span style={{ color: meta.color }} title={error || meta.label}>
+      <i className={`fa-solid ${meta.icon} me-1`} />
+      {meta.label}
+    </span>
+  );
+}
+
 export default function InvitationCard({ invitation, onResend, onRevoke }) {
   if (!invitation) return null;
-  const { email, role, status, invitedBy, message, sentAt, expiresAt } = invitation;
+  const { email, role, status, invitedBy, message, sentAt, expiresAt, emailStatus, emailError } =
+    invitation;
   const isPending = status === 'pending';
   const isExpired = status === 'expired';
 
@@ -50,8 +68,9 @@ export default function InvitationCard({ invitation, onResend, onRevoke }) {
         </p>
       )}
 
-      <div className="d-flex flex-wrap gap-2 mb-3">
+      <div className="d-flex flex-wrap align-items-center gap-2 mb-3" style={{ fontSize: '.74rem' }}>
         <RoleBadge role={role} />
+        {emailStatus && <EmailDeliveryNote status={emailStatus} error={emailError} />}
       </div>
 
       <div

@@ -66,6 +66,35 @@ def require_role(*roles: str):
     return _checker
 
 
+def require_global_role(*roles: str):
+    """Global (workspace-level) role gate backed by ``User.role``.
+
+    Unlike ``require_role`` above (a forward-compat stub), this reads the
+    real ``User.role`` column introduced with the workspace/invitation layer
+    and rejects callers whose role is not in ``roles`` with a 403. Use for
+    admin-only surfaces (members, invitations, AWS credentials management).
+    """
+    allowed = _normalize(roles)
+
+    def _checker(current_user: User = Depends(get_current_user)) -> User:
+        user_role = (getattr(current_user, "role", "") or "").upper()
+        if user_role not in allowed:
+            logger.info(
+                "[authz] global-role denial user=%s role=%s required=%s",
+                current_user.id, user_role, sorted(allowed),
+            )
+            raise forbidden(
+                "This action requires workspace administrator access."
+            )
+        return current_user
+
+    return _checker
+
+
+# Admin-only gate for workspace administration endpoints.
+require_admin = require_global_role("ADMIN")
+
+
 def require_project_role(*roles: str):
     """Project-scoped role gate.
 

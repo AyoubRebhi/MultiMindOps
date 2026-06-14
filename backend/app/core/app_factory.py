@@ -190,10 +190,17 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
-    # Allow the React dev server (port 3000) and any production origin
+    # Allow the React dev servers (CRA :3000 and Vite :5173) and any production
+    # origin. The Vite dev server (frontend/) runs on 5173 — without it the
+    # dashboard's cross-origin XHR is blocked by the browser.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_origins=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

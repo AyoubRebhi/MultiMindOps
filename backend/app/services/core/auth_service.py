@@ -35,6 +35,7 @@ from backend.app.core.passwords import (
 )
 from backend.app.models.session import UserSession, hash_jti
 from backend.app.models.user import User
+from backend.app.models.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,38 @@ class AuthError(Exception):
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _derive_workspace_name(display_name: Optional[str], email: str) -> str:
+    """Best-effort default workspace name from the registering admin's identity."""
+    base = (display_name or "").strip() or (email or "").split("@", 1)[0]
+    base = base.strip() or "My"
+    return f"{base}'s Workspace"
+
+
+def serialize_user(db: Session, user: User) -> dict:
+    """Return the public dict for a user with the workspace resolved.
+
+    ``User`` carries only a soft ``workspace_id`` (no relationship), so the
+    workspace object is looked up here and merged into the UserPublic payload
+    every auth response and ``/me`` share.
+    """
+    # Imported here to avoid a circular import at module load (schemas import
+    # is cheap; keeping it local mirrors the route-layer usage).
+    from backend.app.schemas.auth import UserPublic
+
+    data = UserPublic.model_validate(user).model_dump(mode="json")
+    workspace = None
+    if getattr(user, "workspace_id", None):
+        ws = (
+            db.query(Workspace)
+            .filter(Workspace.id == user.workspace_id)
+            .first()
+        )
+        if ws is not None:
+            workspace = {"id": ws.id, "name": ws.name, "plan": ws.plan}
+    data["workspace"] = workspace
+    return data
 
 
 def _issue_token_pair(
@@ -91,13 +124,19 @@ def register_user(
     email: str,
     password: str,
     display_name: Optional[str],
+    workspace_name: Optional[str] = None,
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
 ) -> tuple[User, str, str, int]:
-    """Create a user and return an authenticated token pair in one step.
+    """Create an ADMIN user + their workspace, return an authenticated pair.
 
-    Email uniqueness is enforced both here (cheap pre-check for a
-    friendlier 409) and at the DB level (race-proof).
+    Self-registration is the workspace-owner path: the new account is an
+    ADMIN and gets a freshly-provisioned Workspace it owns. Engineers do NOT
+    use this path — they join an existing workspace via an invitation
+    (see ``invitation_service.accept_invitation``).
+
+    Email uniqueness is enforced both here (cheap pre-check for a friendlier
+    409) and at the DB level (race-proof).
     """
     try:
         validate_password_policy(password)
@@ -118,8 +157,24 @@ def register_user(
         account_status="active",
         email_verified="false",
         failed_login_attempts=0,
+        role="ADMIN",
     )
     db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    # Auto-provision the workspace this admin owns, then back-link the user.
+    workspace = Workspace(
+        name=(workspace_name or "").strip()
+        or _derive_workspace_name(display_name, email_norm),
+        owner_id=user.id,
+        plan="Team",
+    )
+    db.add(workspace)
+    db.commit()
+    db.refresh(workspace)
+
+    user.workspace_id = workspace.id
     db.commit()
     db.refresh(user)
 
@@ -250,6 +305,49 @@ def refresh_session(
         db, user, ip_address=ip_address, user_agent=user_agent,
     )
     return user, access_token, new_refresh, expires_in
+
+
+def change_password(
+    db: Session,
+    *,
+    user: User,
+    current_password: str,
+    new_password: str,
+) -> User:
+    """Change ``user``'s password and clear the force-change flag.
+
+    Requires the current password (even for a forced change), enforces the
+    password policy, and rejects a no-op change. When the user was in the
+    ``must_change_password`` state (an invited engineer activating via the
+    temp-password login path) any matching pending invitation is marked
+    accepted so the admin's Invitations list stays accurate.
+    """
+    if not verify_password(current_password, user.password_hash):
+        raise AuthError("Current password is incorrect")
+
+    try:
+        validate_password_policy(new_password)
+    except PasswordPolicyError as exc:
+        raise AuthError(str(exc)) from exc
+
+    if verify_password(new_password, user.password_hash):
+        raise AuthError("New password must be different from the current password")
+
+    was_forced = user.must_change_password_bool
+    user.password_hash = hash_password(new_password)
+    user.must_change_password = "false"
+    db.commit()
+
+    if was_forced:
+        # Local import avoids a module-load cycle (invitation_service imports
+        # _issue_token_pair from this module).
+        from backend.app.services.core.invitation_service import (
+            mark_invitation_accepted_for_user,
+        )
+        mark_invitation_accepted_for_user(db, user)
+
+    db.refresh(user)
+    return user
 
 
 def revoke_session(db: Session, *, user: User, refresh_token: Optional[str]) -> int:
