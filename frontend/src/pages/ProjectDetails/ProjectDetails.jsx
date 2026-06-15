@@ -83,18 +83,28 @@ export default function ProjectDetails() {
         subtitle={project.description}
         breadcrumbs={[{ label: 'Projects', to: '/projects' }, { label: project.name }]}
         actions={
-          project.repositoryUrl && (
-            <a
-              href={project.repositoryUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="boc btn px-3 py-2"
+          <>
+            {project.repositoryUrl && (
+              <a
+                href={project.repositoryUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="boc btn px-3 py-2"
+                style={{ fontSize: '.85rem' }}
+              >
+                <i className="fa-brands fa-github me-2" />
+                Repository
+              </a>
+            )}
+            <Link
+              to={`/workflows/${project.id}/analysis`}
+              className="bgrd btn px-3 py-2"
               style={{ fontSize: '.85rem' }}
             >
-              <i className="fa-brands fa-github me-2" />
-              Repository
-            </a>
-          )
+              <i className="fa-solid fa-wand-magic-sparkles me-2" />
+              Workflow Analysis
+            </Link>
+          </>
         }
       />
 
