@@ -15,6 +15,8 @@ land in Phase 2.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -33,6 +35,7 @@ from backend.app.schemas.project import (
     ArtifactResponse,
     ArtifactVersionResponse,
     PhaseName,
+    ProjectAnalysisResponse,
     ProjectContextResponse,
     ProjectCreate,
     ProjectDetailResponse,
@@ -49,6 +52,11 @@ from backend.app.schemas.project import (
 )
 from backend.app.services.core.artifact_approval_service import ArtifactApprovalService
 from backend.app.services.core.artifact_persistence_service import ArtifactPersistenceService
+from backend.app.services.core.credentials_service import (
+    CredentialError,
+    CredentialsService,
+)
+from backend.app.services.core.project_analysis_service import ProjectAnalysisService
 from backend.app.services.core.project_bootstrap_service import (
     ProjectBootstrapService,
     schedule_bootstrap,
@@ -61,6 +69,8 @@ from backend.app.services.core.workflow_orchestration_service import (
 )
 from backend.app.services.core.workflow_replay_service import WorkflowReplayService
 from backend.app.services.core.workflow_trace_service import WorkflowTraceService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["Projects"])
 
@@ -95,6 +105,31 @@ def create_project(
     project = ProjectBootstrapService.create_project_and_bootstrap(
         db, current_user, payload,
     )
+
+    # Private-repo GitHub PAT — persist it ENCRYPTED before the bootstrap task
+    # is scheduled, so the background analysis (which pulls provider="github_pat"
+    # from the credential store) can clone the private repo. The plaintext was
+    # write-only on ProjectCreate; it never touches the Project row and is never
+    # echoed back (ProjectResponse has no token field). A storage failure must
+    # not abandon the just-created project — we log and let bootstrap proceed
+    # token-less (it will surface a clone failure the user can retry after
+    # attaching a credential).
+    if payload.github_token:
+        try:
+            CredentialsService.set_credential(
+                db,
+                project_id=project.id,
+                provider="github_pat",
+                plaintext=payload.github_token,
+                created_by=current_user.id,
+                label="GitHub token (added at project creation)",
+            )
+        except (CredentialError, Exception) as exc:  # noqa: BLE001
+            logger.warning(
+                "[Projects] failed to store github_pat for project=%s: %s",
+                project.id, exc.__class__.__name__,
+            )
+
     schedule_bootstrap(
         background_tasks,
         project_id=project.id,
@@ -552,6 +587,29 @@ def list_project_context(
     """List every persisted ProjectContext digest for the project."""
     _load_or_404(db, project_id, current_user)
     return ProjectContextService.list_for_project(db, project_id)
+
+
+# ─── Consolidated analysis + security results ────────────────────────────────
+
+@router.get(
+    "/{project_id}/analysis",
+    response_model=ProjectAnalysisResponse,
+)
+def get_project_analysis(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the consolidated codebase-analysis + security payload.
+
+    Read-only assembly from data the bootstrap pipeline already persisted
+    (ProjectContext digests + the backing task's transformed security block).
+    The frontend polls this while ``bootstrap_status`` is non-terminal to drive
+    the Analysis-status component, then renders the Analysis + Security tabs.
+    Never returns credential material.
+    """
+    project = _load_or_404(db, project_id, current_user)
+    return ProjectAnalysisService.build_payload(db, project)
 
 
 # ─── Artifact approval workflow ──────────────────────────────────────────────

@@ -1,40 +1,59 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ContentContainer from '@/components/layout/ContentContainer';
 import PageHeader from '@/components/layout/PageHeader';
 import ProjectCard from '@/components/projects/ProjectCard';
+import CreateProjectModal from '@/components/projects/CreateProjectModal';
 import EmptyState from '@/components/common/EmptyState';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
-import { useProjects } from '@/hooks/useProjects';
+import { useProjects, useCreateProject } from '@/hooks/useProjects';
+import { useToast } from '@/hooks/useToast';
 
+// Filters map to the backend project lifecycle (current_status).
 const FILTERS = [
   { key: 'all', label: 'All' },
-  { key: 'deployed', label: 'Deployed' },
-  { key: 'running', label: 'Running' },
-  { key: 'human_review', label: 'Needs Review' },
+  { key: 'active', label: 'Active' },
   { key: 'draft', label: 'Draft' },
+  { key: 'failed', label: 'Failed' },
+  { key: 'archived', label: 'Archived' },
 ];
 
 /**
- * Projects — searchable, filterable grid of all projects.
+ * Projects — searchable, filterable grid of all real projects, with a
+ * Create-Project modal that kicks off backend analysis on submit.
  */
 export default function Projects() {
-  const { data: projects, loading, error } = useProjects();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const { data: projects, loading, error, refetch } = useProjects();
+  const { create, creating, error: createError } = useCreateProject();
+
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
+  const [modalOpen, setModalOpen] = useState(false);
 
   const filtered = useMemo(() => {
     const list = projects || [];
+    const q = query.trim().toLowerCase();
     return list.filter((p) => {
       const matchesFilter = filter === 'all' || p.status === filter;
-      const q = query.trim().toLowerCase();
       const matchesQuery =
         !q ||
-        p.name.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q) ||
-        (p.stack || []).some((s) => s.toLowerCase().includes(q));
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.description || '').toLowerCase().includes(q) ||
+        (p.repositoryUrl || '').toLowerCase().includes(q);
       return matchesFilter && matchesQuery;
     });
   }, [projects, filter, query]);
+
+  const handleCreate = async (form) => {
+    const project = await create(form);
+    toast.success(`Project “${project.name}” created — analysis started.`);
+    setModalOpen(false);
+    await refetch();
+    navigate(`/projects/${project.id}`);
+    return project;
+  };
 
   return (
     <ContentContainer>
@@ -43,7 +62,11 @@ export default function Projects() {
         subtitle="Repositories onboarded to the platform. Each project runs through the AI infrastructure pipeline."
         breadcrumbs={[{ label: 'Projects' }]}
         actions={
-          <button className="bgrd btn px-3 py-2" style={{ fontSize: '.85rem' }}>
+          <button
+            className="bgrd btn px-3 py-2"
+            style={{ fontSize: '.85rem' }}
+            onClick={() => setModalOpen(true)}
+          >
             <i className="fa-solid fa-plus me-2" />
             New Project
           </button>
@@ -84,7 +107,29 @@ export default function Projects() {
       {loading && !projects?.length ? (
         <LoadingSpinner center label="Loading projects…" />
       ) : error ? (
-        <EmptyState icon="fa-triangle-exclamation" title="Couldn't load projects" message={error.message} />
+        <EmptyState
+          icon="fa-triangle-exclamation"
+          title="Couldn't load projects"
+          message={error.message}
+          action={
+            <button className="boc btn px-3 py-2" style={{ fontSize: '.85rem' }} onClick={refetch}>
+              <i className="fa-solid fa-rotate-right me-2" />
+              Retry
+            </button>
+          }
+        />
+      ) : !projects?.length ? (
+        <EmptyState
+          icon="fa-folder-open"
+          title="No projects yet"
+          message="Create your first project to onboard a repository and run analysis."
+          action={
+            <button className="bgrd btn px-3 py-2" style={{ fontSize: '.85rem' }} onClick={() => setModalOpen(true)}>
+              <i className="fa-solid fa-plus me-2" />
+              New Project
+            </button>
+          }
+        />
       ) : filtered.length === 0 ? (
         <EmptyState
           icon="fa-folder-open"
@@ -100,6 +145,14 @@ export default function Projects() {
           ))}
         </div>
       )}
+
+      <CreateProjectModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onCreate={handleCreate}
+        creating={creating}
+        serverError={createError}
+      />
     </ContentContainer>
   );
 }

@@ -39,6 +39,13 @@ class ProjectCreate(BaseModel):
     description: Optional[str] = None
     repository_url: Optional[str] = None
     repository_visibility: Optional[RepositoryVisibility] = "public"
+    # GitHub PAT for cloning a PRIVATE repository. WRITE-ONLY: it is consumed
+    # by the create handler (encrypted into ``project_credentials`` via
+    # CredentialsService before bootstrap runs) and is NEVER stored on the
+    # Project row nor echoed back in any response. ``ProjectResponse`` has no
+    # corresponding field, so it cannot leak. Required by the frontend only
+    # when ``repository_visibility == "private"``; validated there.
+    github_token: Optional[str] = Field(default=None, repr=False)
     # Legacy classifiers — optional; left in so existing API clients keep
     # working. The bootstrap pipeline writes these post-analysis when the AI
     # can infer them.
@@ -249,6 +256,81 @@ class ProjectMemberCreate(BaseModel):
 
 class ProjectMemberUpdate(BaseModel):
     role: ProjectRole
+
+
+# ─── Consolidated analysis + security results ────────────────────────────────
+#
+# Read-only payload assembled by ProjectAnalysisService from data the bootstrap
+# pipeline already persisted (ProjectContext digests + the backing task's
+# transformed security block). Powers the Analysis + Security tabs on the
+# project detail page. NEVER carries any credential material.
+
+SecuritySeverity = Literal["critical", "high", "medium", "low"]
+
+
+class ProjectSecurityFinding(BaseModel):
+    severity: str
+    title: str
+    description: str = ""
+    recommendation: Optional[str] = None
+    category: Optional[str] = None
+    file: Optional[str] = None
+
+
+class ProjectSecurityResult(BaseModel):
+    score: Optional[int] = None
+    grade: Optional[str] = None
+    status: Optional[str] = None
+    summary: Optional[str] = None
+    counts: Dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    findings: List[ProjectSecurityFinding] = []
+    recommendations: List[str] = []
+
+
+class ApplicationProfileResponse(BaseModel):
+    """Structured application profile inferred by ``ApplicationProfilerService``.
+
+    Mirrors the dict that service produces (heuristic + optional LLM refinement)
+    and that the bootstrap pipeline persists into the ``repository_summary``
+    project-context digest. Every field is optional so a partially-filled or
+    legacy profile still validates.
+    """
+
+    application_type: Optional[str] = None
+    architecture_pattern: Optional[str] = None
+    workload_profile: Optional[str] = None
+    statefulness: Optional[str] = None
+    scalability_level: Optional[str] = None
+    entrypoints: List[str] = []
+    detected_services: List[str] = []
+
+
+class ProjectAnalysisStats(BaseModel):
+    project_type: Optional[str] = None
+    service_count: Optional[int] = None
+    lines_of_code: Optional[int] = None
+    has_dockerfile: Optional[bool] = None
+    has_compose: Optional[bool] = None
+    has_ci: Optional[bool] = None
+    build_systems: List[str] = []
+    devops_tools: List[str] = []
+    application_profile: Optional[ApplicationProfileResponse] = None
+
+
+class ProjectAnalysisResponse(BaseModel):
+    project_id: str
+    bootstrap_status: str
+    bootstrap_error: Optional[str] = None
+    analysis_available: bool = False
+    language: Optional[str] = None
+    languages: List[str] = []
+    framework: Optional[str] = None
+    frameworks: List[str] = []
+    runtime: Optional[str] = None
+    dependencies: List[str] = []
+    services: List[Dict[str, Any]] = []
+    stats: ProjectAnalysisStats = ProjectAnalysisStats()
+    security: Optional[ProjectSecurityResult] = None
 
 
 ArtifactDetailResponse.model_rebuild()

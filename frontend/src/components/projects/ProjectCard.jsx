@@ -1,13 +1,17 @@
 import { Link } from 'react-router-dom';
 import StatusBadge from '@/components/common/StatusBadge';
-import ProviderBadge from '@/components/common/ProviderBadge';
-import ProgressBar from '@/components/common/ProgressBar';
-import Tag from '@/components/common/Tag';
-import { formatCurrency, timeAgo } from '@/utils/formatters';
+import { ProjectAnalysisStatusBadge } from '@/components/projects/ProjectAnalysisStatus';
+import { timeAgo } from '@/utils/formatters';
+
+/** Strip the scheme so a long GitHub URL reads compactly on the card. */
+function shortRepo(url) {
+  if (!url) return null;
+  return url.replace(/^https?:\/\/(www\.)?/i, '').replace(/\.git$/i, '');
+}
 
 /**
- * ProjectCard — summary card for a single project. Links to its detail page.
- * Fully prop-driven; renders whatever subset of fields are present.
+ * ProjectCard — summary card for a single (real) project. Prop-driven off the
+ * mapped ProjectResponse shape; links to the detail page.
  */
 export default function ProjectCard({ project }) {
   if (!project) return null;
@@ -15,30 +19,27 @@ export default function ProjectCard({ project }) {
     id,
     name,
     description,
-    provider,
-    environment,
+    repositoryUrl,
+    repositoryVisibility,
     status,
-    progress,
-    stack = [],
-    services,
-    monthlyCost,
+    bootstrapStatus,
     updatedAt,
   } = project;
 
   return (
     <Link to={`/projects/${id}`} className="surface surface-hover d-block h-100">
       <div className="d-flex align-items-start justify-content-between mb-2">
-        <div className="d-flex align-items-center gap-2">
-          <div
-            className="icon-tile"
-            style={{ background: 'rgba(139,92,246,.15)', color: '#a78bfa' }}
-          >
+        <div className="d-flex align-items-center gap-2" style={{ minWidth: 0 }}>
+          <div className="icon-tile" style={{ background: 'rgba(139,92,246,.15)', color: '#a78bfa' }}>
             <i className="fa-solid fa-cube" />
           </div>
-          <div>
-            <div style={{ fontWeight: 600 }}>{name}</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {name}
+            </div>
             <div style={{ fontSize: '.72rem', color: 'var(--tx3)' }}>
-              {environment}
+              <i className={`fa-solid ${repositoryVisibility === 'private' ? 'fa-lock' : 'fa-globe'} me-1`} />
+              {repositoryVisibility || 'public'}
             </div>
           </div>
         </div>
@@ -54,31 +55,29 @@ export default function ProjectCard({ project }) {
           WebkitLineClamp: 2,
           WebkitBoxOrient: 'vertical',
           overflow: 'hidden',
+          minHeight: 38,
         }}
       >
-        {description}
+        {description || 'No description provided.'}
       </p>
 
-      <div className="d-flex flex-wrap gap-2 mb-3">
-        <ProviderBadge provider={provider} />
-        {stack.slice(0, 3).map((tech) => (
-          <Tag key={tech}>{tech}</Tag>
-        ))}
-      </div>
-
-      <ProgressBar value={progress} showLabel />
+      {repositoryUrl && (
+        <div
+          className="mono mb-3 d-flex align-items-center gap-2"
+          style={{ fontSize: '.74rem', color: 'var(--tx3)', overflow: 'hidden' }}
+        >
+          <i className="fa-brands fa-github" />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {shortRepo(repositoryUrl)}
+          </span>
+        </div>
+      )}
 
       <div
         className="d-flex align-items-center justify-content-between mt-3 pt-3"
         style={{ borderTop: '1px solid var(--bd)', fontSize: '.74rem' }}
       >
-        <span className="text-muted-3">
-          <i className="fa-solid fa-server me-1" />
-          {services} {services === 1 ? 'service' : 'services'}
-        </span>
-        <span className="text-muted-3">
-          {monthlyCost ? formatCurrency(monthlyCost) + '/mo' : 'Not provisioned'}
-        </span>
+        <ProjectAnalysisStatusBadge status={bootstrapStatus} />
         <span className="text-muted-3">
           <i className="fa-regular fa-clock me-1" />
           {timeAgo(updatedAt)}
