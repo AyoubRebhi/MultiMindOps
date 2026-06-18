@@ -1,66 +1,36 @@
-Chapitre 3 : Analyse et conception
-3.1 Introduction
+Chapitre 4 : Réalisation et mise en œuvre
 
-Ce chapitre est consacré à l’analyse et à la conception de la plateforme proposée. Il présente dans un premier temps l’analyse des besoins fonctionnels et non fonctionnels du système, ainsi que l’identification des différents acteurs impliqués. Par la suite, il détaille la modélisation du système à travers les diagrammes UML permettant de représenter les aspects fonctionnels, structurels et dynamiques de la solution. Enfin, il expose l’architecture globale du système, ainsi que les choix technologiques et les mécanismes de conception des différents agents IA et workflows DevSecOps.
-3.2 Analyse des besoins
-3.2.1 Identification des acteurs
-Acteur principal : Ingénieur DevOps
+4.1 Introduction
 
-L’ingénieur DevOps constitue l’utilisateur principal de la plateforme. Il interagit avec le système via une interface en langage naturel afin de décrire les besoins d’automatisation et de déploiement. Il fournit également les informations relatives au dépôt applicatif cible, analyse les architectures proposées et supervise l’ensemble du workflow d’exécution.
+4.2 Environnement de Développement
 
-Son rôle inclut la validation des artefacts générés (Docker, Kubernetes, Terraform, CI/CD), l’approbation ou le rejet des plans d’exécution ainsi que le déclenchement du processus de déploiement final. L’ingénieur DevOps n’a pas besoin de maîtriser la syntaxe des outils d’infrastructure, l’abstraction étant entièrement assurée par la plateforme.
+    4.2.1 Environnement matériel
+    Systemes d'exploitation : Windows 10 64-bit
+    RAM : 8 Go
+    Carte graphique : Intel HD Graphics 620
 
-Acteur secondaire : Système multi-agents IA
+    4.2.2 Environnement logiciel
+    Web dev : 
+    Python 3.11, Fast API, ReactJs, WebSocket, Swagger, Streamlit
+    Devops Tools : 
+    Docker, 
+    4.2.3 Choix technologiques
 
-Le système multi-agents représente le cœur intelligent de la plateforme. Il est composé de plusieurs agents spécialisés (Planner Agent, Infrastructure Agent, Terraform Agent, Kubernetes Agent, CI/CD Agent et Corrector Agent). Ce système assure l’analyse des projets, la génération des artefacts DevOps, la prise de décision architecturale ainsi que la détection et la correction automatique des erreurs.
+4.3 Interfaces Homme-Machine
+    4.3.1 Authentification
+    4.3.2 Tableau de bord des projets
+    4.3.3 Analyse et comparaison des architectures
+    4.3.4 Monitoring des workflows
+    4.3.5 Visualisation des artefacts générés
+    4.3.6 Remédiation intelligente des erreurs
 
-Acteur secondaire : Système d’exécution et d’orchestration
+4.4 Validation des fonctionnalités principales
+    4.4.1 Génération d’architecture cloud
+    4.4.2 Génération Terraform et Kubernetes
+    4.4.3 Génération CI/CD
+    4.4.4 Corrector Agent
+    4.4.5 Architecture Decision Agent
 
-Cet acteur regroupe les environnements d’exécution tels que Docker, Kubernetes et les pipelines CI/CD. Il est responsable de l’exécution effective des artefacts générés, du déploiement des infrastructures et de la remontée des logs d’exécution vers la plateforme pour analyse et correction.
-
-3.2.2 Exigences fonctionnelles
-•	Analyse automatique des projets : le système doit analyser le dépôt GitHub afin d’identifier les Framework, dépendances et besoins infrastructurels du projet.
-•	Génération des architectures cloud : la plateforme doit proposer plusieurs stratégies d’architecture adaptées aux besoins de l’utilisateur.
-•	Estimation des coûts cloud : le système doit calculer les coûts mensuels et annuels des infrastructures AWS générées.
-•	Génération automatique des artefacts IaC : la solution doit produire automatiquement les fichiers Docker, Terraform, Kubernetes et CI/CD.
-•	Correction intelligente des erreurs : la plateforme doit détecter les erreurs d’exécution et proposer des correctifs adaptés.
-•	Monitoring temps réel : le système doit afficher les logs et l’état d’avancement des workflows en temps réel.
-•	Validation utilisateur : l’utilisateur doit pouvoir approuver ou rejeter les propositions générées avant exécution.
-•	Gestion des workflows DevSecOps : la plateforme doit orchestrer automatiquement les différentes étapes du pipeline DevSecOps.
+4.5 Conclusion
 
 
-3.2.3 Exigences non fonctionnelles
-•	Performance : le système doit assurer des temps de réponse rapides pour les opérations d’analyse et de génération.
-•	Sécurité : le système doit protéger les données utilisateur et appliquer les bonnes pratiques DevSecOps.
-•	Fiabilité : les artefacts générés doivent être cohérents, stables et reproductibles.
-•	Maintenabilité : l’architecture du système doit être modulaire et facilement extensible.
-•	Interopérabilité : la plateforme doit être compatible avec les outils cloud et DevOps modernes.
-•	Expérience utilisateur : l’interface doit être intuitive, interactive et simple à utiliser.
-
-3.3 Modélisation du système
-
-Cette section présente la modélisation du système proposé à travers différentes vues UML permettant de décrire son fonctionnement global, ses interactions internes ainsi que les principaux flux d’exécution. L’objectif est de fournir une représentation claire de l’architecture fonctionnelle et dynamique de la plateforme basée sur des agents IA spécialisés dans les workflows DevSecOps.
-
-3.3.1 Vue fonctionnelle
-
-La vue fonctionnelle permet de décrire les interactions entre les acteurs du système et les fonctionnalités offertes par la plateforme. Elle met en évidence les différents cas d’utilisation permettant à l’utilisateur de soumettre un projet, de générer des architectures cloud, de produire des artefacts DevOps et de superviser l’exécution globale du pipeline.
-
-3.3.1.1 Diagramme global de cas d’utilisation
-
-Le diagramme global de cas d’utilisation illustre les principales fonctionnalités offertes par la plateforme ainsi que les interactions entre les acteurs identifiés, notamment l’ingénieur DevOps et le système multi-agents IA. Il met en évidence les différents scénarios fonctionnels tels que l’analyse automatique des projets, la génération des architectures cloud, l’estimation des coûts, la création des artefacts DevOps, la correction intelligente des erreurs et la supervision des workflows d’exécution. Ce diagramme permet également de représenter le rôle central de l’utilisateur dans la validation et le contrôle des différentes étapes du pipeline.
-
-3.3.2 Vue structurelle
-
-La vue structurelle permet de représenter l’organisation interne du système ainsi que la décomposition de ses principaux composants. Dans le cadre de ce projet, cette vue est illustrée par un diagramme d’activité qui modélise le flux global d’exécution de la plateforme et les interactions entre les différents modules du pipeline DevSecOps.
-
-3.3.2.1 Diagramme d’activité
-
-Le diagramme d’activité représente le déroulement complet du processus depuis la soumission d’un projet par l’ingénieur DevOps jusqu’à la génération et l’exécution des artefacts d’infrastructure. Il met en évidence les différentes étapes du workflow telles que l’analyse du dépôt GitHub, la génération des stratégies d’architecture cloud, la sélection utilisateur, la génération des artefacts IaC, l’exécution des pipelines ainsi que les boucles de correction automatique en cas d’erreurs. Ce diagramme permet également de visualiser l’orchestration entre les différents agents IA et les points de validation humaine intégrés dans le système.
-
-3.3.3 Vue dynamique
-
-La vue dynamique décrit les interactions temporelles entre les différents composants du système lors de l’exécution d’un scénario complet. Elle permet de représenter la séquence des échanges entre l’utilisateur et les modules du système multi-agents.
-
-3.3.3.1 Diagramme de séquence
-
-Le diagramme de séquence illustre le déroulement chronologique des interactions entre l’ingénieur DevOps et le système multi-agents IA. Il met en évidence les échanges successifs entre les différents agents spécialisés (analyse, génération, correction et orchestration) ainsi que les retours d’information vers l’utilisateur. Ce diagramme permet de comprendre la logique d’exécution progressive du pipeline DevSecOps, depuis l’analyse initiale du projet jusqu’à la génération finale et la validation des artefacts.
