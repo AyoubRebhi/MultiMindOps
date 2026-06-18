@@ -92,21 +92,22 @@
 \contentsline {paragraph}{\numberline {d)}Modèle LLM.}{46}{paragraph.3.4.3.1.4}%
 \contentsline {subsubsection}{\numberline {3.4.3.2}Évaluation et justification du modèle}{47}{subsubsection.3.4.3.2}%
 \contentsline {section}{\numberline {3.5}Conclusion}{48}{section.3.5}%
-\contentsline {chapter}{\numberline {4}Chapitre 4 : Titre du chapitre}{49}{chapter.4}%
+\contentsline {chapter}{\numberline {4}Réalisation et mise en œuvre}{49}{chapter.4}%
 \contentsline {section}{\numberline {4.1}Introduction}{50}{section.4.1}%
-\contentsline {section}{\numberline {4.2}Section 1 : Titre de la section}{50}{section.4.2}%
-\contentsline {subsection}{\numberline {4.2.1}Subsection 1 : Titre de la sous-section}{50}{subsection.4.2.1}%
-\contentsline {subsubsection}{\numberline {4.2.1.1}Subsubsection 1 : Titre}{50}{subsubsection.4.2.1.1}%
-\contentsline {subsubsection}{\numberline {4.2.1.2}Subsubsection 2 : Titre}{50}{subsubsection.4.2.1.2}%
-\contentsline {subsection}{\numberline {4.2.2}Subsection 2 : Titre de la sous-section}{50}{subsection.4.2.2}%
-\contentsline {section}{\numberline {4.3}Section 2 : Titre de la section}{50}{section.4.3}%
-\contentsline {subsection}{\numberline {4.3.1}Subsection 1}{50}{subsection.4.3.1}%
-\contentsline {subsubsection}{\numberline {4.3.1.1}Subsubsection 1 : Titre}{50}{subsubsection.4.3.1.1}%
-\contentsline {subsubsection}{\numberline {4.3.1.2}Subsubsection 2 : Titre}{50}{subsubsection.4.3.1.2}%
-\contentsline {section}{\numberline {4.4}Section 3 : Titre de la section}{51}{section.4.4}%
-\contentsline {subsection}{\numberline {4.4.1}Subsection 1}{51}{subsection.4.4.1}%
-\contentsline {subsubsection}{\numberline {4.4.1.1}Subsubsection 1 : Titre}{51}{subsubsection.4.4.1.1}%
-\contentsline {subsubsection}{\numberline {4.4.1.2}Subsubsection 2 : Titre}{51}{subsubsection.4.4.1.2}%
-\contentsline {section}{\numberline {4.5}Conclusion}{51}{section.4.5}%
-\contentsline {chapter}{CONCLUSION GÉNÉRALE}{52}{chapter*.23}%
-\contentsline {chapter}{WEBOGRAPHIE}{52}{chapter*.23}%
+\contentsline {section}{\numberline {4.2}Environnement de développement}{50}{section.4.2}%
+\contentsline {subsection}{\numberline {4.2.1}Environnement matériel}{50}{subsection.4.2.1}%
+\contentsline {subsection}{\numberline {4.2.2}Environnement logiciel}{50}{subsection.4.2.2}%
+\contentsline {subsection}{\numberline {4.2.3}Technologies utilisées}{51}{subsection.4.2.3}%
+\contentsline {subsubsection}{\numberline {4.2.3.1}Technologies de développement}{51}{subsubsection.4.2.3.1}%
+\contentsline {subsubsection}{\numberline {4.2.3.2}Technologies DevOps et Cloud}{52}{subsubsection.4.2.3.2}%
+\contentsline {subsubsection}{\numberline {4.2.3.3}Technologies IA et Agents intelligents}{52}{subsubsection.4.2.3.3}%
+\contentsline {section}{\numberline {4.3}Interfaces Homme-Machine}{52}{section.4.3}%
+\contentsline {subsection}{\numberline {4.3.1}Authentification et gestion des utilisateurs}{53}{subsection.4.3.1}%
+\contentsline {subsection}{\numberline {4.3.2}Tableau de bord et gestion des projets}{55}{subsection.4.3.2}%
+\contentsline {subsection}{\numberline {4.3.3}Sélection des architectures cloud}{56}{subsection.4.3.3}%
+\contentsline {subsection}{\numberline {4.3.4}Génération intelligente des artefacts DevOps}{57}{subsection.4.3.4}%
+\contentsline {subsection}{\numberline {4.3.5}Remédiation intelligente des erreurs}{59}{subsection.4.3.5}%
+\contentsline {subsection}{\numberline {4.3.6}Validation et exécution des workflows}{61}{subsection.4.3.6}%
+\contentsline {section}{\numberline {4.4}Conclusion}{63}{section.4.4}%
+\contentsline {chapter}{CONCLUSION GÉNÉRALE}{64}{chapter*.44}%
+\contentsline {chapter}{WEBOGRAPHIE}{64}{chapter*.44}%

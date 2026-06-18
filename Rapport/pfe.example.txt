@@ -1,36 +1,75 @@
+
+Systemes d'exploitation : Windows 10 64-bit
+    RAM : 8 Go
+    Carte graphique : Intel HD Graphics 620
+    Web dev : 
+    Python 3.11, Fast API, ReactJs, WebSocket, Swagger, Streamlit
+    Devops Tools : 
+    Docker, aws cli, git/github, terraform, kubernetes
+    IA Agents:(technology, category, Role (in small direct words))
+    LangGraph,Langchain, Qdrant, Groq API, Lightning AI, OpenAI, MCP
+    
 Chapitre 4 : Réalisation et mise en œuvre
 
 4.1 Introduction
 
-4.2 Environnement de Développement
+4.2 Environnement de développement
 
-    4.2.1 Environnement matériel
-    Systemes d'exploitation : Windows 10 64-bit
-    RAM : 8 Go
-    Carte graphique : Intel HD Graphics 620
+```
+4.2.1 Environnement matériel
 
-    4.2.2 Environnement logiciel
-    Web dev : 
-    Python 3.11, Fast API, ReactJs, WebSocket, Swagger, Streamlit
-    Devops Tools : 
-    Docker, 
-    4.2.3 Choix technologiques
+4.2.2 Environnement logiciel
+
+4.2.3 Technologies utilisées
+    4.2.3.1 Technologies de développement
+    4.2.3.2 Technologies DevOps et Cloud
+    4.2.3.3 Technologies IA et Agents intelligents
+```
 
 4.3 Interfaces Homme-Machine
-    4.3.1 Authentification
-    4.3.2 Tableau de bord des projets
-    4.3.3 Analyse et comparaison des architectures
-    4.3.4 Monitoring des workflows
-    4.3.5 Visualisation des artefacts générés
-    4.3.6 Remédiation intelligente des erreurs
+
+```
+4.3.1 Authentification et gestion des utilisateurs
+    - Sign_in_page.jpg
+    - Sign_up_page.jpg
+    - invitation_mail.jpg
+    - Invite_members_to_workspace.jpg
+
+4.3.2 Tableau de bord et gestion des projets
+    - Dashboard_admin.jpg
+    - Project_Analysis.jpg
+
+4.3.3 Sélection des architectures cloud
+    - Architecture plan selection.jpg
+
+4.3.4 Génération intelligente des artefacts DevOps
+    - Docker generation.jpg
+    - TF Generation.jpg
+    - final tf result.jpg
+    - Generated Github Action workflow.jpg
+
+4.3.5 Remédiation intelligente des erreurs
+    - Docker corrector agent.jpg
+    - Successfull docker build.jpg
+    - Intelligent Error Remediation.png
+
+4.3.6 Validation et exécution des workflows
+    - tf execution success.jpg
+    - Security agent.jpg
+```
 
 4.4 Validation des fonctionnalités principales
-    4.4.1 Génération d’architecture cloud
-    4.4.2 Génération Terraform et Kubernetes
-    4.4.3 Génération CI/CD
-    4.4.4 Corrector Agent
-    4.4.5 Architecture Decision Agent
 
-4.5 Conclusion
+```
+4.4.1 Génération d'infrastructure cloud assistée par IA
+    - Powered Infrastructure Generation.png
 
+4.4.2 Génération automatique des pipelines CI/CD
+    - AI-Powered CICD Generation.png
+
+4.4.3 Remédiation intelligente des erreurs
+    - Intelligent Error Remediation.png
+```
+
+5. Conclusion Générale
 
