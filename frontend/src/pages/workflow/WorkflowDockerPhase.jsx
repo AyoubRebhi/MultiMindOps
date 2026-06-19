@@ -27,6 +27,7 @@ export default function WorkflowDockerPhase({ workflowId, workflow, onAdvance })
   const toast = useToast();
   const { data, loading, error, refetch } = useDockerPhase(projectId, workflowId);
   const [generating, setGenerating] = useState(false);
+  const [proceeding, setProceeding] = useState(false);
 
   async function handleGenerate() {
     if (!projectId || generating) return;
@@ -40,6 +41,24 @@ export default function WorkflowDockerPhase({ workflowId, workflow, onAdvance })
       toast.error(e?.message || 'Could not generate the Dockerfile. Please try again.');
     } finally {
       setGenerating(false);
+    }
+  }
+
+  // Advance to the Terraform Generation phase. Runs TERRAFORM_GENERATION on the
+  // backend (inline), then refetches the workflow — its current_phase becomes
+  // TERRAFORM_GENERATION, so the resume router (WorkflowRunPage) flips to the
+  // Terraform surface, which shows the freshly generated .tf files.
+  async function handleProceedToTerraform() {
+    if (!projectId || proceeding) return;
+    setProceeding(true);
+    try {
+      await workflowApi.runTerraformPhase(projectId, workflowId, 'TERRAFORM_GENERATION');
+      toast.success('Terraform generation started.');
+      onAdvance?.();
+    } catch (e) {
+      toast.error(e?.message || 'Could not start Terraform generation. Please try again.');
+    } finally {
+      setProceeding(false);
     }
   }
 
@@ -87,16 +106,33 @@ export default function WorkflowDockerPhase({ workflowId, workflow, onAdvance })
       workflow={workflow}
       status={docComplete ? 'completed' : workflow?.status}
       actions={
-        <button
-          type="button"
-          className="boc btn px-3 py-2"
-          style={{ fontSize: '.82rem' }}
-          disabled={generating}
-          onClick={handleGenerate}
-        >
-          {generating ? <span className="spinner me-2" /> : <i className="fa-solid fa-rotate-right me-2" />}
-          Regenerate
-        </button>
+        <div className="d-flex gap-2">
+          <button
+            type="button"
+            className="boc btn px-3 py-2"
+            style={{ fontSize: '.82rem' }}
+            disabled={generating}
+            onClick={handleGenerate}
+          >
+            {generating ? <span className="spinner me-2" /> : <i className="fa-solid fa-rotate-right me-2" />}
+            Regenerate
+          </button>
+          {docComplete && (
+            <button
+              type="button"
+              className="bgrd btn px-3 py-2"
+              style={{ fontSize: '.82rem' }}
+              disabled={proceeding}
+              onClick={handleProceedToTerraform}
+            >
+              {proceeding ? (
+                <><span className="spinner me-2" />Starting Terraform…</>
+              ) : (
+                <><i className="fa-solid fa-cubes me-2" />Proceed to Terraform Generation</>
+              )}
+            </button>
+          )}
+        </div>
       }
     >
       {/* Review → Approve → Build → Logs → Corrector → Fix → Rebuild, all wired

@@ -14,7 +14,8 @@
    See backend/app/api/routes/workflows.py + schemas/workflow.py +
    schemas/workflow_analysis.py.
    ========================================================================== */
-import apiClient from './client';
+import apiClient, { API_BASE_URL } from './client';
+import { tokenStore } from './tokenStore';
 
 /** Map a backend WorkflowSummary into the shape the Workflows UI consumes. */
 export function mapWorkflowSummary(api) {
@@ -316,6 +317,163 @@ export function mapDockerPhase(api = {}) {
   };
 }
 
+/* ── Terraform-phase mappers (Phase 2A: Generation only) ────────────────────── */
+
+/**
+ * Map the project-scoped WorkflowResponse, PRESERVING the raw `phases_state`.
+ * The Terraform surface reads phase status exclusively from this map (the
+ * resume summary from GET /workflows/:id has no phases_state).
+ */
+export function mapWorkflowDetail(api) {
+  if (!api) return null;
+  return {
+    id: api.id,
+    projectId: api.project_id,
+    currentPhase: api.current_phase || null,
+    status: api.status,
+    phasesState: api.phases_state || {},
+    updatedAt: api.updated_at || null,
+  };
+}
+
+// Canonical TerraformAgent state keys → on-disk filenames. Mirrors the backend
+// _TERRAFORM_KEY_TO_FILENAME map (artifact_persistence_service.py) so the viewer
+// shows real filenames regardless of whether the subtype was persisted as the
+// canonical key (`terraform_main`) or the resolved filename (`main.tf`).
+const TF_SUBTYPE_TO_FILENAME = {
+  terraform_providers: 'providers.tf',
+  terraform_main: 'main.tf',
+  terraform_vpc: 'vpc.tf',
+  terraform_eks: 'eks.tf',
+  terraform_ecs: 'ecs.tf',
+  terraform_variables: 'variables.tf',
+  terraform_tfvars: 'terraform.tfvars',
+  terraform_outputs: 'outputs.tf',
+  terraform_backend: 'backend.tf',
+};
+
+function tfFilename(subtype) {
+  if (!subtype) return null;
+  const low = String(subtype).toLowerCase();
+  if (TF_SUBTYPE_TO_FILENAME[low]) return TF_SUBTYPE_TO_FILENAME[low];
+  if (/\.(tf|tfvars|tfstate)$/.test(low)) return subtype;
+  if (low.startsWith('terraform_')) return `${subtype.slice('terraform_'.length)}.tf`;
+  return subtype;
+}
+
+// Preferred default tab order: main → variables → outputs → providers, rest after.
+const TF_FILE_ORDER = [
+  'main.tf', 'variables.tf', 'outputs.tf', 'providers.tf', 'terraform.tfvars', 'backend.tf',
+];
+function tfOrder(name) {
+  const i = TF_FILE_ORDER.indexOf(name);
+  return i === -1 ? TF_FILE_ORDER.length + 1 : i;
+}
+
+/**
+ * Map the project artifacts list (ArtifactResponse[]) into the
+ * <TerraformFileViewer /> shape, keeping ONLY artifact_type === 'terraform'
+ * (the generated .tf files). Filenames are normalized from the stored subtype
+ * and ordered for a readable default tab. One terraform row exists per subtype
+ * per project (the upsert dedupes), so no workflow filter is needed.
+ */
+export function mapTerraformArtifacts(list = []) {
+  return arr(list)
+    .filter((a) => a && a.artifact_type === 'terraform')
+    .map((a) => {
+      const name = tfFilename(a.artifact_subtype) || a.artifact_subtype || 'main.tf';
+      const content = a.content || '';
+      return {
+        id: a.id,
+        name,
+        content,
+        lines: content ? content.replace(/\n$/, '').split('\n').length : 0,
+        summary: a.generated_by_agent || 'terraform',
+        version: a.version ?? null,
+        approvalState: a.approval_state || null,
+        validationStatus: a.validation_status || null,
+        updatedAt: a.updated_at || null,
+      };
+    })
+    .sort((x, y) => tfOrder(x.name) - tfOrder(y.name) || x.name.localeCompare(y.name));
+}
+
+/* ── Terraform Validation (Phase 2B) ────────────────────────────────────────── */
+
+/**
+ * Normalize a WorkflowPhaseRunResponse (the POST .../phases/:phase reply). The
+ * Terraform Validation surface needs `taskId` from here to open the live-log
+ * WebSocket — the GET workflow row does NOT expose it.
+ */
+export function mapPhaseRun(api = {}) {
+  return {
+    workflowId: api.workflow_id || null,
+    taskId: api.task_id || null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    phasesState: api.phases_state || {},
+  };
+}
+
+/**
+ * Extract the persisted Terraform validation report from the project artifacts
+ * list. The backend writes ONE `validation_report` artifact
+ * (subtype `terraform_validation.json`) whose content is the JSON
+ * `{ ok, error, failure_classification, results:[{step, ok, returncode, output}] }`.
+ * Returns null when no report exists yet (validation hasn't run). Defensive: a
+ * malformed/empty body degrades to the artifact's `validation_status`.
+ */
+export function mapTerraformValidationReport(list = []) {
+  const row = arr(list).find(
+    (a) =>
+      a &&
+      a.artifact_type === 'validation_report' &&
+      String(a.artifact_subtype || '').toLowerCase().includes('terraform_validation')
+  );
+  if (!row) return null;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(row.content || '');
+  } catch {
+    parsed = null;
+  }
+  const steps = arr(parsed?.results).map((r) => ({
+    step: r.step || r.label || 'step',
+    ok: r.ok !== false,
+    returnCode: r.returncode ?? r.return_code ?? null,
+    output: r.output || '',
+  }));
+  return {
+    id: row.id,
+    validationStatus: row.validation_status || (parsed?.ok ? 'passed' : 'failed'),
+    ok: parsed ? !!parsed.ok : row.validation_status === 'passed',
+    error: parsed?.error || null,
+    failureClassification: parsed?.failure_classification || null,
+    steps,
+    updatedAt: row.updated_at || null,
+    raw: row.content || '',
+  };
+}
+
+/* ── WebSocket URL (live Terraform validation logs) ───────────────────────────
+   The WS route is mounted at the ROOT ("/ws/terraform/...", no /api prefix), so
+   strip the trailing /api from API_BASE_URL and swap the scheme http→ws. This
+   is the SAME streaming infrastructure as the Docker build socket, namespaced by
+   job phase (`terraform_validate`). Mirrors dockerBuildWsUrl(). */
+function terraformWsBase() {
+  const root = String(API_BASE_URL || '').replace(/\/api\/?$/, '');
+  return root.replace(/^http/i, 'ws');
+}
+
+/** Authenticated WebSocket URL for a task's live Terraform-validation log stream. */
+export function terraformValidateWsUrl(taskId, jobPhase = 'terraform_validate') {
+  const token = tokenStore.getAccess();
+  const q = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${terraformWsBase()}/ws/terraform/${encodeURIComponent(
+    taskId
+  )}/${encodeURIComponent(jobPhase)}${q}`;
+}
+
 export const workflowApi = {
   /** GET /workflows — role-aware list of workflow summaries. */
   async list() {
@@ -407,6 +565,69 @@ export const workflowApi = {
       )}/phases/DOCKER`,
       {}
     );
+  },
+
+  /**
+   * GET /projects/:projectId/workflows/:workflowId — the full workflow row,
+   * including `phases_state`. The Terraform surface reads its phase status
+   * exclusively from this (the resume summary has no phases_state).
+   */
+  async getProjectWorkflow(projectId, workflowId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`
+    );
+    return mapWorkflowDetail(data);
+  },
+
+  /**
+   * GET /projects/:projectId/artifacts — the raw persisted-artifacts list (with
+   * content). Fetched ONCE per Terraform read; callers derive the generated .tf
+   * files (mapTerraformArtifacts) AND the validation report
+   * (mapTerraformValidationReport) from this single payload.
+   */
+  async getProjectArtifacts(projectId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/artifacts`
+    );
+    return Array.isArray(data) ? data : [];
+  },
+
+  /**
+   * POST /projects/:projectId/workflows/:workflowId/phases/:phase — run a
+   * Terraform pipeline phase. Phase 2A only ever passes 'TERRAFORM_GENERATION'
+   * (LLM → DB → rehydrate; runs inline and returns the phase-run response with
+   * the updated phases_state). The BACKEND owns the transition + persistence;
+   * the frontend never mutates workflow state. Prerequisite (enforced server-
+   * side): a plan must be selected (PLAN_SELECTED) — Docker is NOT required.
+   */
+  async runTerraformPhase(projectId, workflowId, phase = 'TERRAFORM_GENERATION') {
+    return apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/phases/${encodeURIComponent(phase)}`,
+      {}
+    );
+  },
+
+  /**
+   * POST /projects/:projectId/workflows/:workflowId/phases/TERRAFORM_VALIDATION —
+   * enqueue the durable Terraform validation job (terraform init + validate,
+   * streamed). The BACKEND owns the transition: it records
+   * `phases_state.TERRAFORM_VALIDATION = running` and returns the `task_id` the
+   * caller uses to open the live-log WebSocket (terraformValidateWsUrl). When the
+   * job finishes, the worker writes the final status + a `validation_report`
+   * artifact. Prerequisite (server-side): TERRAFORM_GENERATION must be completed.
+   * Returns the mapped phase-run response ({ taskId, currentPhase, status,
+   * phasesState }).
+   */
+  async runTerraformValidation(projectId, workflowId) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/phases/TERRAFORM_VALIDATION`,
+      {}
+    );
+    return mapPhaseRun(data);
   },
 };
 

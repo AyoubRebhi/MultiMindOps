@@ -32,6 +32,9 @@ from backend.app.services.terraform_pipeline.pipeline_service import (
     PLAN_OUTPUT_FILE,
     terraform_subprocess_env,
 )
+# Reuse the SAME subprocess-capability detector implemented for the Docker
+# pipeline — see streaming.py / docker_connectivity.py.
+from backend.app.services.execution.docker_connectivity import loop_supports_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -64,28 +67,55 @@ async def generate_plan_json(
             "Install Terraform to generate the plan summary."
         )
 
-    proc = await asyncio.create_subprocess_exec(
-        binary,
-        "show",
-        "-json",
-        "-no-color",
-        PLAN_OUTPUT_FILE,
-        cwd=str(artifact_dir),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=terraform_subprocess_env(),
-    )
-    try:
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        logger.warning("[PlanSummary] terraform show timed out after %ss", timeout)
-        return None
+    cmd = [binary, "show", "-json", "-no-color", PLAN_OUTPUT_FILE]
+    tf_env = terraform_subprocess_env()
 
-    if proc.returncode != 0:
+    # Windows + uvicorn --reload runs this on a SelectorEventLoop, where
+    # asyncio.create_subprocess_exec raises NotImplementedError. Fall back to a
+    # synchronous capture on a worker thread (this is a capture-all call, not a
+    # live stream, so subprocess.run mirrors the async communicate() exactly).
+    # The async path is unchanged on every loop that supports subprocesses.
+    if loop_supports_subprocess():
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(artifact_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=tf_env,
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            logger.warning("[PlanSummary] terraform show timed out after %ss", timeout)
+            return None
+        returncode = proc.returncode
+    else:
+        import subprocess
+
+        def _run() -> "subprocess.CompletedProcess[bytes]":
+            return subprocess.run(
+                cmd,
+                cwd=str(artifact_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=tf_env,
+                timeout=timeout,
+            )
+
+        try:
+            completed = await asyncio.to_thread(_run)
+        except subprocess.TimeoutExpired:
+            logger.warning("[PlanSummary] terraform show timed out after %ss", timeout)
+            return None
+        stdout_b, stderr_b, returncode = (
+            completed.stdout, completed.stderr, completed.returncode,
+        )
+
+    if returncode != 0:
         logger.warning(
             "[PlanSummary] terraform show exited %s: %s",
-            proc.returncode,
+            returncode,
             stderr_b.decode("utf-8", errors="replace")[:500],
         )
         return None

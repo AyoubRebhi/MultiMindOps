@@ -159,7 +159,7 @@ export const WORKFLOW_PHASE_VIEW = {
 };
 
 /** Views that are fully integrated with live backend data today. */
-export const IMPLEMENTED_WORKFLOW_VIEWS = new Set(['analysis', 'planning', 'docker']);
+export const IMPLEMENTED_WORKFLOW_VIEWS = new Set(['analysis', 'planning', 'docker', 'terraform']);
 
 /**
  * Resolve a workflow's saved phase to its view id. A null/unknown phase means
@@ -416,6 +416,9 @@ export const WORKFLOW_TIMELINE_PHASES = [
   // timeline shows the step but never links to a (removed) mock demo page.
   { key: 'docker', label: 'Docker', icon: 'fa-docker', brand: true },
   { key: 'terraform', label: 'Terraform', icon: 'fa-cubes', to: '/workflows/terraform' },
+  // Terraform Validation is a real, data-backed sub-surface reached via
+  // /workflows/run/:id (WorkflowTerraformPhase) — no standalone route, so no `to`.
+  { key: 'terraform-validate', label: 'TF Validate', icon: 'fa-clipboard-check' },
   { key: 'cicd', label: 'GitHub Actions', icon: 'fa-github', brand: true, to: '/workflows/cicd' },
   { key: 'execution', label: 'Execution Center', icon: 'fa-tower-broadcast', to: '/workflows/execution' },
   { key: 'infrastructure', label: 'Infrastructure Dashboard', icon: 'fa-server', to: '/workflows/infrastructure-dashboard' },

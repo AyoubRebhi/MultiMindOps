@@ -1,5 +1,9 @@
 import { useAsync } from './useAsync';
-import { workflowApi } from '@/services/api/workflowApi';
+import {
+  workflowApi,
+  mapTerraformArtifacts,
+  mapTerraformValidationReport,
+} from '@/services/api/workflowApi';
 
 /**
  * useWorkflowRun — fetch one workflow summary (GET /workflows/:id) so a click
@@ -72,6 +76,42 @@ export function useDockerPhase(projectId, workflowId) {
       ready
         ? workflowApi.getDockerPhase(projectId, workflowId)
         : Promise.resolve(null),
+    [projectId, workflowId],
+    { immediate: ready }
+  );
+}
+
+/**
+ * useTerraformPhase — fetch everything the Terraform surface needs (Generation
+ * AND Validation) in ONE shot, from existing endpoints: the workflow's
+ * authoritative `phases_state` (GET project-scoped workflow) and the project
+ * artifacts (GET project artifacts, read once → split into the generated `.tf`
+ * files and the `validation_report`). Phase status is read EXCLUSIVELY from
+ * phases_state; artifacts/report are for display only. Returns
+ * { data: { phasesState, currentPhase, status, artifacts, validationReport },
+ * loading, error, refetch } — `refetch` re-reads both after the surface triggers
+ * TERRAFORM_GENERATION or TERRAFORM_VALIDATION (or when a validation stream ends).
+ *
+ * @param {string} projectId
+ * @param {string} workflowId
+ */
+export function useTerraformPhase(projectId, workflowId) {
+  const ready = !!projectId && !!workflowId;
+  return useAsync(
+    async () => {
+      if (!ready) return null;
+      const [wf, rawArtifacts] = await Promise.all([
+        workflowApi.getProjectWorkflow(projectId, workflowId),
+        workflowApi.getProjectArtifacts(projectId),
+      ]);
+      return {
+        phasesState: wf?.phasesState || {},
+        currentPhase: wf?.currentPhase || null,
+        status: wf?.status || null,
+        artifacts: mapTerraformArtifacts(rawArtifacts),
+        validationReport: mapTerraformValidationReport(rawArtifacts),
+      };
+    },
     [projectId, workflowId],
     { immediate: ready }
   );

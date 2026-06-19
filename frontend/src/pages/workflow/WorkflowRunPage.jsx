@@ -13,6 +13,7 @@ import {
 import WorkflowAnalysisPhase from './WorkflowAnalysisPhase';
 import ArchitecturePlanningPhase from './ArchitecturePlanningPhase';
 import WorkflowDockerPhase from './WorkflowDockerPhase';
+import WorkflowTerraformPhase from './WorkflowTerraformPhase';
 
 /**
  * WorkflowRunPage — opens a workflow and RESUMES it from its last saved phase.
@@ -23,9 +24,9 @@ import WorkflowDockerPhase from './WorkflowDockerPhase';
  * data-driven (utils/constants), so when a future phase becomes a real surface
  * only that map + the switch below change.
  *
- * Today Analysis, Architecture Planning and Docker Generation are integrated
- * surfaces; any other saved phase opens to an honest "not available yet" panel
- * that still reports the real current phase.
+ * Today Analysis, Architecture Planning, Docker Generation and Terraform
+ * Generation are integrated surfaces; any other saved phase opens to an honest
+ * "not available yet" panel that still reports the real current phase.
  */
 export default function WorkflowRunPage() {
   const { workflowId } = useParams();
@@ -88,6 +89,12 @@ export default function WorkflowRunPage() {
         />
       ) : view === 'docker' ? (
         <WorkflowDockerPhase
+          workflowId={workflowId}
+          workflow={workflow}
+          onAdvance={refetch}
+        />
+      ) : view === 'terraform' ? (
+        <WorkflowTerraformPhase
           workflowId={workflowId}
           workflow={workflow}
           onAdvance={refetch}
