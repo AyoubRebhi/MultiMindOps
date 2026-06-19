@@ -95,6 +95,27 @@ def resolve_docker_cli() -> str:
     return "docker"
 
 
+def loop_supports_subprocess(loop: Optional[asyncio.AbstractEventLoop] = None) -> bool:
+    """Return ``True`` when the running event loop can spawn asyncio subprocesses.
+
+    On Windows only the :class:`asyncio.ProactorEventLoop` supports subprocesses.
+    uvicorn's ``--reload`` / ``--workers>1`` mode sets ``use_subprocess=True`` and
+    therefore runs the server (and the in-process execution worker that shares its
+    loop) on a :class:`asyncio.SelectorEventLoop`, where
+    ``asyncio.create_subprocess_exec`` raises ``NotImplementedError``. Everywhere
+    else (Linux, or Windows under the default Proactor loop) asyncio subprocesses
+    work. Callers use this to fall back to a synchronous subprocess on a thread.
+    """
+    if not _IS_WINDOWS:
+        return True
+    try:
+        loop = loop or asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    # ``asyncio.ProactorEventLoop`` only exists on Windows, where this line runs.
+    return isinstance(loop, asyncio.ProactorEventLoop)
+
+
 def default_daemon_endpoint() -> str:
     """OS-specific default daemon endpoint when ``DOCKER_HOST`` is unset."""
     return "npipe:////./pipe/docker_engine" if _IS_WINDOWS else "unix:///var/run/docker.sock"
@@ -142,6 +163,40 @@ class DockerHealth:
         return asdict(self)
 
 
+def _run_docker_sync(
+    cli: str,
+    args: list[str],
+    timeout: float,
+    env: Optional[dict],
+) -> tuple[Optional[int], str, str]:
+    """Synchronous ``docker <args>`` probe — the SelectorEventLoop fallback.
+
+    Mirrors :func:`_run_docker`'s contract (``(returncode, stdout, stderr)``,
+    ``returncode is None`` on spawn failure / timeout). ``subprocess.run`` drains
+    both pipes via ``capture_output`` so it cannot deadlock on a full pipe buffer.
+    Runs on a worker thread (see :func:`_run_docker`) so it never blocks the loop.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [cli, *args],
+            capture_output=True,
+            timeout=timeout,
+            env=env,
+        )
+    except FileNotFoundError:
+        return None, "", f"Docker CLI not found (looked for '{cli}')."
+    except subprocess.TimeoutExpired:
+        return None, "", f"timed out after {timeout:.0f}s"
+
+    return (
+        proc.returncode,
+        proc.stdout.decode(errors="replace").strip(),
+        proc.stderr.decode(errors="replace").strip(),
+    )
+
+
 async def _run_docker(
     args: list[str],
     *,
@@ -159,6 +214,14 @@ async def _run_docker(
     friends are honoured automatically).
     """
     cli = resolve_docker_cli()
+
+    # Windows + uvicorn --reload/--workers>1 ⇒ SelectorEventLoop, which cannot
+    # spawn asyncio subprocesses. Run a synchronous probe on a worker thread
+    # instead. The async path below is unchanged on every loop that supports
+    # subprocesses (Linux, or Windows ProactorEventLoop).
+    if not loop_supports_subprocess():
+        return await asyncio.to_thread(_run_docker_sync, cli, list(args), timeout, env)
+
     try:
         proc = await asyncio.create_subprocess_exec(
             cli,

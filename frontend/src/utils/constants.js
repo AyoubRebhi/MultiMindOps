@@ -108,6 +108,69 @@ export function getPhaseMeta(key) {
 }
 
 /**
+ * Display metadata for the CANONICAL backend workflow phases — the phase names
+ * the engine records in ``Workflow.current_phase`` / ``phases_state`` (see
+ * backend/app/services/core/workflow_orchestration_service.py). These differ
+ * from the roadmap keys in WORKFLOW_PHASES above, so the Workflows page resolves
+ * the live phase through this map.
+ */
+export const BACKEND_WORKFLOW_PHASE_META = {
+  ARCHITECTURE_DECISION: { label: 'Architecture Decision', icon: 'fa-sitemap' },
+  PLAN_SELECTED: { label: 'Plan Selected', icon: 'fa-clipboard-check' },
+  DOCKER: { label: 'Docker Generation', icon: 'fa-docker', brand: true },
+  DOCKER_BUILD: { label: 'Docker Build', icon: 'fa-hammer' },
+  TERRAFORM_GENERATION: { label: 'Terraform Generation', icon: 'fa-cubes' },
+  TERRAFORM_VALIDATION: { label: 'Terraform Validation', icon: 'fa-clipboard-check' },
+  TERRAFORM_PLAN: { label: 'Terraform Plan', icon: 'fa-diagram-project' },
+};
+
+/**
+ * Resolve a workflow phase to {label, icon, brand}. Prefers the canonical
+ * backend phase names, then the roadmap keys (getPhaseMeta), then a generic
+ * fallback — so it is a safe superset replacement for getPhaseMeta on the
+ * Workflows page.
+ */
+export function getWorkflowPhaseMeta(key) {
+  if (!key) return { label: 'Not started', icon: 'fa-circle-nodes', brand: false };
+  return BACKEND_WORKFLOW_PHASE_META[key] || getPhaseMeta(key);
+}
+
+/**
+ * Map a backend phase key to the workflow VIEW the resume router should render.
+ * Data-driven on purpose: when a future phase becomes a real surface, only this
+ * map + the WorkflowRunPage switch change — no hardcoded phase logic elsewhere.
+ *
+ * Today only `analysis` is a real, integrated surface; the rest resolve to
+ * their (not-yet-integrated) view id so the resume router can show an honest
+ * "this phase isn't available yet" state instead of guessing.
+ */
+export const WORKFLOW_PHASE_VIEW = {
+  ANALYSIS: 'analysis',
+  ARCHITECTURE_DECISION: 'planning',
+  // Once a plan is selected the architecture decision is done; the active phase
+  // becomes Docker Generation (Analysis → Architecture → Docker → Terraform), so
+  // a selected/resumed run lands on the Docker surface to generate + review.
+  PLAN_SELECTED: 'docker',
+  DOCKER: 'docker',
+  DOCKER_BUILD: 'docker',
+  TERRAFORM_GENERATION: 'terraform',
+  TERRAFORM_VALIDATION: 'terraform',
+  TERRAFORM_PLAN: 'terraform',
+};
+
+/** Views that are fully integrated with live backend data today. */
+export const IMPLEMENTED_WORKFLOW_VIEWS = new Set(['analysis', 'planning', 'docker']);
+
+/**
+ * Resolve a workflow's saved phase to its view id. A null/unknown phase means
+ * the run hasn't advanced past intake → resume at Analysis (the first phase).
+ */
+export function resolveWorkflowView(currentPhase) {
+  if (!currentPhase) return 'analysis';
+  return WORKFLOW_PHASE_VIEW[currentPhase] || 'analysis';
+}
+
+/**
  * Status metadata — drives the StatusBadge / PhaseStatusBadge colors and icons.
  * `variant` maps to the badge-* classes defined in app.css.
  */
@@ -155,11 +218,19 @@ export const STATUS_META = {
     variant: 'warning',
     icon: 'fa-hourglass-half',
   },
+  // Backend Workflow.status when a run pauses for user plan selection / input.
+  awaiting_input: {
+    label: 'Awaiting Input',
+    variant: 'warning',
+    icon: 'fa-hourglass-half',
+  },
 
   failed: { label: 'Failed', variant: 'danger', icon: 'fa-circle-xmark' },
   error: { label: 'Error', variant: 'danger', icon: 'fa-circle-xmark' },
   blocked: { label: 'Blocked', variant: 'danger', icon: 'fa-ban' },
   suspended: { label: 'Suspended', variant: 'danger', icon: 'fa-user-slash' },
+  // Backend terminal Workflow.status for an abandoned run.
+  cancelled: { label: 'Cancelled', variant: 'pending', icon: 'fa-ban' },
 
   // Members / invitations / credentials
   invited: { label: 'Invited', variant: 'info', icon: 'fa-paper-plane' },
@@ -340,7 +411,10 @@ export const AWS_REGIONS = [
 export const WORKFLOW_TIMELINE_PHASES = [
   { key: 'analysis', label: 'Analysis', icon: 'fa-magnifying-glass-chart', to: '/workflows/analysis' },
   { key: 'planning', label: 'Planning', icon: 'fa-clipboard-list', to: '/workflows/planning' },
-  { key: 'docker', label: 'Docker', icon: 'fa-docker', brand: true, to: '/workflows/docker' },
+  // Docker is a real, data-backed surface reached via /workflows/run/:id
+  // (WorkflowDockerPhase) — never a standalone mock route. No `to` here so the
+  // timeline shows the step but never links to a (removed) mock demo page.
+  { key: 'docker', label: 'Docker', icon: 'fa-docker', brand: true },
   { key: 'terraform', label: 'Terraform', icon: 'fa-cubes', to: '/workflows/terraform' },
   { key: 'cicd', label: 'GitHub Actions', icon: 'fa-github', brand: true, to: '/workflows/cicd' },
   { key: 'execution', label: 'Execution Center', icon: 'fa-tower-broadcast', to: '/workflows/execution' },

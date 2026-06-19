@@ -5,51 +5,90 @@ import PageHeader from '@/components/layout/PageHeader';
 import WorkflowCard from '@/components/workflow/WorkflowCard';
 import StatsCard from '@/components/common/StatsCard';
 import EmptyState from '@/components/common/EmptyState';
+import ErrorState from '@/components/common/ErrorState';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import { useWorkflows } from '@/hooks/useWorkflows';
+import { useAuth } from '@/hooks/useAuth';
 
 const FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'running', label: 'Running' },
+  { key: 'awaiting_input', label: 'Awaiting Input' },
   { key: 'completed', label: 'Completed' },
-  { key: 'human_review', label: 'Needs Review' },
-  { key: 'degraded', label: 'Degraded' },
+  { key: 'failed', label: 'Failed' },
 ];
 
+/** Collapse the backend Workflow.status into the page's filter buckets. */
+function bucketOf(status) {
+  const s = (status || '').toLowerCase();
+  if (s === 'running' || s === 'pending') return 'running';
+  if (s === 'awaiting_input') return 'awaiting_input';
+  if (s === 'completed') return 'completed';
+  if (s === 'failed' || s === 'cancelled') return 'failed';
+  return 'other';
+}
+
 /**
- * Workflows — overview of all pipeline runs with quick status counts.
+ * Workflows — overview of pipeline runs with quick status counts.
+ *
+ * Visibility is role-aware and enforced by the backend (GET /api/workflows):
+ *   • ADMIN           sees every workflow on the platform — read-only monitoring.
+ *   • DEVOPS_ENGINEER sees only the workflows they launched.
+ * The role gating below is UX only (the API is the source of truth).
  */
 export default function Workflows() {
-  const { data: workflows, loading } = useWorkflows();
+  const { data: workflows, loading, error, refetch } = useWorkflows();
+  const { isAdmin } = useAuth();
   const [filter, setFilter] = useState('all');
 
   const counts = useMemo(() => {
     const list = workflows || [];
     return {
       total: list.length,
-      running: list.filter((w) => w.status === 'running').length,
-      review: list.filter((w) => w.status === 'human_review').length,
-      completed: list.filter((w) => w.status === 'completed').length,
+      running: list.filter((w) => bucketOf(w.status) === 'running').length,
+      review: list.filter((w) => bucketOf(w.status) === 'awaiting_input').length,
+      completed: list.filter((w) => bucketOf(w.status) === 'completed').length,
     };
   }, [workflows]);
 
   const filtered = (workflows || []).filter(
-    (w) => filter === 'all' || w.status === filter
+    (w) => filter === 'all' || bucketOf(w.status) === filter
   );
 
   return (
     <ContentContainer>
       <PageHeader
         title="Workflows"
-        subtitle="Every run of the AI infrastructure pipeline across your projects."
+        subtitle={
+          isAdmin
+            ? 'Monitoring every workflow across the platform — read-only.'
+            : "Every run of the AI infrastructure pipeline you've launched."
+        }
         breadcrumbs={[{ label: 'Workflows' }]}
+        // Admins are read-only: no workflow execution actions.
         actions={
-          <Link to="/workflows/analysis" className="bgrd btn px-3 py-2" style={{ fontSize: '.85rem' }}>
-            <i className="fa-solid fa-play me-2" />
-            Run Workflow
-          </Link>
+          isAdmin ? null : (
+            <Link to="/workflows/analysis" className="bgrd btn px-3 py-2" style={{ fontSize: '.85rem' }}>
+              <i className="fa-solid fa-play me-2" />
+              Run Workflow
+            </Link>
+          )
         }
       />
+
+      {isAdmin && (
+        <div
+          className="surface d-flex align-items-center gap-2 mb-4"
+          style={{ borderColor: 'rgba(96,165,250,.3)', background: 'rgba(96,165,250,.08)' }}
+        >
+          <i className="fa-solid fa-eye" style={{ color: '#60a5fa' }} />
+          <span style={{ fontSize: '.82rem', color: 'var(--tx2)' }}>
+            <strong style={{ color: 'var(--tx1)' }}>Read-only monitoring.</strong>{' '}
+            As an admin you can view every workflow and its progress, but you
+            cannot execute phases, rerun, or modify workflow state.
+          </span>
+        </div>
+      )}
 
       <div className="row g-3 mb-4">
         <div className="col-6 col-xl-3">
@@ -59,7 +98,7 @@ export default function Workflows() {
           <StatsCard label="Running" value={counts.running} icon="fa-spinner" accent="#60a5fa" />
         </div>
         <div className="col-6 col-xl-3">
-          <StatsCard label="Needs Review" value={counts.review} icon="fa-user-check" accent="#fbbf24" />
+          <StatsCard label="Awaiting Input" value={counts.review} icon="fa-hourglass-half" accent="#fbbf24" />
         </div>
         <div className="col-6 col-xl-3">
           <StatsCard label="Completed" value={counts.completed} icon="fa-circle-check" accent="#34d399" />
@@ -87,8 +126,24 @@ export default function Workflows() {
 
       {loading && !workflows?.length ? (
         <LoadingSpinner center label="Loading workflows…" />
+      ) : error ? (
+        <ErrorState
+          title="Couldn't load workflows"
+          message={error.message}
+          onRetry={refetch}
+        />
       ) : filtered.length === 0 ? (
-        <EmptyState icon="fa-diagram-project" title="No workflows" message="No runs match this filter." />
+        <EmptyState
+          icon="fa-diagram-project"
+          title="No workflows"
+          message={
+            (workflows || []).length === 0
+              ? isAdmin
+                ? 'No workflows have been launched on the platform yet.'
+                : "You haven't launched any workflows yet. Start one from a project."
+              : 'No runs match this filter.'
+          }
+        />
       ) : (
         <div className="row g-3">
           {filtered.map((wf) => (

@@ -135,9 +135,9 @@ export default function PlanningPage() {
           type="button"
           className="bgrd btn px-4 py-2 phase-cta"
           disabled={!effectiveSelected}
-          onClick={() => navigate('/workflows/docker')}
+          onClick={() => navigate('/workflows')}
         >
-          Proceed to Docker Phase
+          Go to Workflows
           <i className="fa-solid fa-arrow-right ms-2" />
         </button>
       </div>

@@ -216,10 +216,13 @@ async def _reanalyze_background(
 
     try:
         from backend.app.services.corrector.docker_corrector import DockerCorrectorAgent
-        from backend.app.services.core.llm_service import get_llm_service
+        from backend.app.services.llm.provider_factory import ProviderFactory
 
         try:
-            llm = get_llm_service()
+            # GPT-5-mini primary → Groq fallback (single call). See
+            # AGENT_PROVIDER_MAP["DockerCorrectorAgent"]. Drop-in for the old
+            # Groq-only LLMService — identical chat_json signature, same budget.
+            llm = ProviderFactory.for_agent("DockerCorrectorAgent")
         except Exception as llm_exc:
             llm = None
             logger.warning(

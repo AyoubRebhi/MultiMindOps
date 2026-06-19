@@ -4,8 +4,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from backend.app.services.core.glm_service import LLMClient, get_glm_service
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -150,23 +148,35 @@ def _truncate_file_list(files: List[str], max_count: int) -> List[str]:
 
 class LLMPriorityEngine:
     """
-    Selects the 5–20 most critical repository files via an OpenAI-compatible
-    LLM (LLaMA 3, Mixtral, Mistral, …).  Configured through:
+    Selects the 5–20 most critical repository files for codebase analysis.
 
-        LLM_API_KEY   — provider API key
-        LLM_BASE_URL  — endpoint base URL  (e.g. https://api.groq.com/openai/v1)
-        LLM_MODEL     — model identifier   (e.g. llama3-70b-8192)
+    Model strategy (Phase 9): the ranking call runs through ``ProviderFactory``
+    routed for ``CodebaseAnalysisAgent`` —
 
-    Falls back to heuristic selection when the LLM call fails.
+        PRIMARY  : OpenAI GPT-5-mini  (``settings.OPENAI_MODEL``)
+        FALLBACK : Groq               (``settings.GROQ_MODEL``)
+
+    The factory tries the primary once and falls back to Groq on ANY failure
+    (timeout / rate-limit / auth / outage / malformed). It is a SINGLE call —
+    never both providers — and, because ``CodebaseAnalysisAgent`` is not
+    registered in ``AGENT_TOKEN_CONFIG``, the caller's token budget is passed
+    through unchanged (no token inflation).
+
+    Falls back to heuristic (no-LLM) selection when the LLM call fails entirely.
     """
 
-    def __init__(self, llm_client: LLMClient | None = None) -> None:
+    def __init__(self, llm_client=None) -> None:
         self._client = llm_client  # lazy-initialised on first use
 
     @property
-    def _llm(self) -> LLMClient:
+    def _llm(self):
         if self._client is None:
-            self._client = get_glm_service()  # factory returns the singleton LLMClient
+            # Drop-in for the old Groq-only LLMClient: identical
+            # chat_json(system_prompt, user_prompt, temperature, max_tokens)
+            # signature returning a dict, but with GPT-5-mini primary + Groq
+            # fallback. Imported lazily to avoid import cycles at module load.
+            from backend.app.services.llm.provider_factory import ProviderFactory
+            self._client = ProviderFactory.for_agent("CodebaseAnalysisAgent")
         return self._client
 
     # ------------------------------------------------------------------

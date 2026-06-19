@@ -58,11 +58,16 @@ async def docker_login(
     Run `docker login` and return (success, output).
     registry_url may be empty for Docker Hub.
     """
-    from .docker_connectivity import resolve_docker_cli
+    from .docker_connectivity import loop_supports_subprocess, resolve_docker_cli
 
     cmd = [resolve_docker_cli(), "login", "--username", username, "--password-stdin"]
     if registry_url:
         cmd.append(registry_url)
+
+    # Windows + uvicorn --reload/--workers>1 ⇒ SelectorEventLoop, which cannot
+    # spawn asyncio subprocesses. Run a synchronous login on a worker thread.
+    if not loop_supports_subprocess():
+        return await asyncio.to_thread(_docker_login_sync, cmd, password)
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -78,4 +83,22 @@ async def docker_login(
         output = stdout_bytes.decode(errors="replace").strip()
         return proc.returncode == 0, output
     except Exception as exc:
+        return False, str(exc)
+
+
+def _docker_login_sync(cmd: list[str], password: str) -> tuple[bool, str]:
+    """Synchronous ``docker login`` — the SelectorEventLoop fallback for
+    :func:`docker_login`. Feeds the password via stdin and merges stderr."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=password.encode(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+        )
+        return proc.returncode == 0, proc.stdout.decode(errors="replace").strip()
+    except Exception as exc:  # noqa: BLE001 — match the async path's contract
         return False, str(exc)

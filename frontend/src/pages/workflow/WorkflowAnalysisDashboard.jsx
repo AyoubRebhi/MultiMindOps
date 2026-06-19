@@ -44,21 +44,23 @@ export default function WorkflowAnalysisDashboard() {
     useWorkflowAnalysis(projectId);
   const [logsOpen, setLogsOpen] = useState(false);
 
+  // This page is a READ-ONLY projection of the project's persisted analysis.
+  // "Start"/"Rerun" do not regenerate anything — they refresh from saved data.
   const handleStart = async () => {
     try {
       await start();
-      toast.info('Workflow started — analysis is running.');
+      toast.info('Loaded the latest saved analysis.');
     } catch (err) {
-      toast.error(err?.message || 'Could not start the workflow.');
+      toast.error(err?.message || 'Could not load the analysis.');
     }
   };
 
   const handleRerun = async () => {
     try {
       await rerun();
-      toast.info('Re-running analysis on the latest commit.');
+      toast.info('Refreshed from the latest saved analysis.');
     } catch (err) {
-      toast.error(err?.message || 'Could not rerun the analysis.');
+      toast.error(err?.message || 'Could not refresh the analysis.');
     }
   };
 
@@ -136,7 +138,7 @@ export default function WorkflowAnalysisDashboard() {
               Raw Analysis Payload
             </h3>
             <span className="text-muted-3" style={{ fontSize: '.74rem' }}>
-              GET /api/workflows/{projectId}/analysis
+              GET /api/projects/{projectId}/workflow-analysis
             </span>
           </div>
           <pre className="mono" style={rawLogStyle}>

@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Awaitable
 
-from .docker_connectivity import ensure_docker_daemon, resolve_docker_cli
+from .docker_connectivity import ensure_docker_daemon, loop_supports_subprocess, resolve_docker_cli
 from .docker_registry import docker_login, generate_image_tag
 from .docker_streamer import LogStreamManager, classify_log_line, log_stream_manager
 from .execution_models import (
@@ -916,6 +916,16 @@ class DockerExecutor:
         # did not inherit the interactive shell PATH (Windows service / sandbox).
         if cmd and cmd[0] == "docker":
             cmd = [resolve_docker_cli(), *cmd[1:]]
+
+        # Windows + uvicorn --reload/--workers>1 runs the in-process worker on a
+        # SelectorEventLoop, which cannot spawn asyncio subprocesses
+        # (NotImplementedError). Fall back to a synchronous subprocess drained on a
+        # worker thread, bridging each line back to THIS loop so the WebSocket
+        # stream is unaffected. The async path below is unchanged on every loop
+        # that supports subprocesses (Linux, or Windows ProactorEventLoop).
+        if not loop_supports_subprocess():
+            return await self._run_cmd_sync(cmd, timeout, phase_label)
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -982,6 +992,103 @@ class DockerExecutor:
             # Ensure last_error_line is set from either stream
             if not self._last_error_line:
                 self._last_error_line = last_stderr or last_stdout
+
+        return exit_code
+
+    async def _run_cmd_sync(
+        self,
+        cmd: list[str],
+        timeout: int,
+        phase_label: str,
+    ) -> int:
+        """SelectorEventLoop fallback for :meth:`_run_cmd` (see its branch).
+
+        Spawns a synchronous ``subprocess.Popen`` on a worker thread, drains
+        stdout/stderr concurrently (two reader threads — never deadlocks on a full
+        pipe buffer), and bridges every decoded line back to THIS event loop via
+        ``run_coroutine_threadsafe`` so :meth:`_publish_log_line` runs on the loop
+        that owns the stream's ``asyncio.Condition`` (the same loop the WebSocket
+        subscribes on). Behaviour — line streaming, step tracking, ``last_error_line``,
+        exit code, timeout — matches the async path; only the spawn mechanism differs.
+        """
+        import subprocess
+        import threading
+        import time as _time
+
+        loop = asyncio.get_running_loop()
+        start = _time.monotonic()
+        logger.info(
+            "[DockerExecutor] %s phase started (sync subprocess fallback — "
+            "running loop does not support asyncio subprocesses)", phase_label,
+        )
+
+        counters = {"stdout": 0, "stderr": 0}
+        last = {"stdout": None, "stderr": None}
+
+        def _publish(line: str) -> None:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._publish_log_line(line), loop,
+                ).result()
+            except Exception:  # noqa: BLE001 — a publish hiccup must not kill the drain
+                pass
+
+        def _pump() -> int:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=self._workspace,
+            )
+
+            def _drain(pipe, is_err: bool) -> None:
+                for raw_line in iter(pipe.readline, b""):
+                    line = raw_line.decode(errors="replace").rstrip()
+                    if not line:
+                        continue
+                    if is_err:
+                        last["stderr"] = line
+                        self._last_error_line = line
+                        counters["stderr"] += 1
+                    else:
+                        last["stdout"] = line
+                        self._track_step(line)
+                        counters["stdout"] += 1
+                    _publish(line)
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+            t_out = threading.Thread(target=_drain, args=(proc.stdout, False), daemon=True)
+            t_err = threading.Thread(target=_drain, args=(proc.stderr, True), daemon=True)
+            t_out.start()
+            t_err.start()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                raise asyncio.TimeoutError()
+            # Let the readers finish draining whatever is buffered after exit.
+            t_out.join(timeout=5)
+            t_err.join(timeout=5)
+            return proc.returncode or 0
+
+        exit_code = await asyncio.to_thread(_pump)
+        duration_ms = int((_time.monotonic() - start) * 1000)
+        if exit_code == 0:
+            logger.info(
+                "[DockerExecutor] %s phase succeeded exit=0 stdout=%d stderr=%d duration=%dms",
+                phase_label, counters["stdout"], counters["stderr"], duration_ms,
+            )
+        else:
+            logger.warning(
+                "[DockerExecutor] %s phase failed exit=%d stdout=%d stderr=%d duration=%dms last=%s",
+                phase_label, exit_code, counters["stdout"], counters["stderr"], duration_ms,
+                last["stderr"] or last["stdout"],
+            )
+            if not self._last_error_line:
+                self._last_error_line = last["stderr"] or last["stdout"]
 
         return exit_code
 

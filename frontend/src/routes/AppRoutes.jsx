@@ -41,10 +41,10 @@ const Artifacts = lazy(() => import('@/pages/Artifacts/Artifacts'));
 const Settings = lazy(() => import('@/pages/Settings/Settings'));
 
 // Workflow execution (live run experience)
+const WorkflowRunPage = lazy(() => import('@/pages/workflow/WorkflowRunPage'));
 const WorkflowAnalysisDashboard = lazy(() => import('@/pages/workflow/WorkflowAnalysisDashboard'));
 const ProjectAnalysisPage = lazy(() => import('@/pages/workflow/ProjectAnalysisPage'));
 const PlanningPage = lazy(() => import('@/pages/workflow/PlanningPage'));
-const DockerPhasePage = lazy(() => import('@/pages/workflow/DockerPhasePage'));
 const TerraformPhasePage = lazy(() => import('@/pages/workflow/TerraformPhasePage'));
 const CicdPhasePage = lazy(() => import('@/pages/workflow/CicdPhasePage'));
 const ExecutionCenterPage = lazy(() => import('@/pages/workflow/ExecutionCenterPage'));
@@ -87,13 +87,16 @@ export default function AppRoutes() {
             <Route path="projects" element={<Projects />} />
             <Route path="projects/:id" element={<ProjectDetails />} />
             <Route path="workflows" element={<Workflows />} />
+            {/* Resume a workflow from its last saved phase (real backend data).
+                Reads status + current_phase and renders the correct phase
+                surface — the Analysis phase is the integrated one today. */}
+            <Route path="workflows/run/:workflowId" element={<WorkflowRunPage />} />
             {/* Project-scoped Workflow Analysis dashboard (the AI's understanding
                 of a repository — single aggregated analysis surface). */}
             <Route path="workflows/:projectId/analysis" element={<WorkflowAnalysisDashboard />} />
             {/* Workflow execution phases (reuse the shared timeline/phase UI) */}
             <Route path="workflows/analysis" element={<ProjectAnalysisPage />} />
             <Route path="workflows/planning" element={<PlanningPage />} />
-            <Route path="workflows/docker" element={<DockerPhasePage />} />
             <Route path="workflows/terraform" element={<TerraformPhasePage />} />
             <Route path="workflows/cicd" element={<CicdPhasePage />} />
             <Route path="workflows/execution" element={<ExecutionCenterPage />} />

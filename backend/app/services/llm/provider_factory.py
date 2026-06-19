@@ -41,11 +41,30 @@ from backend.app.services.llm.token_strategy import (
 )
 
 # Agents that get OpenAI as primary provider; all others are Groq-only.
-# Mirrors AGENT_PROVIDER_MAP in config/llm_config.py.
 AGENT_PROVIDER_MAP: Dict[str, str] = {
     "InfrastructureAgent": "openai_primary",
     "TerraformAgent":      "openai_primary",
     "KubernetesAgent":     "openai_primary",
+    # Codebase analysis (file-priority ranking inside CodebaseAnalysisAgent):
+    # GPT-5-mini primary → Groq fallback. NOT registered in AGENT_TOKEN_CONFIG,
+    # so its caller-provided token budget is passed through unchanged — the
+    # primary/fallback switch adds NO extra token consumption.
+    "CodebaseAnalysisAgent": "openai_primary",
+    # Architecture planning (single plan + blueprint refinement inside
+    # PlannerAgent, which backs ArchitectureDecisionAgent): GPT-5-mini primary →
+    # Groq fallback. Like CodebaseAnalysisAgent it is NOT in AGENT_TOKEN_CONFIG,
+    # so the caller's max_tokens (900 plan / 600 refine) passes through unchanged
+    # — the primary/fallback switch adds NO token consumption and the architecture
+    # plan JSON contract is untouched.
+    "PlannerAgent": "openai_primary",
+    # Docker build-failure remediation (forensic reasoning inside
+    # DockerCorrectorAgent): GPT-5-mini primary → Groq fallback, tried in that
+    # order via ProviderFactory — a SINGLE call, never both. NOT in
+    # AGENT_TOKEN_CONFIG, so the corrector's caller-provided budget (max_tokens
+    # 2500) passes through unchanged — the switch adds NO token consumption and
+    # the corrector JSON contract (root_cause/fixes/structured_patches) is
+    # preserved. The deterministic preprocessing still runs LLM-free.
+    "DockerCorrectorAgent": "openai_primary",
 }
 
 logger = logging.getLogger(__name__)

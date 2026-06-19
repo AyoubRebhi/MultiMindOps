@@ -14,6 +14,7 @@ from backend.app.api.routes.jobs import router as jobs_router
 from backend.app.api.routes.releases import router as releases_router
 from backend.app.api.routes.projects import router as projects_router
 from backend.app.api.routes.tasks import router as tasks_router
+from backend.app.api.routes.workflows import router as workflows_router
 
 # NOTE: the legacy task-scoped `/workflow/*` router and the unauthenticated
 # `/terraform/*` router are intentionally NOT mounted. They were duplicate
@@ -37,8 +38,12 @@ api_router.include_router(evaluation_router)
 # (/api/dashboard/...). First frontend↔backend integration surface.
 api_router.include_router(dashboard_router)
 # Project-centric routes — defines its own full /api/projects prefix. This is
-# the ONLY workflow surface.
+# the ONLY workflow *execution* surface (start/run/select-plan/replay).
 api_router.include_router(projects_router)
+# Platform-wide, read-only workflow listing (/api/workflows). Role-aware
+# visibility (ADMIN = all, DEVOPS_ENGINEER = own). Powers the Workflows page;
+# carries NO execution actions.
+api_router.include_router(workflows_router)
 # Credentials routes are project-scoped — full path is /api/projects/{pid}/credentials.
 # Mounted alongside projects_router so the project-role gate applies.
 api_router.include_router(credentials_router)

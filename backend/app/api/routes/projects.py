@@ -56,7 +56,15 @@ from backend.app.services.core.credentials_service import (
     CredentialError,
     CredentialsService,
 )
+from backend.app.schemas.docker_phase import DockerPhaseResponse
+from backend.app.schemas.workflow_analysis import WorkflowAnalysisResponse
+from backend.app.services.core.docker_phase_projection_service import (
+    DockerPhaseProjectionService,
+)
 from backend.app.services.core.project_analysis_service import ProjectAnalysisService
+from backend.app.services.core.workflow_analysis_aggregation_service import (
+    WorkflowAnalysisAggregationService,
+)
 from backend.app.services.core.project_bootstrap_service import (
     ProjectBootstrapService,
     schedule_bootstrap,
@@ -573,6 +581,36 @@ def get_architecture_decision(
     }
 
 
+# ─── Docker Generation phase read (projection) ───────────────────────────────
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/docker",
+    response_model=DockerPhaseResponse,
+)
+def get_docker_phase(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Aggregated Docker-Generation payload (generation + validation + corrector).
+
+    READ-ONLY projection over data the DOCKER phase already persisted — the
+    Docker analogue of ``/architecture-decision`` and ``/workflow-analysis``. It
+    NEVER re-runs the InfrastructureAgent, the corrector, or calls an LLM. One
+    response feeds the whole Docker surface (generated Dockerfile + metadata +
+    validation findings + corrector analysis + approved-artifact provenance).
+
+    Degrades gracefully: a workflow that has not reached DOCKER yet projects to
+    ``generated=False`` (200, not 404) so the surface can show an honest "not
+    generated yet" state alongside the option to run the phase.
+    """
+    _, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    return DockerPhaseProjectionService.build(
+        db, project_id=workflow.project_id, workflow=workflow, task=task,
+    )
+
+
 # ─── Project context (intelligence layer) ───────────────────────────────────
 
 @router.get(
@@ -610,6 +648,27 @@ def get_project_analysis(
     """
     project = _load_or_404(db, project_id, current_user)
     return ProjectAnalysisService.build_payload(db, project)
+
+
+@router.get(
+    "/{project_id}/workflow-analysis",
+    response_model=WorkflowAnalysisResponse,
+)
+def get_project_workflow_analysis(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Project-scoped projection of the Analysis phase (the FIVE sections).
+
+    A READ-ONLY view of the SAME persisted analysis that powers
+    ``GET /{project_id}/analysis`` — it calls the identical
+    ``ProjectAnalysisService.build_payload`` (via the aggregation service) and
+    only reshapes it into the five Analysis-phase sections. It NEVER re-runs
+    analysis, calls an LLM, or writes records. Same access rule as /analysis.
+    """
+    project = _load_or_404(db, project_id, current_user)
+    return WorkflowAnalysisAggregationService.build_for_project(db, project)
 
 
 # ─── Artifact approval workflow ──────────────────────────────────────────────

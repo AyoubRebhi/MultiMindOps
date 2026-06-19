@@ -24,7 +24,7 @@ from backend.app.agents.base_agent import BaseAgent
 from backend.app.agents.errors import BlueprintContractError
 from backend.app.agents.memory import AgentMemory
 from backend.app.schemas.blueprint import parse_blueprint
-from backend.app.services.core.llm_service import LLMService
+from backend.app.services.llm.provider_factory import ProviderFactory
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,14 @@ class PlannerAgent(BaseAgent):
 
     def __init__(self, prompt_template: str):
         super().__init__(name="PlannerAgent")
-        self.llm = LLMService()
+        # Architecture-planning generation strategy: GPT-5-mini primary → Groq
+        # fallback (settings.GROQ_MODEL), tried in that order via ProviderFactory
+        # — a SINGLE call, never both. Drop-in for the old Groq-only LLMService:
+        # identical chat_json(system_prompt, user_prompt, temperature, max_tokens)
+        # signature. PlannerAgent is not in AGENT_TOKEN_CONFIG, so the caller's
+        # token budget is passed through unchanged (no token inflation) and the
+        # architecture-plan JSON contract is preserved.
+        self.llm = ProviderFactory.for_agent("PlannerAgent")
         self.prompt_template = prompt_template
         self.memory = AgentMemory(agent_name="PlannerAgent")
 
