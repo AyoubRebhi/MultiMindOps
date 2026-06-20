@@ -39,6 +39,7 @@ from backend.app.database.session import SessionLocal
 from backend.app.models.project import ProjectMember
 from backend.app.models.task import Task
 from backend.app.models.user import User
+from backend.app.models.workflow import Workflow
 from backend.app.services.core.artifact_service import ArtifactService, ArtifactStateResolver
 from backend.app.services.core.task_service import TaskService
 from backend.app.services.execution.docker_connectivity import docker_health_check
@@ -1289,6 +1290,52 @@ _TF_JOB_TO_WORKFLOW_PHASE = {
     "terraform_plan": "TERRAFORM_PLAN",
 }
 
+# phases_state status values that mean the phase has SETTLED (terminal).
+_TF_TERMINAL_OK = {"completed", "completed_with_fallback", "completed_no_files"}
+
+
+def _terraform_phase_terminal_status(
+    task_id: str, wf_phase: str,
+) -> tuple[str | None, int | None, bool]:
+    """Read the AUTHORITATIVE terminal status of a Terraform phase.
+
+    Source of truth is ``Workflow.phases_state[wf_phase].status``; falls back to
+    the backing Task's ``terraform_pipeline`` result. Returns
+    ``(ws_status, exit_code, is_terminal)`` where ``ws_status`` is the
+    WS-protocol value (``"success"`` / ``"failed"``) when the phase has settled.
+    A still-running / not-yet-started phase returns ``is_terminal=False`` so the
+    caller emits an ``info`` frame instead of a premature ``complete``. Read-only;
+    does not mutate worker, stream-manager or execution state.
+    """
+    db = SessionLocal()
+    try:
+        task = TaskService.get_task(db, task_id)
+        if task is None:
+            return None, None, False
+
+        status_str: str | None = None
+        workflow_id = getattr(task, "workflow_id", None)
+        if workflow_id:
+            wf = db.query(Workflow).filter(Workflow.id == workflow_id).first()
+            if wf is not None:
+                status_str = ((wf.phases_state or {}).get(wf_phase) or {}).get("status")
+
+        if status_str is None:
+            # Fallback: the backing Task's terraform_pipeline result (written by
+            # record_terraform_phase_result alongside phases_state).
+            state = TaskService.load_workflow_state(db, task) or {}
+            result = ((state.get("terraform_pipeline") or {}).get(wf_phase)) or {}
+            if "ok" in result:
+                status_str = "completed" if result.get("ok") else "failed"
+    finally:
+        db.close()
+
+    if status_str in _TF_TERMINAL_OK:
+        return "success", 0, True
+    if status_str == "failed":
+        return "failed", 1, True
+    return None, None, False
+
 
 @router.websocket("/ws/terraform/{task_id}/{job_phase}")
 async def ws_terraform_logs(
@@ -1343,6 +1390,7 @@ async def ws_terraform_logs(
             closed.set()
             return False
 
+    wf_phase = _TF_JOB_TO_WORKFLOW_PHASE[job_phase]
     ping_task = asyncio.create_task(_ping_receiver())
     try:
         # Wait briefly for the worker to create the stream after enqueue.
@@ -1355,39 +1403,59 @@ async def ws_terraform_logs(
                 break
             await asyncio.sleep(0.25)
 
-        if stream is None or closed.is_set():
-            await _send({
-                "type": "info",
-                "message": "Terraform phase not currently running. Reconnect when it starts.",
-            })
+        # A FINISHED job's stream is retained (never removed) and is fully
+        # replayable — re-check once in case it appeared/finished during the wait.
+        if stream is None and not closed.is_set():
+            stream = log_stream_manager.get(stream_key)
+
+        # Replay history + live-stream whatever exists (history first).
+        if stream is not None:
+            async for entry in stream.subscribe():
+                if closed.is_set():
+                    break
+                if not await _send(entry.to_dict()):
+                    break
+
+        if closed.is_set():
             ping_task.cancel()
             return
 
-        async for entry in stream.subscribe():
-            if closed.is_set():
-                break
-            if not await _send(entry.to_dict()):
-                break
+        # ALWAYS emit a TERMINAL frame when the phase has settled, so a raced /
+        # late attach (no live stream yet) still receives a `complete` and the
+        # client never reconnect-storms. The status is read from the authoritative
+        # phases_state. The stream finishes (subscribe returns) just before the
+        # worker commits the phase result, so when a stream existed but the DB is
+        # not terminal yet, wait briefly for that commit to land.
+        status, exit_code, terminal = _terraform_phase_terminal_status(task_id, wf_phase)
+        if not terminal and stream is not None:
+            for _ in range(20):  # up to ~5s for record_terraform_phase_result
+                if closed.is_set():
+                    break
+                await asyncio.sleep(0.25)
+                status, exit_code, terminal = _terraform_phase_terminal_status(
+                    task_id, wf_phase,
+                )
+                if terminal:
+                    break
 
         ping_task.cancel()
         if closed.is_set():
             return
 
-        # Determine final status from the persisted phase result.
-        wf_phase = _TF_JOB_TO_WORKFLOW_PHASE[job_phase]
-        db2 = SessionLocal()
-        try:
-            task2 = TaskService.get_task(db2, task_id)
-            state2 = TaskService.load_workflow_state(db2, task2) if task2 else {}
-            result = ((state2 or {}).get("terraform_pipeline") or {}).get(wf_phase) or {}
-        finally:
-            db2.close()
-        ok = bool(result.get("ok"))
-        await _send({
-            "type": "complete",
-            "status": "success" if ok else "failed",
-            "exit_code": 0 if ok else 1,
-        })
+        if terminal:
+            await _send({"type": "complete", "status": status, "exit_code": exit_code})
+        elif stream is not None:
+            # The stream finished but the phase never settled in the DB (handler
+            # crashed before recording) — send a failed-safe terminal frame rather
+            # than leaving the client hanging.
+            await _send({"type": "complete", "status": "failed", "exit_code": 1})
+        else:
+            # Genuinely not running yet (worker hasn't created the stream). The
+            # client only reconnects while phases_state says running.
+            await _send({
+                "type": "info",
+                "message": "Terraform phase not currently running. Reconnect when it starts.",
+            })
     except WebSocketDisconnect:
         logger.info("[WS-TF] Client disconnected: stream=%s", stream_key)
     except Exception as exc:

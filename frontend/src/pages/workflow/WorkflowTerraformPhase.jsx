@@ -66,9 +66,8 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
   const resumedTaskId = taskIdFromStreamKey(tfv?.stream_key);
 
   const [validating, setValidating] = useState(false);
-  const [taskId, setTaskId] = useState(null);
+  const [, setTaskId] = useState(null);
   const autoConnectedRef = useRef(null);
-  const effectiveTaskId = taskId || resumedTaskId;
 
   async function handleGenerate() {
     if (!projectId || generating) return;
@@ -90,7 +89,12 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
     await refetch();
   }, [refetch]);
 
-  const validation = useTerraformValidation({ onComplete: handleValidationComplete });
+  // Pass the AUTHORITATIVE phase status so the hook gates reconnects on
+  // phases_state (not the ephemeral WS status).
+  const validation = useTerraformValidation({
+    onComplete: handleValidationComplete,
+    phaseStatus: tfvStatus,
+  });
   const { connect: connectValidation } = validation;
 
   // Run (or re-run) validation: enqueue the durable job, capture its task_id,
@@ -199,7 +203,6 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
         validation={validation}
         report={validationReport}
         running={validating || tfvStatus === 'running' || validation.running}
-        connected={!!effectiveTaskId}
         onRun={handleRunValidation}
       />
     </TerraformShell>
@@ -208,13 +211,26 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
 
 /* ── Validation: run button + live logs + persisted report ──────────────────── */
 
-function ValidationSection({ tfvStatus, validation, report, running, connected, onRun }) {
+function ValidationSection({ tfvStatus, validation, report, running, onRun }) {
   const meta = getStatusMeta(tfvStatus || 'not_started');
-  const hasRun = !!tfvStatus || connected || validation.logs.length > 0;
   const runLabel =
     tfvStatus === 'failed' ? 'Re-run validation'
       : tfvStatus === 'completed' ? 'Re-run validation'
         : 'Run Terraform Validation';
+
+  // Console source: live WS logs while a run is active; otherwise rehydrate from
+  // the persisted validation_report so output survives reconnects AND page
+  // reloads (the WS no longer streams once the phase is terminal).
+  const liveLogs = validation.logs;
+  const consoleLogs = liveLogs.length ? liveLogs : reportToConsoleLines(report);
+  const consoleStatus = liveLogs.length
+    ? validation.status
+    : tfvStatus === 'completed'
+      ? 'success'
+      : tfvStatus === 'failed'
+        ? 'failed'
+        : validation.status;
+  const hasConsole = consoleLogs.length > 0 || running;
 
   return (
     <>
@@ -255,12 +271,13 @@ function ValidationSection({ tfvStatus, validation, report, running, connected, 
         </span>
       </div>
 
-      {/* Live logs — shown once a run has been triggered/resumed. */}
-      {(hasRun || running) && (
+      {/* Live logs while running; after a reconnect/reload the persisted
+          validation_report rehydrates the console so output is never lost. */}
+      {hasConsole && (
         <TerraformValidationConsole
-          logs={validation.logs}
-          status={validation.status}
-          connectionState={validation.connectionState}
+          logs={consoleLogs}
+          status={consoleStatus}
+          connectionState={liveLogs.length ? validation.connectionState : 'idle'}
           exitCode={validation.exitCode}
           onReconnect={validation.reconnect}
         />
@@ -424,4 +441,31 @@ function safeDate(iso) {
   } catch {
     return iso;
   }
+}
+
+/**
+ * Rebuild console lines from the persisted validation_report so a completed
+ * validation's output survives reconnects and page reloads (when no live WS is
+ * streaming). Each step contributes its `$ terraform <step>` banner, its captured
+ * output, and an exit-code line — all flagged isReplay for the ↺ marker.
+ */
+function reportToConsoleLines(report) {
+  if (!report || !Array.isArray(report.steps) || report.steps.length === 0) return [];
+  const lines = [];
+  for (const s of report.steps) {
+    lines.push({ level: 'cmd', text: `$ terraform ${s.step}`, isReplay: true });
+    if (s.output) {
+      for (const ln of s.output.split('\n')) {
+        lines.push({ level: s.ok ? 'info' : 'error', text: ln, isReplay: true });
+      }
+    }
+    if (s.returnCode != null) {
+      lines.push({
+        level: s.ok ? 'success' : 'error',
+        text: `exit code ${s.returnCode}`,
+        isReplay: true,
+      });
+    }
+  }
+  return lines;
 }

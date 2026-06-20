@@ -46,7 +46,15 @@ const PING_MS = 20000;
  * on resume, parsed from the phase's stream_key), and the persisted outcome
  * lives in phases_state + the validation_report artifact.
  *
- * @param {{ onComplete?: (finalStatus: 'success'|'failed') => void }} [opts]
+ * Reconnect policy: the hook reconnects ONLY while the AUTHORITATIVE phase status
+ * (`phases_state.TERRAFORM_VALIDATION`, passed in as `phaseStatus`) is "running"
+ * — never on the basis of the ephemeral WS status — so a settled phase can never
+ * reconnect-storm. Logs are NOT wiped on reconnect: the backend replays full
+ * history on every connect, so each connection rebuilds its view in a buffer that
+ * is swapped in as frames arrive; a failed/empty reconnect preserves what's shown.
+ *
+ * @param {{ onComplete?: (finalStatus: 'success'|'failed') => void,
+ *           phaseStatus?: string }} [opts]
  */
 export function useTerraformValidation(opts = {}) {
   const [logs, setLogs] = useState([]);
@@ -60,10 +68,14 @@ export function useTerraformValidation(opts = {}) {
   const attemptsRef = useRef(0);
   const intentionalRef = useRef(false);
   const taskIdRef = useRef(null);
-  const statusRef = useRef(status);
+  // The AUTHORITATIVE phase status (phases_state.TERRAFORM_VALIDATION). Reconnect
+  // decisions read THIS ref, never the ephemeral WS `status`.
+  const phaseStatusRef = useRef(opts.phaseStatus);
+  // Per-connection log buffer (see reconnect policy above).
+  const connLogsRef = useRef([]);
   const onCompleteRef = useRef(opts.onComplete);
 
-  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { phaseStatusRef.current = opts.phaseStatus; }, [opts.phaseStatus]);
   useEffect(() => { onCompleteRef.current = opts.onComplete; }, [opts.onComplete]);
 
   const clearTimers = useCallback(() => {
@@ -109,12 +121,19 @@ export function useTerraformValidation(opts = {}) {
     ws.onopen = () => {
       attemptsRef.current = 0;
       setConnectionState('open');
-      // Backend replays the full history on connect → reset to avoid dupes.
-      setLogs([]);
+      // Do NOT wipe displayed logs. The backend replays full history on connect,
+      // so we rebuild THIS connection's view in connLogsRef and swap it into
+      // `logs` as frames arrive — a failed/empty reconnect preserves what's shown.
+      connLogsRef.current = [];
       setStatus('running');
       pingRef.current = setInterval(() => {
         try { ws.send(JSON.stringify({ type: 'ping' })); } catch { /* ignore */ }
       }, PING_MS);
+    };
+
+    const pushLine = (line) => {
+      connLogsRef.current = [...connLogsRef.current, line];
+      setLogs(connLogsRef.current);
     };
 
     ws.onmessage = (evt) => {
@@ -122,7 +141,7 @@ export function useTerraformValidation(opts = {}) {
       try { msg = JSON.parse(evt.data); } catch { return; }
       switch (msg.type) {
         case 'log':
-          setLogs((prev) => [...prev, toLine(msg)]);
+          pushLine(toLine(msg));
           break;
         case 'complete': {
           const final = msg.status === 'success' ? 'success' : 'failed';
@@ -136,11 +155,11 @@ export function useTerraformValidation(opts = {}) {
           break;
         }
         case 'error':
-          setLogs((prev) => [...prev, { level: 'error', text: msg.message || 'Stream error', ts: null }]);
+          pushLine({ level: 'error', text: msg.message || 'Stream error', ts: null });
           setConnectionState('error');
           break;
         case 'info':
-          setLogs((prev) => [...prev, { level: 'info', text: msg.message || '', ts: null }]);
+          pushLine({ level: 'info', text: msg.message || '', ts: null });
           break;
         case 'pong':
         default:
@@ -155,8 +174,9 @@ export function useTerraformValidation(opts = {}) {
     ws.onclose = () => {
       clearTimers();
       if (intentionalRef.current) return;
-      // Unexpected close while still streaming → reconnect (backoff).
-      if (statusRef.current === 'running' && attemptsRef.current < MAX_RECONNECTS) {
+      // Reconnect ONLY while the AUTHORITATIVE phase is still running — never on
+      // the ephemeral WS status — so a settled phase can't reconnect-storm.
+      if (phaseStatusRef.current === 'running' && attemptsRef.current < MAX_RECONNECTS) {
         attemptsRef.current += 1;
         setConnectionState('reconnecting');
         const delay = Math.min(1000 * 2 ** (attemptsRef.current - 1), 8000);
