@@ -65,7 +65,7 @@ resource "aws_route_table_association" "public" {
 # ── ECR ───────────────────────────────────────────────────────────────────────
 
 resource "aws_ecr_repository" "app" {
-  name                 = var.project_name
+  name                 = "{{ ecr_repository_name }}"
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
@@ -80,7 +80,7 @@ resource "aws_ecr_repository" "app" {
 # ── IAM for EKS cluster + node group ──────────────────────────────────────────
 
 resource "aws_iam_role" "eks_cluster" {
-  name = "${var.project_name}-eks-cluster"
+  name = "{{ eks_cluster_role_name }}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -98,7 +98,7 @@ resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
 }
 
 resource "aws_iam_role" "eks_node" {
-  name = "${var.project_name}-eks-node"
+  name = "{{ eks_node_role_name }}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -128,7 +128,7 @@ resource "aws_iam_role_policy_attachment" "eks_node_ecr" {
 # ── EKS cluster ───────────────────────────────────────────────────────────────
 
 resource "aws_eks_cluster" "main" {
-  name     = var.project_name
+  name     = "{{ eks_cluster_name }}"
   version  = var.eks_version
   role_arn = aws_iam_role.eks_cluster.arn
 
@@ -141,7 +141,7 @@ resource "aws_eks_cluster" "main" {
 
 resource "aws_eks_node_group" "main" {
   cluster_name    = aws_eks_cluster.main.name
-  node_group_name = "${var.project_name}-ng"
+  node_group_name = "{{ eks_node_group_name }}"
   node_role_arn   = aws_iam_role.eks_node.arn
   subnet_ids      = aws_subnet.private[*].id
   instance_types  = [var.node_instance_type]

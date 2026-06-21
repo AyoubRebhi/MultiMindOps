@@ -419,6 +419,9 @@ export const WORKFLOW_TIMELINE_PHASES = [
   // Terraform Validation is a real, data-backed sub-surface reached via
   // /workflows/run/:id (WorkflowTerraformPhase) — no standalone route, so no `to`.
   { key: 'terraform-validate', label: 'TF Validate', icon: 'fa-clipboard-check' },
+  // Terraform Plan — the same data-backed sub-surface (WorkflowTerraformPhase),
+  // shown after Validation. No standalone route, so no `to`.
+  { key: 'terraform-plan', label: 'TF Plan', icon: 'fa-diagram-project' },
   { key: 'cicd', label: 'GitHub Actions', icon: 'fa-github', brand: true, to: '/workflows/cicd' },
   { key: 'execution', label: 'Execution Center', icon: 'fa-tower-broadcast', to: '/workflows/execution' },
   { key: 'infrastructure', label: 'Infrastructure Dashboard', icon: 'fa-server', to: '/workflows/infrastructure-dashboard' },

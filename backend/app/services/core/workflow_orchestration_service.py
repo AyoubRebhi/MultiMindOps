@@ -565,10 +565,14 @@ class WorkflowOrchestrationService:
         state = orchestrator.run_terraform_phase_only(prior_state, task_id=task.id)
 
         current = str(state.get("current_phase") or "")
-        # Only a GENUINE failure blocks the phase. A registry-unreachable
-        # init/validate is reported as validation_status="degraded" (NOT a
-        # current_phase failure) so the workflow continues.
-        failed = current in ("terraform_failed", "terraform_validation_failed")
+        # ``current_phase`` is a WEAK signal here: the orchestrator's success /
+        # degraded path inherits it from prior_state and does NOT reset it, so a
+        # genuine FIRST-attempt failure (e.g. the old TemplateSelectionError)
+        # leaves a stale ``terraform_failed`` that a later successful re-run
+        # carries forward. We therefore treat the PRESENCE OF GENERATED HCL as
+        # authoritative for the phase outcome (see STEP 3) and only consult this
+        # flag when no HCL was produced at all.
+        render_failed = (current == "terraform_failed")
         validation_status = state.get("terraform_validation_status")
         failure_classification = state.get("terraform_failure_classification")
 
@@ -630,14 +634,18 @@ class WorkflowOrchestrationService:
             tf_state["files"] = sorted(tf_files)
         TaskService.stage_workflow_state(task, state)
 
-        # STEP 3 — phase status. Generation that produced HCL is `completed`
-        # (incl. the degraded-validation case → workflow continues). Only a
-        # genuine generation/validation defect is `failed`; even then the
-        # artifacts above remain persisted for inspection/retry.
-        if failed:
-            status = "failed"
-        elif tf_files:
+        # STEP 3 — phase status. The PRESENCE OF GENERATED HCL is authoritative:
+        # a run that produced .tf files is `completed` REGARDLESS of the
+        # validation verdict (degraded OR failed) AND regardless of any stale
+        # ``terraform_failed`` a previous attempt may have left on
+        # ``current_phase``. The dedicated TERRAFORM_VALIDATION phase owns the
+        # validation pass/fail. Only a run that produced NO usable HCL via a
+        # genuine generation/contract failure is `failed`; a run where terraform
+        # was simply not requested is `completed_no_files`.
+        if tf_files:
             status = "completed"
+        elif render_failed:
+            status = "failed"
         else:
             # Generation ran but produced no terraform files (e.g. the plan did
             # not request terraform). Not an error — there is just nothing to

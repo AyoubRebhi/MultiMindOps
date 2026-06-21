@@ -455,6 +455,84 @@ export function mapTerraformValidationReport(list = []) {
   };
 }
 
+/* ── Terraform Plan (Phase 2C) ──────────────────────────────────────────────── */
+
+/**
+ * Normalize a backend Infrastructure Summary (the categorized resource breakdown
+ * `terraform show -json` produces after a successful plan) into a stable
+ * camelCase shape the cards consume. The SAME backend shape is emitted in two
+ * places — embedded in `phases_state.TERRAFORM_PLAN.infrastructure_summary` and
+ * as the standalone `infrastructure_summary.json` artifact — so this one
+ * normalizer serves both. Tolerant of partials; returns null for a non-object.
+ *
+ *   backend: { total_resources, resource_counts, categories:[
+ *               { name, items:[ { type, label, count } ] } ] }
+ */
+export function normalizeInfrastructureSummary(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const categories = arr(raw.categories)
+    .map((c) => ({
+      name: c.name || 'Other',
+      items: arr(c.items).map((i) => ({
+        type: i.type || '',
+        label: i.label || i.type || 'Resource',
+        count: Number(i.count) || 0,
+      })),
+    }))
+    .filter((c) => c.items.length > 0);
+  if (!categories.length && typeof raw.total_resources !== 'number') return null;
+  const total =
+    typeof raw.total_resources === 'number'
+      ? raw.total_resources
+      : categories.reduce(
+          (s, c) => s + c.items.reduce((t, i) => t + i.count, 0),
+          0
+        );
+  return { totalResources: total, categories };
+}
+
+/**
+ * Extract the persisted `infrastructure_summary` artifact (subtype
+ * `infrastructure_summary.json`) from the project artifacts list. This is the
+ * FALLBACK source — callers prefer the copy embedded in
+ * `phases_state.TERRAFORM_PLAN.infrastructure_summary` (no second parse) and use
+ * this only when the phase entry has none. Returns null when no plan has run.
+ */
+export function mapInfrastructureSummary(list = []) {
+  const row = arr(list).find(
+    (a) => a && a.artifact_type === 'infrastructure_summary'
+  );
+  if (!row) return null;
+  try {
+    return normalizeInfrastructureSummary(JSON.parse(row.content || ''));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the raw `plan.json` (terraform show -json) artifact the backend writes
+ * after a successful plan (artifact_type `terraform_plan`, subtype `plan.json`).
+ * Returns the machine-readable plan text + provenance, or null when no plan has
+ * run yet. The opaque binary `tfplan` stays on the filesystem and is not exposed.
+ */
+export function mapTerraformPlanArtifact(list = []) {
+  const row = arr(list).find(
+    (a) =>
+      a &&
+      a.artifact_type === 'terraform_plan' &&
+      String(a.artifact_subtype || '').toLowerCase().includes('plan.json')
+  );
+  if (!row) return null;
+  const content = row.content || '';
+  return {
+    id: row.id,
+    content,
+    lines: content ? content.replace(/\n$/, '').split('\n').length : 0,
+    updatedAt: row.updated_at || null,
+  };
+}
+
 /* ── WebSocket URL (live Terraform validation logs) ───────────────────────────
    The WS route is mounted at the ROOT ("/ws/terraform/...", no /api prefix), so
    strip the trailing /api from API_BASE_URL and swap the scheme http→ws. This
@@ -465,7 +543,11 @@ function terraformWsBase() {
   return root.replace(/^http/i, 'ws');
 }
 
-/** Authenticated WebSocket URL for a task's live Terraform-validation log stream. */
+/**
+ * Authenticated WebSocket URL for a task's live Terraform log stream. The same
+ * route serves BOTH Terraform durable phases, namespaced by `jobPhase`:
+ * `terraform_validate` (default) and `terraform_plan`. Same socket, same frames.
+ */
 export function terraformValidateWsUrl(taskId, jobPhase = 'terraform_validate') {
   const token = tokenStore.getAccess();
   const q = token ? `?token=${encodeURIComponent(token)}` : '';
@@ -625,6 +707,28 @@ export const workflowApi = {
       `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
         workflowId
       )}/phases/TERRAFORM_VALIDATION`,
+      {}
+    );
+    return mapPhaseRun(data);
+  },
+
+  /**
+   * POST /projects/:projectId/workflows/:workflowId/phases/TERRAFORM_PLAN —
+   * enqueue the durable Terraform plan job (terraform init + plan -out=tfplan,
+   * streamed). Mirrors validation EXACTLY: the BACKEND records
+   * `phases_state.TERRAFORM_PLAN = running` and returns the `task_id` the caller
+   * uses to open the live-log WebSocket (terraformValidateWsUrl(taskId,
+   * 'terraform_plan')). On success the worker writes the raw `plan.json` +
+   * `infrastructure_summary` artifacts and embeds the categorized summary into
+   * the TERRAFORM_PLAN phase entry. Prerequisite (server-side):
+   * TERRAFORM_VALIDATION (after TERRAFORM_GENERATION) must be completed. Returns
+   * the mapped phase-run response ({ taskId, currentPhase, status, phasesState }).
+   */
+  async runTerraformPlan(projectId, workflowId) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/phases/TERRAFORM_PLAN`,
       {}
     );
     return mapPhaseRun(data);

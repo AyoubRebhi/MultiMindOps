@@ -219,8 +219,25 @@ class ArchitectureDecisionAgent(BaseAgent):
         )
 
         # ── Step 2: Build 3 blueprint variants + cost-estimate each ──────────
+        # TASK 3 — never surface a (architecture, tier) the renderer cannot
+        # build. With the balanced-baseline fallback in place this only drops a
+        # strategy when an architecture lacks even a baseline template set (a
+        # packaging error), but it guarantees the user is never offered a plan
+        # that would hard-fail at the Terraform generation phase.
+        renderable = self._renderable_strategies(arch_style)
+        dropped = [s["id"] for s in _STRATEGIES if s["id"] not in renderable]
+        if dropped:
+            logger.warning(
+                "[ArchitectureDecisionAgent] Architecture '%s' cannot render "
+                "tiers %s (no template set and no balanced baseline) — these "
+                "strategies will not be offered.",
+                arch_style, dropped,
+            )
+
         enriched_plans: List[Dict[str, Any]] = []
         for strategy in _STRATEGIES:
+            if strategy["id"] not in renderable:
+                continue
             variant_profile = dict(profile)
             variant_profile["scalability_level"] = strategy["scalability_override"]
 
@@ -288,10 +305,49 @@ class ArchitectureDecisionAgent(BaseAgent):
                 enriched["cost_profile"],
             )
 
+        if not enriched_plans:
+            # Unreachable while every shipped architecture has a balanced
+            # baseline. Fail loudly rather than return an empty decision the
+            # user cannot act on.
+            from backend.app.agents.errors import AgentError
+            raise AgentError(
+                f"No renderable deployment strategy for architecture "
+                f"'{arch_style}'.",
+                metadata={"renderable_matrix": self._renderable_matrix_summary(arch_style)},
+            )
+
+        # recommended_plan must be one we actually kept.
+        recommended = (
+            "balanced"
+            if any(p["id"] == "balanced" for p in enriched_plans)
+            else enriched_plans[0]["id"]
+        )
         return {
             "plans": enriched_plans,
-            "recommended_plan": "balanced",
+            "recommended_plan": recommended,
         }
+
+    # ── Renderable-combination guards (TASK 3) ────────────────────────────────
+
+    @staticmethod
+    def _renderable_strategies(arch_style: str) -> set:
+        """Subset of strategy ids the Terraform renderer can build for this
+        architecture (exact template set OR balanced-baseline fallback)."""
+        from backend.app.services.terraform_generation.renderers.template_renderer import (
+            TerraformTemplateRenderer,
+        )
+        return {
+            s["id"]
+            for s in _STRATEGIES
+            if TerraformTemplateRenderer.is_renderable(arch_style, s["id"])
+        }
+
+    @staticmethod
+    def _renderable_matrix_summary(arch_style: str) -> Dict[str, str]:
+        from backend.app.services.terraform_generation.renderers.template_renderer import (
+            TerraformTemplateRenderer,
+        )
+        return TerraformTemplateRenderer.renderable_matrix().get(arch_style, {})
 
     # ── Blueprint adaptation ──────────────────────────────────────────────────
 

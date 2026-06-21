@@ -3,6 +3,8 @@ import {
   workflowApi,
   mapTerraformArtifacts,
   mapTerraformValidationReport,
+  mapTerraformPlanArtifact,
+  mapInfrastructureSummary,
 } from '@/services/api/workflowApi';
 
 /**
@@ -88,9 +90,12 @@ export function useDockerPhase(projectId, workflowId) {
  * artifacts (GET project artifacts, read once → split into the generated `.tf`
  * files and the `validation_report`). Phase status is read EXCLUSIVELY from
  * phases_state; artifacts/report are for display only. Returns
- * { data: { phasesState, currentPhase, status, artifacts, validationReport },
- * loading, error, refetch } — `refetch` re-reads both after the surface triggers
- * TERRAFORM_GENERATION or TERRAFORM_VALIDATION (or when a validation stream ends).
+ * { data: { phasesState, currentPhase, status, artifacts, validationReport,
+ * planArtifact, infrastructureSummary }, loading, error, refetch } — `refetch`
+ * re-reads both after the surface triggers TERRAFORM_GENERATION /
+ * TERRAFORM_VALIDATION / TERRAFORM_PLAN (or when a validation/plan stream ends).
+ * `infrastructureSummary` here is the artifact-derived FALLBACK; the surface
+ * prefers the copy embedded in phases_state.TERRAFORM_PLAN.
  *
  * @param {string} projectId
  * @param {string} workflowId
@@ -110,6 +115,8 @@ export function useTerraformPhase(projectId, workflowId) {
         status: wf?.status || null,
         artifacts: mapTerraformArtifacts(rawArtifacts),
         validationReport: mapTerraformValidationReport(rawArtifacts),
+        planArtifact: mapTerraformPlanArtifact(rawArtifacts),
+        infrastructureSummary: mapInfrastructureSummary(rawArtifacts),
       };
     },
     [projectId, workflowId],

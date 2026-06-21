@@ -26,8 +26,12 @@ const MAX_RECONNECTS = 5;
 const PING_MS = 20000;
 
 /**
- * useTerraformValidation — owns the LIVE Terraform-validation log experience for
- * ONE task, over the real WebSocket `WS /ws/terraform/:taskId/terraform_validate`.
+ * useTerraformValidation — owns the LIVE Terraform durable-phase log experience
+ * for ONE task, over the real WebSocket `WS /ws/terraform/:taskId/:jobPhase`.
+ * The same hook drives BOTH streamed Terraform phases — validation
+ * (`terraform_validate`, the default) and plan (`terraform_plan`) — by passing
+ * `opts.jobPhase`; everything else (protocol, reconnect policy, console) is
+ * identical because the backend streams both phases over the same socket.
  * This reuses the EXACT streaming protocol of the Docker build socket
  * (log / complete / error / info / pong, history replayed on connect), so the
  * message handling mirrors useDockerBuild. It does NOT own the authoritative
@@ -54,7 +58,8 @@ const PING_MS = 20000;
  * is swapped in as frames arrive; a failed/empty reconnect preserves what's shown.
  *
  * @param {{ onComplete?: (finalStatus: 'success'|'failed') => void,
- *           phaseStatus?: string }} [opts]
+ *           phaseStatus?: string,
+ *           jobPhase?: 'terraform_validate'|'terraform_plan' }} [opts]
  */
 export function useTerraformValidation(opts = {}) {
   const [logs, setLogs] = useState([]);
@@ -71,11 +76,15 @@ export function useTerraformValidation(opts = {}) {
   // The AUTHORITATIVE phase status (phases_state.TERRAFORM_VALIDATION). Reconnect
   // decisions read THIS ref, never the ephemeral WS `status`.
   const phaseStatusRef = useRef(opts.phaseStatus);
+  // Which durable phase to stream (terraform_validate | terraform_plan). Read via
+  // a ref so `connect` (a stable useCallback) always uses the current value.
+  const jobPhaseRef = useRef(opts.jobPhase || 'terraform_validate');
   // Per-connection log buffer (see reconnect policy above).
   const connLogsRef = useRef([]);
   const onCompleteRef = useRef(opts.onComplete);
 
   useEffect(() => { phaseStatusRef.current = opts.phaseStatus; }, [opts.phaseStatus]);
+  useEffect(() => { jobPhaseRef.current = opts.jobPhase || 'terraform_validate'; }, [opts.jobPhase]);
   useEffect(() => { onCompleteRef.current = opts.onComplete; }, [opts.onComplete]);
 
   const clearTimers = useCallback(() => {
@@ -111,7 +120,7 @@ export function useTerraformValidation(opts = {}) {
 
     let ws;
     try {
-      ws = new WebSocket(terraformValidateWsUrl(id));
+      ws = new WebSocket(terraformValidateWsUrl(id, jobPhaseRef.current));
     } catch {
       setConnectionState('error');
       return;

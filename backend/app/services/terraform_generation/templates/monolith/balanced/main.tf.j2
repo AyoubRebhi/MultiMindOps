@@ -117,7 +117,7 @@ resource "aws_security_group" "ecs_tasks" {
 # ── ECR repository ────────────────────────────────────────────────────────────
 
 resource "aws_ecr_repository" "app" {
-  name                 = var.project_name
+  name                 = "{{ ecr_repository_name }}"
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
@@ -132,7 +132,7 @@ resource "aws_ecr_repository" "app" {
 # ── ALB ───────────────────────────────────────────────────────────────────────
 
 resource "aws_lb" "main" {
-  name               = "${var.project_name}-alb"
+  name               = "{{ alb_name }}"
   internal           = false
   load_balancer_type = "application"
   subnets            = aws_subnet.public[*].id
@@ -140,7 +140,7 @@ resource "aws_lb" "main" {
 }
 
 resource "aws_lb_target_group" "app" {
-  name        = "${var.project_name}-tg"
+  name        = "{{ target_group_name }}"
   port        = var.container_port
   protocol    = "HTTP"
   target_type = "ip"
@@ -170,11 +170,11 @@ resource "aws_lb_listener" "http" {
 # ── ECS cluster + task ────────────────────────────────────────────────────────
 
 resource "aws_ecs_cluster" "main" {
-  name = "${var.project_name}-cluster"
+  name = "{{ ecs_cluster_name }}"
 }
 
 resource "aws_iam_role" "ecs_task_execution" {
-  name = "${var.project_name}-ecs-task-execution"
+  name = "{{ ecs_task_execution_role_name }}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -194,7 +194,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
 }
 
 resource "aws_ecs_task_definition" "app" {
-  family                   = var.project_name
+  family                   = "{{ ecs_task_family }}"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "512"
@@ -213,7 +213,7 @@ resource "aws_ecs_task_definition" "app" {
 }
 
 resource "aws_ecs_service" "app" {
-  name            = "${var.project_name}-service"
+  name            = "{{ ecs_service_name }}"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app.arn
   desired_count   = var.desired_count
@@ -238,7 +238,7 @@ resource "aws_ecs_service" "app" {
 # ── RDS ───────────────────────────────────────────────────────────────────────
 
 resource "aws_db_subnet_group" "main" {
-  name       = "${var.project_name}-db-subnet"
+  name       = "{{ db_subnet_group_name }}"
   subnet_ids = aws_subnet.private[*].id
 }
 
@@ -257,7 +257,7 @@ resource "aws_security_group" "rds" {
 }
 
 resource "aws_db_instance" "main" {
-  identifier             = "${var.project_name}-db"
+  identifier             = "{{ rds_identifier }}"
   engine                 = var.db_engine
   engine_version         = "15"
   instance_class         = var.db_instance_class

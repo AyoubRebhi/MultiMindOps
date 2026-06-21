@@ -5,17 +5,18 @@ import WorkflowPhaseHeader from '@/components/workflow/WorkflowPhaseHeader';
 import TerraformFileViewer from '@/components/workflow/TerraformFileViewer';
 import TerraformValidationConsole from '@/components/workflow/terraform/TerraformValidationConsole';
 import TerraformValidationReport from '@/components/workflow/terraform/TerraformValidationReport';
+import TerraformInfrastructureSummary from '@/components/workflow/terraform/TerraformInfrastructureSummary';
 import EmptyState from '@/components/common/EmptyState';
 import ErrorState from '@/components/common/ErrorState';
 import Skeleton from '@/components/common/Skeleton';
 import { useTerraformPhase } from '@/hooks/useWorkflowRun';
 import { useTerraformValidation } from '@/hooks/useTerraformValidation';
 import { useToast } from '@/hooks/useToast';
-import { workflowApi } from '@/services/api/workflowApi';
+import { workflowApi, normalizeInfrastructureSummary } from '@/services/api/workflowApi';
 import { getStatusMeta } from '@/utils/constants';
 
-/** Map a phases_state validation status to a timeline node state. */
-function validateTimelineState(status) {
+/** Map a phases_state phase status to a timeline node state. */
+function phaseTimelineState(status) {
   if (status === 'completed') return 'completed';
   if (status === 'failed') return 'failed';
   if (status === 'running') return 'running';
@@ -41,7 +42,14 @@ function taskIdFromStreamKey(streamKey) {
  * useTerraformValidation; on completion the surface refetches phases_state + the
  * report. The frontend never mutates workflow state or fabricates HCL.
  *
- * Out of scope (later phases): Terraform Plan, Infrastructure Summary, Cost.
+ * Phase 2C (Plan) is wired the SAME way as Validation: once
+ * TERRAFORM_VALIDATION is completed the surface offers "Run Terraform Plan"
+ * (POST .../phases/TERRAFORM_PLAN → durable streamed job), live logs flow over
+ * the SAME socket namespaced as `terraform_plan`, status is read from
+ * phases_state.TERRAFORM_PLAN, and on completion the persisted Infrastructure
+ * Summary + raw plan.json are shown.
+ *
+ * Out of scope (later phases): Terraform Apply, Cost.
  *
  * @param {{ workflowId: string, workflow: object, onAdvance?: () => void }} props
  */
@@ -57,6 +65,10 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
   const genStatus = gen?.status || null; // completed | completed_no_files | failed | running | null
   const generated = genStatus === 'completed' || genStatus === 'completed_no_files';
   const failed = genStatus === 'failed';
+  // Generation can complete with HCL while the inline validation reported issues.
+  // That is NOT a generation failure — surface it as a non-blocking warning and
+  // steer the user to the dedicated Terraform Validation phase.
+  const genValidationFailed = gen?.validation_status === 'failed';
   const artifacts = data?.artifacts || [];
 
   // ── Validation phase state — read EXCLUSIVELY from phases_state ────────────
@@ -68,6 +80,22 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
   const [validating, setValidating] = useState(false);
   const [, setTaskId] = useState(null);
   const autoConnectedRef = useRef(null);
+
+  // ── Plan phase state — read EXCLUSIVELY from phases_state ──────────────────
+  const tfp = data?.phasesState?.TERRAFORM_PLAN || null;
+  const tfpStatus = tfp?.status || null; // running | completed | failed | null
+  const resumedPlanTaskId = taskIdFromStreamKey(tfp?.stream_key);
+  // Infrastructure Summary: prefer the copy embedded in the phase entry (no
+  // second parse), fall back to the standalone artifact (useTerraformPhase).
+  const infrastructureSummary =
+    normalizeInfrastructureSummary(tfp?.infrastructure_summary) ||
+    data?.infrastructureSummary ||
+    null;
+  const planArtifact = data?.planArtifact || null;
+
+  const [planning, setPlanning] = useState(false);
+  const [, setPlanTaskId] = useState(null);
+  const autoConnectedPlanRef = useRef(null);
 
   async function handleGenerate() {
     if (!projectId || generating) return;
@@ -133,6 +161,53 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
     }
   }, [tfvStatus, resumedTaskId, connectValidation]);
 
+  // ── Plan: same streamed-job pattern as Validation, namespaced terraform_plan ─
+  const handlePlanComplete = useCallback(async () => {
+    await refetch();
+  }, [refetch]);
+
+  const plan = useTerraformValidation({
+    onComplete: handlePlanComplete,
+    phaseStatus: tfpStatus,
+    jobPhase: 'terraform_plan',
+  });
+  const { connect: connectPlan } = plan;
+
+  // Run (or re-run) plan: enqueue the durable job, capture its task_id, then
+  // attach the live socket. The backend owns the transition; we refetch so
+  // phases_state shows TERRAFORM_PLAN = running immediately.
+  async function handleRunPlan() {
+    if (!projectId || planning) return;
+    setPlanning(true);
+    try {
+      const res = await workflowApi.runTerraformPlan(projectId, workflowId);
+      if (res?.taskId) {
+        setPlanTaskId(res.taskId);
+        autoConnectedPlanRef.current = res.taskId;
+        connectPlan(res.taskId);
+      }
+      toast.success('Terraform plan started.');
+      await refetch();
+    } catch (e) {
+      toast.error(e?.message || 'Could not start Terraform plan. Please try again.');
+    } finally {
+      setPlanning(false);
+    }
+  }
+
+  // Resume: if plan is already running (after a reload), attach the live socket
+  // once using the task_id recovered from the phase's stream_key.
+  useEffect(() => {
+    if (
+      tfpStatus === 'running' &&
+      resumedPlanTaskId &&
+      autoConnectedPlanRef.current !== resumedPlanTaskId
+    ) {
+      autoConnectedPlanRef.current = resumedPlanTaskId;
+      connectPlan(resumedPlanTaskId);
+    }
+  }, [tfpStatus, resumedPlanTaskId, connectPlan]);
+
   /* ── Hard transport failure ──────────────────────────────────────────────── */
   if (error && !data) {
     return (
@@ -185,14 +260,22 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
     );
   }
 
-  /* ── Generated → metadata + .tf files + Validation (run / live logs / report) ── */
-  const validateState = validateTimelineState(tfvStatus);
+  /* ── Generated → metadata + .tf files + Validation + Plan ──────────────────── */
+  const validateState = phaseTimelineState(tfvStatus);
+  const planState = phaseTimelineState(tfpStatus);
+  // Plan becomes available once validation has completed; it also stays visible
+  // once it has any state of its own (so a reload mid/after-plan still shows it).
+  const showPlan = tfvStatus === 'completed' || !!tfpStatus;
   return (
     <TerraformShell
       status="completed"
       validateState={validateState}
+      planState={planState}
       actions={<RegenerateButton generating={generating} onClick={handleGenerate} />}
     >
+      {genValidationFailed && (
+        <GenerationValidationWarning classification={gen?.failure_classification} />
+      )}
       <GenerationSummary gen={gen} fileCount={artifacts.length} />
       <div className="mt-3">
         <TerraformFileViewer files={artifacts} />
@@ -205,6 +288,17 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
         running={validating || tfvStatus === 'running' || validation.running}
         onRun={handleRunValidation}
       />
+
+      {showPlan && (
+        <PlanSection
+          tfpStatus={tfpStatus}
+          plan={plan}
+          summary={infrastructureSummary}
+          planArtifact={planArtifact}
+          running={planning || tfpStatus === 'running' || plan.running}
+          onRun={handleRunPlan}
+        />
+      )}
     </TerraformShell>
   );
 }
@@ -293,9 +387,128 @@ function ValidationSection({ tfvStatus, validation, report, running, onRun }) {
   );
 }
 
+/* ── Plan: run button (gated on validation completed) + live logs + summary ──── */
+
+function PlanSection({ tfpStatus, plan, summary, planArtifact, running, onRun }) {
+  const meta = getStatusMeta(tfpStatus || 'not_started');
+  const runLabel =
+    tfpStatus === 'failed' ? 'Re-run plan'
+      : tfpStatus === 'completed' ? 'Re-run plan'
+        : 'Run Terraform Plan';
+
+  const liveLogs = plan.logs;
+  const consoleStatus = liveLogs.length
+    ? plan.status
+    : tfpStatus === 'completed'
+      ? 'success'
+      : tfpStatus === 'failed'
+        ? 'failed'
+        : plan.status;
+  const hasConsole = liveLogs.length > 0 || running;
+
+  return (
+    <>
+      <div className="section-label mt-4">
+        <span className="section-label-chip">
+          <i className="fa-solid fa-diagram-project" />
+        </span>
+        Terraform Plan
+        <span className="section-label-by">terraform init + plan · live logs</span>
+      </div>
+
+      <div className="surface d-flex align-items-center gap-3 flex-wrap mb-2">
+        <button
+          type="button"
+          className="bgrd btn px-4 py-2"
+          style={{ fontSize: '.85rem' }}
+          disabled={running}
+          onClick={onRun}
+        >
+          {running ? (
+            <><span className="spinner me-2" />Planning…</>
+          ) : (
+            <><i className="fa-solid fa-diagram-project me-2" />{runLabel}</>
+          )}
+        </button>
+        <span style={{ fontSize: '.8rem', color: 'var(--tx2)' }}>
+          {tfpStatus ? (
+            <>
+              <i className={`fa-solid ${meta.icon} me-2`} style={{ color: 'var(--tx3)' }} />
+              Plan status: <strong>{meta.label}</strong>
+            </>
+          ) : (
+            <>
+              <i className="fa-solid fa-circle-info me-2" style={{ color: 'var(--tx3)' }} />
+              Runs <span className="mono">terraform init</span> + <span className="mono">plan</span> and summarizes the infrastructure it would create.
+            </>
+          )}
+        </span>
+      </div>
+
+      {/* Live logs while a plan run is active (reuses the validation console). */}
+      {hasConsole && (
+        <TerraformValidationConsole
+          logs={liveLogs}
+          status={consoleStatus}
+          connectionState={liveLogs.length ? plan.connectionState : 'idle'}
+          exitCode={plan.exitCode}
+          onReconnect={plan.reconnect}
+          title="terraform plan"
+        />
+      )}
+
+      {/* Persisted Infrastructure Summary — present after a successful plan. */}
+      {summary && (
+        <div className="mt-2">
+          <TerraformInfrastructureSummary summary={summary} />
+        </div>
+      )}
+
+      {/* Raw machine-readable plan (terraform show -json) — collapsed by default. */}
+      {planArtifact?.content && (
+        <details className="surface mt-2">
+          <summary
+            style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, fontSize: '.84rem' }}
+          >
+            <i className="fa-solid fa-file-code" style={{ color: 'var(--tx3)' }} />
+            <span className="mono" style={{ fontWeight: 600 }}>plan.json</span>
+            {planArtifact.lines ? (
+              <span className="text-muted-3" style={{ fontSize: '.74rem' }}>
+                {planArtifact.lines} line{planArtifact.lines === 1 ? '' : 's'}
+              </span>
+            ) : null}
+          </summary>
+          <pre
+            className="mono mt-2"
+            style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              fontSize: '.74rem',
+              background: 'var(--bg2, rgba(0,0,0,.18))',
+              border: '1px solid var(--bd)',
+              borderRadius: 6,
+              padding: '10px 12px',
+              maxHeight: 360,
+              overflow: 'auto',
+            }}
+          >
+            {planArtifact.content}
+          </pre>
+        </details>
+      )}
+    </>
+  );
+}
+
 /* ── Layout shell: timeline + phase header + content ───────────────────────── */
 
-function TerraformShell({ status, validateState = 'not_started', actions, children }) {
+function TerraformShell({
+  status,
+  validateState = 'not_started',
+  planState = 'not_started',
+  actions,
+  children,
+}) {
   const tfState =
     status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'running';
   return (
@@ -309,6 +522,7 @@ function TerraformShell({ status, validateState = 'not_started', actions, childr
           docker: 'completed',
           terraform: tfState,
           'terraform-validate': validateState,
+          'terraform-plan': planState,
         }}
       />
       <WorkflowPhaseHeader
@@ -338,6 +552,38 @@ function RegenerateButton({ generating, onClick }) {
       {generating ? <span className="spinner me-2" /> : <i className="fa-solid fa-rotate-right me-2" />}
       Regenerate
     </button>
+  );
+}
+
+/**
+ * Non-blocking warning: generation produced HCL but the inline validation
+ * reported issues. The `.tf` files are real, persisted output — generation did
+ * NOT fail. We steer the user to the dedicated Terraform Validation phase (whose
+ * Run button is rendered below) to see the full report and resolve the findings.
+ */
+function GenerationValidationWarning({ classification }) {
+  return (
+    <div
+      className="surface d-flex align-items-start gap-3 mb-3"
+      style={{ borderLeft: '3px solid #fbbf24', padding: '12px 16px' }}
+    >
+      <span style={{ color: '#fbbf24', fontSize: '1rem', lineHeight: 1.4 }}>
+        <i className="fa-solid fa-triangle-exclamation" />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: '.88rem', fontWeight: 600 }}>
+          Terraform generated — validation found issues
+        </div>
+        <p className="mb-0 mt-1" style={{ fontSize: '.8rem', color: 'var(--tx2)' }}>
+          The configuration was rendered and saved successfully, but the inline
+          check reported{' '}
+          <strong>{classification || 'validation findings'}</strong>. This does
+          not block generation. Review the files below, then run{' '}
+          <strong>Terraform Validation</strong> to see the full report and
+          resolve the findings.
+        </p>
+      </div>
+    </div>
   );
 }
 

@@ -210,8 +210,9 @@ def test_high_performance_without_multi_az_rejected() -> None:
         renderer.render(bp, task_id="t1")
 
 
-def test_missing_template_set_raises_selection_error() -> None:
-    """high_performance templates not yet implemented — must raise loudly."""
+def test_missing_tier_falls_back_to_balanced() -> None:
+    """A tier with no template set is downgraded to the architecture's balanced
+    baseline instead of hard-failing (TASK 1 — SAFE FALLBACK)."""
     bp = parse_blueprint({
         "compute": {"type": "ECS", "instance_type": "m5.large"},
         "networking": {"vpc": True, "multi_az": True, "load_balancer": "ALB"},
@@ -219,28 +220,123 @@ def test_missing_template_set_raises_selection_error() -> None:
         "storage": {"object_storage": "S3"},
         "architecture_style": "monolith",
         "aws_region": "us-east-1",
-        "strategy_tier": "high_performance",
+        "strategy_tier": "high_performance",  # no template set on disk
     })
     renderer = TerraformTemplateRenderer()
+    result = renderer.render(bp, task_id="t1")
+
+    # Generation succeeds via fallback, architecture preserved, tier downgraded.
+    assert result.metadata["tier_fallback_applied"] is True
+    assert result.metadata["template_tier"] == "balanced"
+    assert result.metadata["strategy_tier"] == "high_performance"  # requested kept
+    assert result.metadata["template_family"] == "monolith"        # arch unchanged
+    assert "aws_ecs_cluster" in result.artifacts["terraform_main"]
+
+
+def test_exact_tier_match_does_not_flag_fallback() -> None:
+    """A tier that has its own template set is rendered directly, no fallback."""
+    renderer = TerraformTemplateRenderer()
+    result = renderer.render(_monolith_low_cost(), task_id="t1")
+    assert result.metadata["tier_fallback_applied"] is False
+    assert result.metadata["template_tier"] == "low_cost"
+
+
+def test_unrenderable_architecture_still_raises_selection_error(tmp_path) -> None:
+    """When an architecture has no baseline to fall back to, the renderer must
+    still raise loudly with the available-sets metadata."""
+    # Build a templates root that has ONLY monolith/low_cost — no balanced
+    # baseline for the requested 'serverless' architecture.
+    src = (
+        TerraformTemplateRenderer.TEMPLATES_ROOT / "monolith" / "low_cost"
+    )
+    dst = tmp_path / "monolith" / "low_cost"
+    dst.mkdir(parents=True)
+    for f in src.glob("*.tf.j2"):
+        (dst / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+
+    renderer = TerraformTemplateRenderer(templates_root=tmp_path)
     with pytest.raises(TemplateSelectionError) as exc:
-        renderer.render(bp, task_id="t1")
-    assert "high_performance" in str(exc.value) or "monolith" in str(exc.value)
+        renderer.render(_serverless_balanced(), task_id="t1")
+    assert "available" in exc.value.metadata
 
 
-def test_renderer_lists_available_template_sets_on_missing() -> None:
-    bp = parse_blueprint({
-        "compute": {"type": "EKS", "node_type": "t3.medium", "min_nodes": 2, "max_nodes": 5},
-        "networking": {"vpc": True, "multi_az": True, "load_balancer": "ALB"},
+# ── microservices/low_cost dedicated template set (TASK 2) ───────────────────
+
+
+def _microservices_low_cost() -> InfrastructureBlueprint:
+    return parse_blueprint({
+        "compute": {
+            "type": "EKS",
+            "node_type": "t3.small",
+            "min_nodes": 2,
+            "max_nodes": 4,
+        },
+        "networking": {"vpc": True, "multi_az": False, "load_balancer": "ALB"},
         "scaling": {"strategy": "horizontal", "auto_scaling": True},
         "storage": {"object_storage": "S3"},
         "architecture_style": "microservices",
         "aws_region": "us-east-1",
-        "strategy_tier": "low_cost",  # not yet implemented
+        "strategy_tier": "low_cost",
     })
+
+
+def test_microservices_low_cost_renders_directly() -> None:
+    """microservices/low_cost now has its own template set — no fallback."""
     renderer = TerraformTemplateRenderer()
-    with pytest.raises(TemplateSelectionError) as exc:
-        renderer.render(bp, task_id="t1")
-    assert "available" in exc.value.metadata
+    result = renderer.render(_microservices_low_cost(), task_id="t1")
+    assert result.metadata["tier_fallback_applied"] is False
+    assert result.metadata["template_tier"] == "low_cost"
+    assert result.metadata["template_family"] == "microservices"
+
+
+def test_microservices_low_cost_is_single_node_single_nat_free() -> None:
+    """The cost contract: one node, no autoscaling, no NAT gateway."""
+    renderer = TerraformTemplateRenderer()
+    main_tf = renderer.render(_microservices_low_cost(), task_id="t1").artifacts["terraform_main"]
+    assert "aws_eks_cluster" in main_tf
+    assert "aws_eks_node_group" in main_tf
+    # Single fixed-size node group.
+    assert "desired_size = 1" in main_tf
+    assert "max_size     = 1" in main_tf
+    # No NAT gateway and no private subnets in the low_cost set.
+    assert "aws_nat_gateway" not in main_tf
+    assert 'resource "aws_subnet" "private"' not in main_tf
+
+
+def test_microservices_low_cost_uses_node_instance_type_from_blueprint() -> None:
+    renderer = TerraformTemplateRenderer()
+    tfvars = renderer.render(_microservices_low_cost(), task_id="t1").artifacts["terraform_tfvars"]
+    assert 'node_instance_type = "t3.small"' in tfvars
+    assert 'strategy_tier      = "low_cost"' in tfvars
+
+
+# ── Template-matrix introspection (TASK 3) ───────────────────────────────────
+
+
+def test_every_architecture_has_a_balanced_baseline() -> None:
+    """Invariant the SAFE FALLBACK depends on: every architecture must ship a
+    balanced template set, otherwise a missing tier cannot be rescued."""
+    assert TerraformTemplateRenderer.architectures_missing_baseline() == []
+
+
+def test_renderable_matrix_marks_direct_and_fallback() -> None:
+    matrix = TerraformTemplateRenderer.renderable_matrix()
+    # Shipped today: monolith has low_cost+balanced, microservices has both now.
+    assert matrix["monolith"]["low_cost"] == "direct"
+    assert matrix["monolith"]["balanced"] == "direct"
+    assert matrix["monolith"]["high_performance"] == "fallback"
+    assert matrix["microservices"]["low_cost"] == "direct"
+    assert matrix["microservices"]["high_performance"] == "fallback"
+    assert matrix["serverless"]["balanced"] == "direct"
+    assert matrix["serverless"]["low_cost"] == "fallback"
+
+
+def test_is_renderable_true_for_all_shipped_combinations() -> None:
+    for arch in ("monolith", "microservices", "serverless"):
+        for tier in ("low_cost", "balanced", "high_performance"):
+            assert TerraformTemplateRenderer.is_renderable(arch, tier), (
+                f"{arch}/{tier} should be renderable (direct or fallback)"
+            )
 
 
 # ── Validation pipeline (graceful tool detection) ────────────────────────────

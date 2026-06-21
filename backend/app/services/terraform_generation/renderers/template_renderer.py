@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from jinja2 import (
     Environment,
@@ -98,6 +98,35 @@ class RenderResult:
     files_rendered: List[str] = field(default_factory=list)
 
 
+# ── Template-set resolution ────────────────────────────────────────────────────
+
+
+# Every architecture ships a "balanced" template set; it is the universal
+# baseline that a missing cost tier falls back to (TASK 1 — SAFE FALLBACK).
+FALLBACK_STRATEGY_TIER: str = "balanced"
+
+# Every cost tier the ArchitectureDecisionAgent can emit. Used to report the
+# renderable matrix (TASK 3 — MATRIX VALIDATION).
+ALL_STRATEGY_TIERS: tuple[str, ...] = ("low_cost", "balanced", "high_performance")
+
+
+def _dir_has_templates(candidate: Path) -> bool:
+    """True when ``candidate`` is a directory holding at least one ``*.tf.j2``.
+
+    An empty directory is NOT a valid template set — the tree may have been
+    scaffolded ahead of the templates being written.
+    """
+    return candidate.is_dir() and any(candidate.glob("*.tf.j2"))
+
+
+class _ResolvedTemplate(NamedTuple):
+    """Outcome of resolving an (architecture, tier) request to a directory."""
+
+    template_dir: Path
+    effective_tier: str       # tier whose templates were actually selected
+    fallback_applied: bool    # True when the requested tier was downgraded
+
+
 # ── Renderer ──────────────────────────────────────────────────────────────────
 
 
@@ -122,6 +151,9 @@ class TerraformTemplateRenderer:
         "terraform.tfvars",
         "outputs.tf",
     )
+
+    # Tier that every architecture must provide; a missing tier downgrades to it.
+    FALLBACK_TIER: str = FALLBACK_STRATEGY_TIER
 
     def __init__(self, templates_root: Optional[Path] = None) -> None:
         root = Path(templates_root) if templates_root else self.TEMPLATES_ROOT
@@ -162,7 +194,8 @@ class TerraformTemplateRenderer:
                 metadata={"architecture_style": arch},
             )
 
-        template_dir = self._resolve_template_dir(arch, tier)
+        resolved = self._resolve_template_dir(arch, tier)
+        template_dir = resolved.template_dir
         self._check_blueprint_compatibility(blueprint, template_dir)
 
         variables = build_variable_context(
@@ -215,7 +248,9 @@ class TerraformTemplateRenderer:
         metadata = {
             "artifact_type": "terraform",
             "template_family": arch,
-            "strategy_tier": tier,
+            "strategy_tier": tier,                      # requested tier (preserved)
+            "template_tier": resolved.effective_tier,   # tier actually rendered
+            "tier_fallback_applied": resolved.fallback_applied,
             "render_mode": "deterministic_template",
             "template_dir": str(template_dir.relative_to(self._templates_root)),
             "generated_by": "TerraformTemplateRenderer",
@@ -223,8 +258,10 @@ class TerraformTemplateRenderer:
         }
 
         logger.info(
-            "[TerraformTemplateRenderer] Rendered %d files for %s/%s (task=%s)",
-            len(files_rendered), arch, tier, task_id,
+            "[TerraformTemplateRenderer] Rendered %d files for %s/%s "
+            "(requested_tier=%s, fallback=%s, task=%s)",
+            len(files_rendered), arch, resolved.effective_tier, tier,
+            resolved.fallback_applied, task_id,
         )
         return RenderResult(
             artifacts=artifacts,
@@ -232,40 +269,140 @@ class TerraformTemplateRenderer:
             files_rendered=files_rendered,
         )
 
-    # ── Internals ─────────────────────────────────────────────────────────
+    # ── Matrix introspection (TASK 3 — renderable-combination validation) ──
 
-    def _resolve_template_dir(self, arch: str, tier: str) -> Path:
-        candidate = self._templates_root / arch / tier
-        # An empty directory must not be treated as a valid template set —
-        # the directory may exist because the operator scaffolded the tree
-        # ahead of writing templates.
-        has_templates = candidate.exists() and candidate.is_dir() and any(
-            candidate.glob("*.tf.j2")
-        )
-        if not has_templates:
-            available = self._enumerate_available_template_sets()
-            raise TemplateSelectionError(
-                f"No template set found for architecture='{arch}', strategy_tier='{tier}'.",
-                metadata={
-                    "requested": {"architecture_style": arch, "strategy_tier": tier},
-                    "available": available,
-                    "templates_root": str(self._templates_root),
-                },
-            )
-        return candidate
-
-    def _enumerate_available_template_sets(self) -> List[str]:
-        """List template directories that contain at least one .tf.j2 file."""
-        available: List[str] = []
-        for arch_dir in sorted(self._templates_root.iterdir()):
+    @classmethod
+    def available_template_sets(
+        cls, templates_root: Optional[Path] = None
+    ) -> List[str]:
+        """List ``"<arch>/<tier>"`` directories that contain real templates."""
+        root = Path(templates_root) if templates_root else cls.TEMPLATES_ROOT
+        sets: List[str] = []
+        if not root.exists():
+            return sets
+        for arch_dir in sorted(root.iterdir()):
             if not arch_dir.is_dir():
                 continue
             for tier_dir in sorted(arch_dir.iterdir()):
-                if not tier_dir.is_dir():
-                    continue
-                if any(tier_dir.glob("*.tf.j2")):
-                    available.append(f"{arch_dir.name}/{tier_dir.name}")
-        return available
+                if _dir_has_templates(tier_dir):
+                    sets.append(f"{arch_dir.name}/{tier_dir.name}")
+        return sets
+
+    @classmethod
+    def is_renderable(
+        cls,
+        architecture_style: str,
+        strategy_tier: Optional[str],
+        templates_root: Optional[Path] = None,
+    ) -> bool:
+        """Whether the renderer can produce HCL for this (architecture, tier).
+
+        True when the exact ``<arch>/<tier>`` set exists, OR the architecture
+        has a ``balanced`` baseline that a missing tier falls back to. This is
+        the predicate the ArchitectureDecisionAgent uses so it never offers a
+        combination the renderer cannot build (TASK 3).
+        """
+        root = Path(templates_root) if templates_root else cls.TEMPLATES_ROOT
+        tier = strategy_tier or cls.FALLBACK_TIER
+        if _dir_has_templates(root / architecture_style / tier):
+            return True
+        return _dir_has_templates(root / architecture_style / cls.FALLBACK_TIER)
+
+    @classmethod
+    def renderable_matrix(
+        cls, templates_root: Optional[Path] = None
+    ) -> Dict[str, Dict[str, str]]:
+        """Map ``arch → {tier: 'direct'|'fallback'|'unavailable'}`` for every
+        architecture on disk: ``direct`` = own template set, ``fallback`` =
+        served by the balanced baseline, ``unavailable`` = cannot render.
+        """
+        root = Path(templates_root) if templates_root else cls.TEMPLATES_ROOT
+        matrix: Dict[str, Dict[str, str]] = {}
+        if not root.exists():
+            return matrix
+        for arch_dir in sorted(root.iterdir()):
+            if not arch_dir.is_dir():
+                continue
+            has_baseline = _dir_has_templates(arch_dir / cls.FALLBACK_TIER)
+            row: Dict[str, str] = {}
+            for tier in ALL_STRATEGY_TIERS:
+                if _dir_has_templates(arch_dir / tier):
+                    row[tier] = "direct"
+                elif has_baseline:
+                    row[tier] = "fallback"
+                else:
+                    row[tier] = "unavailable"
+            matrix[arch_dir.name] = row
+        return matrix
+
+    @classmethod
+    def architectures_missing_baseline(
+        cls, templates_root: Optional[Path] = None
+    ) -> List[str]:
+        """Architectures lacking a ``balanced`` baseline. Non-empty means the
+        fallback cannot rescue a missing tier for those architectures — a
+        packaging error worth failing a CI invariant test on.
+        """
+        root = Path(templates_root) if templates_root else cls.TEMPLATES_ROOT
+        broken: List[str] = []
+        if not root.exists():
+            return broken
+        for arch_dir in sorted(root.iterdir()):
+            if arch_dir.is_dir() and not _dir_has_templates(
+                arch_dir / cls.FALLBACK_TIER
+            ):
+                broken.append(arch_dir.name)
+        return broken
+
+    # ── Internals ─────────────────────────────────────────────────────────
+
+    def _resolve_template_dir(self, arch: str, tier: str) -> _ResolvedTemplate:
+        """Resolve ``templates/<arch>/<tier>``, downgrading to the
+        architecture's balanced baseline when the requested tier is absent
+        (TASK 1 — SAFE FALLBACK).
+
+        Rules
+        -----
+        * ``<arch>/<tier>`` has templates        → exact match.
+        * else ``<arch>/balanced`` has templates → fallback + WARNING. The
+          architecture is PRESERVED; only the cost tier is downgraded.
+        * else                                   → TemplateSelectionError. The
+          architecture itself is unrenderable — a missing balanced baseline is
+          a packaging bug, never a routine condition.
+
+        Generation therefore never hard-fails on a missing *tier*; it only fails
+        when an entire architecture family has no baseline template set.
+        """
+        exact = self._templates_root / arch / tier
+        if _dir_has_templates(exact):
+            return _ResolvedTemplate(exact, tier, fallback_applied=False)
+
+        baseline = self._templates_root / arch / self.FALLBACK_TIER
+        if tier != self.FALLBACK_TIER and _dir_has_templates(baseline):
+            logger.warning(
+                "[TerraformTemplateRenderer] No '%s' template set for "
+                "architecture='%s' — falling back to '%s/%s'. Architecture "
+                "preserved; cost tier downgraded to the baseline.",
+                tier, arch, arch, self.FALLBACK_TIER,
+            )
+            return _ResolvedTemplate(
+                baseline, self.FALLBACK_TIER, fallback_applied=True
+            )
+
+        raise TemplateSelectionError(
+            f"No template set found for architecture='{arch}', "
+            f"strategy_tier='{tier}', and no '{self.FALLBACK_TIER}' baseline "
+            f"exists for this architecture to fall back to.",
+            metadata={
+                "requested": {"architecture_style": arch, "strategy_tier": tier},
+                "available": self._enumerate_available_template_sets(),
+                "templates_root": str(self._templates_root),
+            },
+        )
+
+    def _enumerate_available_template_sets(self) -> List[str]:
+        """List template directories that contain at least one .tf.j2 file."""
+        return self.available_template_sets(self._templates_root)
 
     def _check_blueprint_compatibility(
         self,

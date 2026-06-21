@@ -20,6 +20,10 @@ import re
 from typing import Any, Dict, List, Optional
 
 from backend.app.schemas.blueprint import InfrastructureBlueprint
+from backend.app.services.terraform_generation.utils.naming import (
+    AWS_NAME_LIMITS,
+    sanitize_aws_name,
+)
 
 
 _INVALID_NAME_CHARS_RE = re.compile(r"[^a-z0-9-]")
@@ -82,6 +86,77 @@ def _normalize_project_name(raw: Optional[str], task_id: Optional[str]) -> str:
     return sanitize_terraform_name(raw or task_id, fallback="devsecops-app")
 
 
+def _build_resource_names(project: str) -> Dict[str, str]:
+    """Pre-compute every length-constrained AWS resource name from ``project``.
+
+    Templates must NOT build constrained names by string-suffixing
+    ``var.project_name`` in HCL — Terraform has no awareness of the per-resource
+    length ceilings, so ``"${project_name}-alb"`` happily overflows ALB's 32-char
+    limit at plan time. Instead we resolve each name HERE, bounded to its
+    resource's ceiling via :func:`sanitize_aws_name` (suffix reserved first,
+    base truncated with a uniqueness hash when needed), and inject the result as
+    a literal the template renders verbatim.
+
+    Keys are a superset across architectures (monolith / microservices /
+    serverless); a template only references the ones it needs, and unused keys
+    are harmless extra context.
+    """
+    return {
+        # ── Hard 32-char ceilings — the ALB/Target-Group plan failure ──────────
+        "alb_name": sanitize_aws_name(project, "-alb", AWS_NAME_LIMITS["alb"]),
+        "target_group_name": sanitize_aws_name(
+            project, "-tg", AWS_NAME_LIMITS["target_group"]
+        ),
+        # ── ECS / ECR / IAM (monolith) — generous ceilings, bounded defensively ─
+        "ecr_repository_name": sanitize_aws_name(
+            project, "", AWS_NAME_LIMITS["ecr_repository"]
+        ),
+        "ecs_cluster_name": sanitize_aws_name(
+            project, "-cluster", AWS_NAME_LIMITS["ecs_cluster"]
+        ),
+        "ecs_service_name": sanitize_aws_name(
+            project, "-service", AWS_NAME_LIMITS["ecs_service"]
+        ),
+        "ecs_task_family": sanitize_aws_name(
+            project, "", AWS_NAME_LIMITS["ecs_task_family"]
+        ),
+        "ecs_task_execution_role_name": sanitize_aws_name(
+            project, "-ecs-task-execution", AWS_NAME_LIMITS["iam_role"]
+        ),
+        # ── RDS (63-char identifier) + DB subnet group (monolith/balanced) ─────
+        "rds_identifier": sanitize_aws_name(
+            project, "-db", AWS_NAME_LIMITS["rds_instance"]
+        ),
+        "db_subnet_group_name": sanitize_aws_name(
+            project, "-db-subnet", AWS_NAME_LIMITS["db_subnet_group"]
+        ),
+        # ── EKS (microservices) — cluster (100), IAM roles (64), node group (63)
+        "eks_cluster_name": sanitize_aws_name(
+            project, "", AWS_NAME_LIMITS["eks_cluster"]
+        ),
+        "eks_cluster_role_name": sanitize_aws_name(
+            project, "-eks-cluster", AWS_NAME_LIMITS["iam_role"]
+        ),
+        "eks_node_role_name": sanitize_aws_name(
+            project, "-eks-node", AWS_NAME_LIMITS["iam_role"]
+        ),
+        "eks_node_group_name": sanitize_aws_name(
+            project, "-ng", AWS_NAME_LIMITS["eks_node_group"]
+        ),
+        # ── Lambda + API Gateway + S3 (serverless) — 64 / 128 / 63 ─────────────
+        "lambda_function_name": sanitize_aws_name(
+            project, "", AWS_NAME_LIMITS["lambda_function"]
+        ),
+        "lambda_role_name": sanitize_aws_name(
+            project, "-lambda-role", AWS_NAME_LIMITS["iam_role"]
+        ),
+        "apigw_name": sanitize_aws_name(project, "-api", AWS_NAME_LIMITS["apigateway"]),
+        "lambda_code_bucket_name": sanitize_aws_name(
+            project, "-lambda-code", AWS_NAME_LIMITS["s3_bucket"]
+        ),
+    }
+
+
 def _allocate_subnet_cidrs(
     vpc_cidr: str,
     az_count: int,
@@ -118,6 +193,11 @@ def build_variable_context(
     smell — keep this surface minimal.
     """
     project = _normalize_project_name(project_name, task_id)
+
+    # Pre-resolved, length-bounded resource names (ALB/TG/IAM/ECS/ECR/RDS/EKS/
+    # Lambda/S3). Computed once here so HCL never suffixes project_name past an
+    # AWS ceiling. See _build_resource_names.
+    resource_names = _build_resource_names(project)
 
     # Multi-AZ: 2 AZs when enabled, 1 AZ otherwise. Keeps the topology
     # deterministic across renders.
@@ -159,6 +239,9 @@ def build_variable_context(
     }.get(blueprint.strategy_tier or "balanced", "cache.t3.small")
 
     return {
+        # ── Pre-resolved AWS resource names (length-bounded) ─────────────
+        **resource_names,
+
         # ── Naming / environment ─────────────────────────────────────────
         "project_name": project,
         "environment": environment,
