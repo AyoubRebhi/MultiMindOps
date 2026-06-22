@@ -72,7 +72,7 @@ export function mapEditableDockerfile(api = {}) {
 /** Normalize the backend build-status payload (authoritative, never inferred). */
 export function mapBuildStatus(api = {}) {
   return {
-    status: api.status || 'pending', // pending | running | success | failed | blocked
+    status: api.status || 'pending', // pending | running | success | failed | blocked | cancelled
     logs: Array.isArray(api.logs) ? api.logs : [],
     imageTag: api.image_tag || null,
     exitCode: api.exit_code ?? null,
@@ -87,6 +87,10 @@ export function mapBuildStatus(api = {}) {
     lastErrorLine: api.last_error_line || null,
     failedStep: api.failed_step || null,
     taskId: api.task_id || null,
+    // Phase 3A — the active/last build job + its project, so the Stop button can
+    // address the cancel endpoint even after a page reload.
+    jobId: api.job_id || null,
+    projectId: api.project_id || null,
   };
 }
 

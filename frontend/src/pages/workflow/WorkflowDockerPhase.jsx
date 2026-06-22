@@ -139,6 +139,7 @@ export default function WorkflowDockerPhase({ workflowId, workflow, onAdvance })
           to existing backend endpoints (see DockerReviewBuildSection). */}
       <DockerReviewBuildSection
         projectId={projectId}
+        workflowId={workflowId}
         taskId={data.taskId}
         data={data}
         onPhaseRefetch={refetch}

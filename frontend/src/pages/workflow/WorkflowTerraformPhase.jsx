@@ -13,12 +13,14 @@ import { useTerraformPhase } from '@/hooks/useWorkflowRun';
 import { useTerraformValidation } from '@/hooks/useTerraformValidation';
 import { useToast } from '@/hooks/useToast';
 import { workflowApi, normalizeInfrastructureSummary } from '@/services/api/workflowApi';
+import { executionControlApi } from '@/services/api/executionControlApi';
 import { getStatusMeta } from '@/utils/constants';
 
 /** Map a phases_state phase status to a timeline node state. */
 function phaseTimelineState(status) {
   if (status === 'completed') return 'completed';
   if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
   if (status === 'running') return 'running';
   return 'not_started';
 }
@@ -208,6 +210,62 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
     }
   }, [tfpStatus, resumedPlanTaskId, connectPlan]);
 
+  // ── Phase 3A: Stop (cancel the running durable job) ────────────────────────
+  // The job_id lives on the phase entry (phases_state[PHASE].job_id). Cancelling
+  // flags the job; the worker stops the terraform child and the WS delivers a
+  // `cancelled` complete frame, after which we refetch the authoritative status.
+  async function handleStopValidation() {
+    if (!projectId || !tfv?.job_id) return;
+    const res = await validation.cancel(projectId, tfv.job_id);
+    if (res?.ok) {
+      toast.info('Stopping Terraform validation…');
+      await refetch();
+    } else {
+      toast.error('Could not stop validation.');
+    }
+  }
+
+  async function handleStopPlan() {
+    if (!projectId || !tfp?.job_id) return;
+    const res = await plan.cancel(projectId, tfp.job_id);
+    if (res?.ok) {
+      toast.info('Stopping Terraform plan…');
+      await refetch();
+    } else {
+      toast.error('Could not stop plan.');
+    }
+  }
+
+  // ── Phase 3A: Replay (deterministic, DB-only re-execution) ─────────────────
+  // Reuses the existing workflow replay endpoint: it re-enqueues the SAME durable
+  // terraform jobs against the persisted DB artifacts (no LLM, no regeneration),
+  // streaming over the SAME stream_key (task-scoped). We refetch + reattach the
+  // sockets so live logs resume. `which` picks which socket(s) to reconnect.
+  const [replaying, setReplaying] = useState(false);
+  async function handleReplay(which) {
+    if (!projectId || !workflowId || replaying) return;
+    setReplaying(true);
+    try {
+      const summary = await executionControlApi.replayWorkflow(projectId, workflowId);
+      const n = Array.isArray(summary?.steps) ? summary.steps.length : 0;
+      toast.success(`Replay started — re-running ${n} step(s) from saved artifacts.`);
+      await refetch();
+      // Reattach the relevant live socket(s) to the re-enqueued job(s).
+      if ((which === 'validate' || which === 'all') && resumedTaskId) {
+        autoConnectedRef.current = null;
+        connectValidation(resumedTaskId);
+      }
+      if ((which === 'plan' || which === 'all') && resumedPlanTaskId) {
+        autoConnectedPlanRef.current = null;
+        connectPlan(resumedPlanTaskId);
+      }
+    } catch (e) {
+      toast.error(e?.message || 'Could not start replay.');
+    } finally {
+      setReplaying(false);
+    }
+  }
+
   /* ── Hard transport failure ──────────────────────────────────────────────── */
   if (error && !data) {
     return (
@@ -287,6 +345,10 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
         report={validationReport}
         running={validating || tfvStatus === 'running' || validation.running}
         onRun={handleRunValidation}
+        canStop={!!tfv?.job_id}
+        onStop={handleStopValidation}
+        onReplay={() => handleReplay('validate')}
+        replaying={replaying}
       />
 
       {showPlan && (
@@ -297,6 +359,10 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
           planArtifact={planArtifact}
           running={planning || tfpStatus === 'running' || plan.running}
           onRun={handleRunPlan}
+          canStop={!!tfp?.job_id}
+          onStop={handleStopPlan}
+          onReplay={() => handleReplay('plan')}
+          replaying={replaying}
         />
       )}
     </TerraformShell>
@@ -305,12 +371,17 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
 
 /* ── Validation: run button + live logs + persisted report ──────────────────── */
 
-function ValidationSection({ tfvStatus, validation, report, running, onRun }) {
+function ValidationSection({
+  tfvStatus, validation, report, running, onRun,
+  canStop, onStop, onReplay, replaying,
+}) {
   const meta = getStatusMeta(tfvStatus || 'not_started');
   const runLabel =
     tfvStatus === 'failed' ? 'Re-run validation'
       : tfvStatus === 'completed' ? 'Re-run validation'
-        : 'Run Terraform Validation';
+        : tfvStatus === 'cancelled' ? 'Re-run validation'
+          : 'Run Terraform Validation';
+  const terminal = tfvStatus === 'completed' || tfvStatus === 'failed' || tfvStatus === 'cancelled';
 
   // Console source: live WS logs while a run is active; otherwise rehydrate from
   // the persisted validation_report so output survives reconnects AND page
@@ -323,7 +394,9 @@ function ValidationSection({ tfvStatus, validation, report, running, onRun }) {
       ? 'success'
       : tfvStatus === 'failed'
         ? 'failed'
-        : validation.status;
+        : tfvStatus === 'cancelled'
+          ? 'cancelled'
+          : validation.status;
   const hasConsole = consoleLogs.length > 0 || running;
 
   return (
@@ -350,6 +423,16 @@ function ValidationSection({ tfvStatus, validation, report, running, onRun }) {
             <><i className="fa-solid fa-clipboard-check me-2" />{runLabel}</>
           )}
         </button>
+        {running && (
+          <StopButton
+            cancelling={validation.cancelling}
+            disabled={!canStop}
+            onClick={onStop}
+          />
+        )}
+        {terminal && (
+          <ReplayButton replaying={replaying} onClick={onReplay} />
+        )}
         <span style={{ fontSize: '.8rem', color: 'var(--tx2)' }}>
           {tfvStatus ? (
             <>
@@ -389,12 +472,17 @@ function ValidationSection({ tfvStatus, validation, report, running, onRun }) {
 
 /* ── Plan: run button (gated on validation completed) + live logs + summary ──── */
 
-function PlanSection({ tfpStatus, plan, summary, planArtifact, running, onRun }) {
+function PlanSection({
+  tfpStatus, plan, summary, planArtifact, running, onRun,
+  canStop, onStop, onReplay, replaying,
+}) {
   const meta = getStatusMeta(tfpStatus || 'not_started');
   const runLabel =
     tfpStatus === 'failed' ? 'Re-run plan'
       : tfpStatus === 'completed' ? 'Re-run plan'
-        : 'Run Terraform Plan';
+        : tfpStatus === 'cancelled' ? 'Re-run plan'
+          : 'Run Terraform Plan';
+  const terminal = tfpStatus === 'completed' || tfpStatus === 'failed' || tfpStatus === 'cancelled';
 
   const liveLogs = plan.logs;
   const consoleStatus = liveLogs.length
@@ -403,7 +491,9 @@ function PlanSection({ tfpStatus, plan, summary, planArtifact, running, onRun })
       ? 'success'
       : tfpStatus === 'failed'
         ? 'failed'
-        : plan.status;
+        : tfpStatus === 'cancelled'
+          ? 'cancelled'
+          : plan.status;
   const hasConsole = liveLogs.length > 0 || running;
 
   return (
@@ -430,6 +520,16 @@ function PlanSection({ tfpStatus, plan, summary, planArtifact, running, onRun })
             <><i className="fa-solid fa-diagram-project me-2" />{runLabel}</>
           )}
         </button>
+        {running && (
+          <StopButton
+            cancelling={plan.cancelling}
+            disabled={!canStop}
+            onClick={onStop}
+          />
+        )}
+        {terminal && (
+          <ReplayButton replaying={replaying} onClick={onReplay} />
+        )}
         <span style={{ fontSize: '.8rem', color: 'var(--tx2)' }}>
           {tfpStatus ? (
             <>
@@ -539,6 +639,49 @@ function TerraformShell({
 }
 
 /* ── Pieces ────────────────────────────────────────────────────────────────── */
+
+/** Phase 3A — Stop the running phase (cancel its durable job). */
+function StopButton({ cancelling, disabled, onClick }) {
+  return (
+    <button
+      type="button"
+      className="boc btn px-3 py-2"
+      style={{ fontSize: '.82rem', color: '#f87171', borderColor: 'rgba(248,113,113,.4)' }}
+      disabled={cancelling || disabled}
+      onClick={onClick}
+      title={disabled ? 'No active job to stop' : 'Stop this running phase'}
+    >
+      {cancelling ? (
+        <><span className="spinner me-2" />Stopping…</>
+      ) : (
+        <><i className="fa-solid fa-stop me-2" />Stop</>
+      )}
+    </button>
+  );
+}
+
+/**
+ * Phase 3A — Replay deterministically from saved DB artifacts (no LLM, no
+ * regeneration). Reuses the existing workflow replay infrastructure.
+ */
+function ReplayButton({ replaying, onClick }) {
+  return (
+    <button
+      type="button"
+      className="boc btn px-3 py-2"
+      style={{ fontSize: '.82rem' }}
+      disabled={replaying}
+      onClick={onClick}
+      title="Re-run from saved artifacts (deterministic — no regeneration)"
+    >
+      {replaying ? (
+        <><span className="spinner me-2" />Replaying…</>
+      ) : (
+        <><i className="fa-solid fa-rotate-left me-2" />Replay</>
+      )}
+    </button>
+  );
+}
 
 function RegenerateButton({ generating, onClick }) {
   return (

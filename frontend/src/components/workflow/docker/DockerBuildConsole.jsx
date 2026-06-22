@@ -52,7 +52,7 @@ export default function DockerBuildConsole({
   };
 
   const conn = CONN_META[connectionState] || CONN_META.idle;
-  const finished = status === 'success' || status === 'failed';
+  const finished = status === 'success' || status === 'failed' || status === 'cancelled';
   const showReconnect =
     typeof onReconnect === 'function' &&
     status === 'running' &&
@@ -112,9 +112,22 @@ export default function DockerBuildConsole({
           className="d-flex align-items-center gap-3 flex-wrap"
           style={{ padding: '8px 14px', borderTop: '1px solid var(--bd)', fontSize: '.78rem' }}
         >
-          <span style={{ color: status === 'success' ? '#34d399' : '#f87171' }}>
-            <i className={`fa-solid ${status === 'success' ? 'fa-circle-check' : 'fa-circle-xmark'} me-2`} />
-            Build {status === 'success' ? 'succeeded' : 'failed'}
+          <span
+            style={{
+              color:
+                status === 'success' ? '#34d399' : status === 'cancelled' ? '#fbbf24' : '#f87171',
+            }}
+          >
+            <i
+              className={`fa-solid ${
+                status === 'success'
+                  ? 'fa-circle-check'
+                  : status === 'cancelled'
+                    ? 'fa-ban'
+                    : 'fa-circle-xmark'
+              } me-2`}
+            />
+            Build {status === 'success' ? 'succeeded' : status === 'cancelled' ? 'cancelled' : 'failed'}
           </span>
           {exitCode != null && (
             <span style={{ color: 'var(--tx3)' }}>exit code {exitCode}</span>

@@ -4,6 +4,7 @@ import { useAsync } from '@/hooks/useAsync';
 import { useToast } from '@/hooks/useToast';
 import { useDockerBuild } from '@/hooks/useDockerBuild';
 import { dockerBuildApi } from '@/services/api/dockerBuildApi';
+import { executionControlApi } from '@/services/api/executionControlApi';
 import DockerGenerationMetadata from './DockerGenerationMetadata';
 import DockerValidationPanel from './DockerValidationPanel';
 import DockerCorrectorPanel from './DockerCorrectorPanel';
@@ -32,6 +33,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 export default function DockerReviewBuildSection({
   projectId,
+  workflowId,
   taskId,
   data,
   onPhaseRefetch,
@@ -56,6 +58,7 @@ export default function DockerReviewBuildSection({
   const [reanalyzing, setReanalyzing] = useState(false);
   const [editSignal, setEditSignal] = useState(0);
   const [correctorBusy, setCorrectorBusy] = useState(false);
+  const [replaying, setReplaying] = useState(false);
 
   const refetchPhase = useCallback(async () => {
     if (onPhaseRefetch) await onPhaseRefetch();
@@ -106,10 +109,13 @@ export default function DockerReviewBuildSection({
   const metadata = data?.metadata || {};
 
   const buildFailed = build.status === 'failed';
-  const buildLabel =
-    build.status === 'success' || build.status === 'failed' || build.status === 'blocked'
-      ? 'Rebuild'
-      : 'Build Docker Image';
+  // Phase 3A — a build that settled (incl. operator-cancelled) can be replayed.
+  const buildTerminal =
+    build.status === 'success' ||
+    build.status === 'failed' ||
+    build.status === 'blocked' ||
+    build.status === 'cancelled';
+  const buildLabel = buildTerminal ? 'Rebuild' : 'Build Docker Image';
 
   /* ── Actions ────────────────────────────────────────────────────────────── */
   async function handleSave(next) {
@@ -150,6 +156,36 @@ export default function DockerReviewBuildSection({
     const res = await build.start();
     if (!res?.ok && res?.error && res.error.status !== 422) {
       toast.error(res.error.message || 'Could not start the Docker build.');
+    }
+  }
+
+  // Phase 3A — Stop: cancel the running build job. The worker stops the docker
+  // child and the WS delivers a `cancelled` complete frame.
+  async function handleStop() {
+    const res = await build.cancel();
+    if (res?.ok) {
+      toast.info('Stopping the Docker build…');
+    } else {
+      toast.error('Could not stop the build.');
+    }
+  }
+
+  // Phase 3A — Replay: deterministic, DB-only re-execution via the existing
+  // workflow replay infrastructure (no LLM, no regeneration). Re-enqueues the
+  // docker build against the persisted artifacts; we reattach the live socket.
+  async function handleReplay() {
+    if (!projectId || !workflowId || replaying) return;
+    setReplaying(true);
+    try {
+      const summary = await executionControlApi.replayWorkflow(projectId, workflowId);
+      const n = Array.isArray(summary?.steps) ? summary.steps.length : 0;
+      toast.success(`Replay started — re-running ${n} step(s) from saved artifacts.`);
+      build.reconnect();
+      await Promise.allSettled([build.refetchStatus(), refetchPhase()]);
+    } catch (e) {
+      toast.error(e?.message || 'Could not start replay.');
+    } finally {
+      setReplaying(false);
     }
   }
 
@@ -249,7 +285,7 @@ export default function DockerReviewBuildSection({
           type="button"
           className="bgrd btn px-4 py-2"
           style={{ fontSize: '.85rem' }}
-          disabled={build.building || build.starting}
+          disabled={build.building || build.starting || build.cancelling}
           onClick={handleBuild}
         >
           {build.building || build.starting ? (
@@ -258,6 +294,39 @@ export default function DockerReviewBuildSection({
             <><i className="fa-solid fa-hammer me-2" />{buildLabel}</>
           )}
         </button>
+        {/* Phase 3A — Stop while running, Replay once terminal. */}
+        {(build.building || build.cancelling) && (
+          <button
+            type="button"
+            className="boc btn px-3 py-2"
+            style={{ fontSize: '.82rem', color: '#f87171', borderColor: 'rgba(248,113,113,.4)' }}
+            disabled={build.cancelling || !build.canCancel}
+            onClick={handleStop}
+            title={build.canCancel ? 'Stop this running build' : 'No active job to stop'}
+          >
+            {build.cancelling ? (
+              <><span className="spinner me-2" />Stopping…</>
+            ) : (
+              <><i className="fa-solid fa-stop me-2" />Stop</>
+            )}
+          </button>
+        )}
+        {buildTerminal && (
+          <button
+            type="button"
+            className="boc btn px-3 py-2"
+            style={{ fontSize: '.82rem' }}
+            disabled={replaying}
+            onClick={handleReplay}
+            title="Re-run from saved artifacts (deterministic — no regeneration)"
+          >
+            {replaying ? (
+              <><span className="spinner me-2" />Replaying…</>
+            ) : (
+              <><i className="fa-solid fa-rotate-left me-2" />Replay</>
+            )}
+          </button>
+        )}
         <span style={{ fontSize: '.8rem', color: 'var(--tx2)' }}>
           {approved ? (
             <><i className="fa-solid fa-shield-halved me-2" style={{ color: '#34d399' }} />Approved Dockerfile — building the image.</>

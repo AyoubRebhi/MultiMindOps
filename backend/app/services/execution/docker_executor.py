@@ -23,7 +23,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Awaitable
 
-from .docker_connectivity import ensure_docker_daemon, loop_supports_subprocess, resolve_docker_cli
+from .docker_connectivity import (
+    ensure_docker_daemon,
+    loop_supports_subprocess,
+    resolve_docker_cli,
+    terminate_async_process,
+    terminate_sync_process,
+)
 from .docker_registry import docker_login, generate_image_tag
 from .docker_streamer import LogStreamManager, classify_log_line, log_stream_manager
 from .execution_models import (
@@ -975,6 +981,15 @@ class DockerExecutor:
             drain_stdout.cancel()
             drain_stderr.cancel()
             raise
+        except asyncio.CancelledError:
+            # Phase 3A — operator cancelled the job: stop the build child cleanly
+            # (terminate → grace → kill) so no orphan `docker build` keeps running,
+            # then re-raise so the worker finalises the job as cancelled. Logs
+            # already streamed/persisted are untouched.
+            await terminate_async_process(proc)
+            drain_stdout.cancel()
+            drain_stderr.cancel()
+            raise
 
         exit_code = proc.returncode or 0
         duration_ms = int((_time.monotonic() - start) * 1000)
@@ -1024,6 +1039,10 @@ class DockerExecutor:
 
         counters = {"stdout": 0, "stderr": 0}
         last = {"stdout": None, "stderr": None}
+        # Shared handle so the cancel path (below) can reach the Popen that the
+        # worker thread owns and terminate→grace→kill it. Without this the thread
+        # would block in proc.wait() and the build would keep running after cancel.
+        proc_holder: dict[str, object] = {"proc": None}
 
         def _publish(line: str) -> None:
             try:
@@ -1040,6 +1059,7 @@ class DockerExecutor:
                 stderr=subprocess.PIPE,
                 cwd=self._workspace,
             )
+            proc_holder["proc"] = proc
 
             def _drain(pipe, is_err: bool) -> None:
                 for raw_line in iter(pipe.readline, b""):
@@ -1074,7 +1094,22 @@ class DockerExecutor:
             t_err.join(timeout=5)
             return proc.returncode or 0
 
-        exit_code = await asyncio.to_thread(_pump)
+        try:
+            exit_code = await asyncio.to_thread(_pump)
+        except asyncio.CancelledError:
+            # Phase 3A — operator cancelled: the awaiting coroutine is cancelled
+            # but the worker thread is still blocked in proc.wait(). Stop the child
+            # (terminate → grace → kill) off-loop and shielded so it completes even
+            # while the cancellation is still propagating, then re-raise.
+            proc = proc_holder.get("proc")
+            if proc is not None:
+                try:
+                    await asyncio.shield(
+                        asyncio.to_thread(terminate_sync_process, proc)
+                    )
+                except asyncio.CancelledError:
+                    pass
+            raise
         duration_ms = int((_time.monotonic() - start) * 1000)
         if exit_code == 0:
             logger.info(

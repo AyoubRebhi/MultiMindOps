@@ -15,6 +15,9 @@ const STATUS_MAP = {
   succeeded: { label: 'Succeeded', variant: 'success', icon: 'fa-circle-check', spin: false },
   failed: { label: 'Failed', variant: 'danger', icon: 'fa-circle-xmark', spin: false },
   blocked: { label: 'Blocked', variant: 'danger', icon: 'fa-ban', spin: false },
+  // Phase 3A — operator-controlled stop.
+  cancelling: { label: 'Stopping…', variant: 'pending', icon: 'fa-spinner', spin: true },
+  cancelled: { label: 'Cancelled', variant: 'pending', icon: 'fa-ban', spin: false },
 };
 
 export default function DockerBuildStatusBadge({ status }) {

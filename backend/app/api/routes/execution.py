@@ -562,6 +562,49 @@ def _save_execution_state(db: Session, task, result: DockerBuildResult, is_retry
             )
 
 
+# ── Cancellation persistence ───────────────────────────────────────────────────
+
+def _persist_docker_cancelled(task_id: str, build_number: int) -> None:
+    """Mark a Docker build as cancelled in workflow_state (Phase 3A).
+
+    Called when an operator cancels a running build: the executor is interrupted
+    before it can return a result, so the normal ``_save_execution_state`` never
+    runs and ``docker.status`` would otherwise stay ``running`` forever. We write
+    a ``cancelled`` status (distinct from ``failed`` — it was stopped, not broken),
+    stamp ``finished_at``, and set ``current_phase`` to ``docker_build_failed`` so
+    the existing re-run gate treats the build as a re-runnable terminal (Replay /
+    Rebuild). Already-streamed logs are preserved untouched. Best-effort: a write
+    failure must not mask the cancellation itself.
+    """
+    db = SessionLocal()
+    try:
+        task = TaskService.get_task(db, task_id)
+        if not task:
+            return
+        state: dict = dict(TaskService.load_workflow_state(db, task) or {})
+        execution = state.setdefault("execution", {})
+        docker_exec = execution.setdefault("docker", {})
+        # Only downgrade a still-running build — never clobber a terminal status
+        # that a racing finaliser may already have written.
+        if docker_exec.get("status") in ("success", "failed", "cancelled"):
+            return
+        docker_exec["status"] = ExecutionStatus.CANCELLED.value
+        docker_exec["finished_at"] = datetime.now(timezone.utc).isoformat()
+        docker_exec["build_number"] = docker_exec.get("build_number", build_number)
+        execution["state"] = "cancelled"
+        execution["current_message"] = "Docker build cancelled by operator"
+        state["current_phase"] = "docker_build_failed"
+        TaskService.save_workflow_state(db, task, state)
+        logger.info("[Execution] Docker build CANCELLED persisted task=%s", task_id)
+    except Exception as exc:  # noqa: BLE001 — cancel persistence is best-effort
+        logger.warning(
+            "[Execution] _persist_docker_cancelled failed task=%s: %s",
+            task_id, exc.__class__.__name__,
+        )
+    finally:
+        db.close()
+
+
 # ── Background build task ──────────────────────────────────────────────────────
 
 async def _run_build_background(
@@ -631,7 +674,16 @@ async def _run_build_background(
         github_token=github_token,
     )
 
-    result = await executor.build_image()
+    try:
+        result = await executor.build_image()
+    except asyncio.CancelledError:
+        # Phase 3A — operator cancelled the build. The executor already stopped the
+        # docker child (terminate→grace→kill); persist the cancelled terminal state
+        # + close the stream so the WS emits a `cancelled` complete frame, then
+        # re-raise so the worker finalises the job as cancelled.
+        _persist_docker_cancelled(task_id, build_number)
+        await log_stream_manager.finish(task_id)
+        raise
 
     db = SessionLocal()
     try:
@@ -927,6 +979,12 @@ async def start_docker_build(
         },
     )
 
+    # Persist the active job id onto the build state so the status GET (used on
+    # page reload) can surface it — the frontend needs it to address the cancel
+    # endpoint POST /api/projects/{pid}/jobs/{job_id}/cancel (Phase 3A).
+    docker_exec["job_id"] = job.id
+    TaskService.save_workflow_state(db, task, state)
+
     logger.info(
         "[Execution] Docker build job enqueued: job=%s task=%s image=%s build_number=%d session=%s repo=%s",
         job.id, task_id, image_tag, build_number, execution_session_id, repo_source_path,
@@ -939,6 +997,7 @@ async def start_docker_build(
         "execution_phase": "docker_build",
         "ws_url": f"/ws/execution/{task_id}",
         "task_id": task_id,
+        "project_id": task.project_id,
         "build_number": build_number,
         "retry_iteration": build_number,
         "execution_session_id": execution_session_id,
@@ -1014,6 +1073,11 @@ def get_docker_build_status(
         "execution_phase": "docker_build",
         "current_phase": state.get("current_phase", ""),
         "task_id": task_id,
+        # Phase 3A — the active/last build job + its project, so the client can
+        # address the cancel endpoint after a page reload (the build POST response
+        # is gone by then).
+        "job_id": docker_exec.get("job_id"),
+        "project_id": task.project_id,
         "failure_reason": docker_exec.get("failure_reason"),
         "docker_command": docker_exec.get("docker_command"),
         "last_error_line": docker_exec.get("last_error_line"),
@@ -1179,7 +1243,9 @@ async def ws_execution_logs(
         ping_task = asyncio.create_task(_ping_receiver())
 
         # ── Case 1: Build already finished — replay persisted logs from DB ────
-        if final_status in ("success", "failed"):
+        # "cancelled" is terminal too (Phase 3A): replay history + a cancelled
+        # complete frame so a late/re-attaching client settles instead of hanging.
+        if final_status in ("success", "failed", "cancelled"):
             logger.info("[WS] Replaying %d persisted logs (build finished)", len(persisted_logs))
             for i, entry in enumerate(persisted_logs):
                 if closed.is_set():
@@ -1334,6 +1400,10 @@ def _terraform_phase_terminal_status(
         return "success", 0, True
     if status_str == "failed":
         return "failed", 1, True
+    if status_str == "cancelled":
+        # Phase 3A — operator-stopped phase is terminal; surface it as-is so the
+        # client renders a neutral "cancelled" state (not an error) + offers Replay.
+        return "cancelled", None, True
     return None, None, False
 
 

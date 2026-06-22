@@ -30,9 +30,14 @@ import shutil
 from pathlib import Path
 from typing import Awaitable, Callable, List, Tuple
 
-# Reuse the SAME subprocess-capability detector implemented for the Docker
-# pipeline — do not duplicate the loop-introspection logic.
-from backend.app.services.execution.docker_connectivity import loop_supports_subprocess
+# Reuse the SAME subprocess-capability detector + cancel-aware termination
+# helpers implemented for the Docker pipeline — do not duplicate the loop
+# introspection or the terminate→grace→kill logic.
+from backend.app.services.execution.docker_connectivity import (
+    loop_supports_subprocess,
+    terminate_async_process,
+    terminate_sync_process,
+)
 
 PublishFn = Callable[[str], Awaitable[None]]
 
@@ -161,6 +166,13 @@ async def _run_step_async(
     except asyncio.TimeoutError:
         proc.kill()
         raise
+    except asyncio.CancelledError:
+        # Phase 3A — operator cancelled the job: stop the terraform child cleanly
+        # (terminate → grace → kill) so no orphan `terraform` keeps holding the
+        # working dir / a provider lock, then re-raise so the worker finalises the
+        # job as cancelled.
+        await terminate_async_process(proc)
+        raise
 
     return returncode
 
@@ -189,6 +201,9 @@ async def _run_step_sync(
     import threading
 
     loop = asyncio.get_running_loop()
+    # Shared handle so the cancel path can terminate the Popen the worker thread
+    # owns (it is otherwise blocked in proc.wait()).
+    proc_holder: dict[str, object] = {"proc": None}
 
     def _publish_threadsafe(line: str) -> None:
         try:
@@ -204,6 +219,7 @@ async def _run_step_sync(
             stderr=subprocess.STDOUT,  # interleave — matches the async path
             env=tf_env,
         )
+        proc_holder["proc"] = proc
 
         def _drain() -> None:
             assert proc.stdout is not None
@@ -228,4 +244,16 @@ async def _run_step_sync(
         reader.join(timeout=5)
         return returncode
 
-    return await asyncio.to_thread(_pump)
+    try:
+        return await asyncio.to_thread(_pump)
+    except asyncio.CancelledError:
+        # Phase 3A — operator cancelled: terminate the terraform child off-loop and
+        # shielded so it dies even while the cancellation is propagating, unblocking
+        # the worker thread; then re-raise so the job finalises as cancelled.
+        proc = proc_holder.get("proc")
+        if proc is not None:
+            try:
+                await asyncio.shield(asyncio.to_thread(terminate_sync_process, proc))
+            except asyncio.CancelledError:
+                pass
+        raise

@@ -58,6 +58,15 @@ _TF_JOB_PHASE = {
     PHASE_TF_VALIDATION: "terraform_validate",
     PHASE_TF_PLAN: "terraform_plan",
 }
+# Inverse: durable job phase → workflow phase. Used by the lifecycle reconciler
+# to map a terminal terraform JOB back onto its workflow phase.
+_WF_PHASE_BY_JOB = {job: wf for wf, job in _TF_JOB_PHASE.items()}
+# phases_state statuses that mean a TF phase has SETTLED — the reconciler never
+# overwrites one of these (the in-handler finaliser already had the last word).
+_TF_SETTLED_STATUSES = {
+    "completed", "completed_with_fallback", "completed_no_files",
+    "failed", "cancelled",
+}
 
 
 def terraform_stream_key(task_id: str, job_phase: str) -> str:
@@ -745,6 +754,143 @@ class WorkflowOrchestrationService:
             phase, job.id, artifact_id, stream_key,
         )
         return state, []
+
+    @staticmethod
+    def record_terraform_phase_cancelled(
+        db: Session,
+        *,
+        workflow_id: Optional[str],
+        task_id: Optional[str],
+        phase: str,
+    ) -> None:
+        """Mark a streamed Terraform phase as cancelled (Phase 3A).
+
+        Called from the job handler's ``CancelledError`` path: the phase was
+        stopped by an operator before validate/plan finished, so
+        ``record_terraform_phase_result`` never runs and ``phases_state`` would
+        otherwise stay ``running`` forever. Writes a ``cancelled`` status while
+        PRESERVING the ``artifact_id`` / ``job_id`` / ``stream_key`` already on the
+        phase entry (so the UI can still find the job and offer Replay), and keeps
+        the workflow ``running`` so the phase can be re-run / replayed. Best-effort.
+        """
+        if workflow_id:
+            workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
+            if workflow is not None:
+                prior = (workflow.phases_state or {}).get(phase) or {}
+                preserved = {
+                    k: prior.get(k)
+                    for k in ("artifact_id", "job_id", "stream_key")
+                    if prior.get(k) is not None
+                }
+                WorkflowOrchestrationService._record_phase(
+                    workflow,
+                    phase=phase,
+                    status="cancelled",
+                    extra={**preserved, "ok": False, "cancelled": True},
+                )
+                workflow.current_phase = phase
+                workflow.status = "running"
+                db.commit()
+
+        if task_id:
+            task = TaskService.get_task(db, task_id)
+            if task is not None:
+                state = TaskService.load_workflow_state(db, task) or {}
+                tf_state = state.setdefault("terraform_pipeline", {})
+                tf_state[phase] = {"ok": False, "cancelled": True, "results": []}
+                TaskService.save_workflow_state(db, task, state)
+
+    @staticmethod
+    def reconcile_phase_for_terminal_job(
+        db: Session,
+        *,
+        job,
+        terminal_status: str,
+    ) -> None:
+        """Reflect a terminal durable Terraform JOB onto ``Workflow.phases_state``.
+
+        The in-handler finaliser (``record_terraform_phase_result`` on a normal
+        exit, ``record_terraform_phase_cancelled`` on an operator stop) is the
+        usual writer of a TF phase's terminal status. But that code only runs if
+        the handler coroutine actually reaches it. When the handler never does —
+        the worker process was lost (uvicorn ``--reload`` in dev), the job was
+        reaped after its heartbeat went stale, or it raised before recording —
+        the phase would otherwise stay ``running`` forever, which strands the UI
+        (reconnect storm), blocks Replay, and never emits a WS ``complete`` frame.
+
+        This maps the job's terminal state (``cancelled`` / ``failed``) back onto
+        its workflow phase, but ONLY while that phase is still ``running`` so it
+        can never clobber a status the handler already wrote (fully idempotent —
+        the worker-alive cancel path runs the handler's own finaliser first, and
+        this is then a no-op). Terraform phases only for now; Docker has its own
+        in-handler persistence (``_persist_docker_cancelled``) and can be folded
+        in here later. Best-effort: callers wrap it so a reconcile failure never
+        breaks the job's own terminal transition.
+        """
+        if job is None or getattr(job, "phase", None) not in _WF_PHASE_BY_JOB:
+            return
+        ctx = job.execution_context or {}
+        wf_phase = ctx.get("phase") or _WF_PHASE_BY_JOB[job.phase]
+        workflow_id = job.workflow_id or ctx.get("workflow_id")
+        task_id = job.task_id or ctx.get("task_id")
+        if not workflow_id:
+            return
+
+        workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
+        if workflow is None:
+            return
+        current = ((workflow.phases_state or {}).get(wf_phase) or {}).get("status")
+        if current in _TF_SETTLED_STATUSES:
+            # The handler already settled this phase — leave its verdict intact.
+            return
+
+        if terminal_status == "cancelled":
+            # Reuse the tested cancelled-persistence path (preserves
+            # artifact_id/job_id/stream_key for Replay; keeps workflow running).
+            WorkflowOrchestrationService.record_terraform_phase_cancelled(
+                db, workflow_id=workflow_id, task_id=task_id, phase=wf_phase,
+            )
+            logger.warning(
+                "[TerraformPipeline] reconciled orphaned phase %s → cancelled "
+                "(job=%s never ran its in-handler finaliser)",
+                wf_phase, getattr(job, "id", "?"),
+            )
+            return
+
+        # terminal_status == "failed": the job died/was reaped with no real
+        # terraform verdict. Record a failed phase (preserving the Replay
+        # pointers) and keep the workflow running so it can be re-run / replayed.
+        prior = (workflow.phases_state or {}).get(wf_phase) or {}
+        preserved = {
+            k: prior.get(k)
+            for k in ("artifact_id", "job_id", "stream_key")
+            if prior.get(k) is not None
+        }
+        reason = (
+            "worker stopped before the phase finished (orphaned/reaped) — "
+            "re-run or replay to retry"
+        )
+        WorkflowOrchestrationService._record_phase(
+            workflow,
+            phase=wf_phase,
+            status="failed",
+            extra={**preserved, "ok": False, "error": reason},
+        )
+        workflow.current_phase = wf_phase
+        workflow.status = "running"
+        db.commit()
+        logger.warning(
+            "[TerraformPipeline] reconciled orphaned phase %s → failed (job=%s): %s",
+            wf_phase, getattr(job, "id", "?"), reason,
+        )
+
+        if task_id:
+            task = TaskService.get_task(db, task_id)
+            if task is not None:
+                state = TaskService.load_workflow_state(db, task) or {}
+                tf_state = state.setdefault("terraform_pipeline", {})
+                tf_state[wf_phase] = {"ok": False, "results": [], "error": reason}
+                TaskService.save_workflow_state(db, task, state)
 
     @staticmethod
     def record_terraform_phase_result(

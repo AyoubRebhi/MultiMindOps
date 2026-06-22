@@ -161,12 +161,16 @@ class Settings(BaseSettings):
     EXECUTION_WORKER_CONCURRENCY: int = 2
     # Poll cadence for the claim loop.
     EXECUTION_JOB_POLL_INTERVAL_SECONDS: float = 2.0
-    # How often a running job's heartbeat is refreshed.
-    EXECUTION_JOB_HEARTBEAT_INTERVAL_SECONDS: float = 10.0
+    # How often a running job's heartbeat is refreshed. Also the upper bound on
+    # cancel-detection latency: the heartbeat tick is where the worker observes
+    # an operator stop, so a short interval keeps Stop responsive.
+    EXECUTION_JOB_HEARTBEAT_INTERVAL_SECONDS: float = 5.0
     # A running job whose heartbeat is older than this is considered orphaned
-    # and re-queued by the reaper. Must be comfortably larger than the
-    # heartbeat interval so a momentarily-slow tick doesn't trigger a false reap.
-    EXECUTION_JOB_HEARTBEAT_TIMEOUT_SECONDS: int = 60
+    # and re-queued by the reaper. Must be comfortably larger than the heartbeat
+    # interval so a momentarily-slow tick doesn't trigger a false reap, but small
+    # enough that a job orphaned by a uvicorn --reload (dev) self-heals in seconds
+    # rather than a full minute. 20s = 4 missed 5s ticks before reaping.
+    EXECUTION_JOB_HEARTBEAT_TIMEOUT_SECONDS: int = 20
 
     # Docker Registry — used by DockerExecutor to push built images
     # Type: "dockerhub" | "ghcr" | "generic"

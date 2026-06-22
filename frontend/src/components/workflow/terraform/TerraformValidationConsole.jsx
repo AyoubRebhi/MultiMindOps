@@ -30,6 +30,8 @@ const STATUS_META = {
   running: { label: 'Validating', color: '#60a5fa', icon: 'fa-spinner fa-spin' },
   success: { label: 'Passed', color: '#34d399', icon: 'fa-circle-check' },
   failed: { label: 'Failed', color: '#f87171', icon: 'fa-circle-xmark' },
+  // Phase 3A — operator-stopped phase.
+  cancelled: { label: 'Cancelled', color: '#fbbf24', icon: 'fa-ban' },
   idle: { label: 'Idle', color: 'var(--tx3)', icon: 'fa-circle' },
 };
 
@@ -57,7 +59,7 @@ export default function TerraformValidationConsole({
 
   const conn = CONN_META[connectionState] || CONN_META.idle;
   const st = STATUS_META[status] || STATUS_META.idle;
-  const finished = status === 'success' || status === 'failed';
+  const finished = status === 'success' || status === 'failed' || status === 'cancelled';
   const showReconnect =
     typeof onReconnect === 'function' &&
     status === 'running' &&
@@ -120,9 +122,23 @@ export default function TerraformValidationConsole({
           className="d-flex align-items-center gap-3 flex-wrap"
           style={{ padding: '8px 14px', borderTop: '1px solid var(--bd)', fontSize: '.78rem' }}
         >
-          <span style={{ color: status === 'success' ? '#34d399' : '#f87171' }}>
-            <i className={`fa-solid ${status === 'success' ? 'fa-circle-check' : 'fa-circle-xmark'} me-2`} />
-            Validation {status === 'success' ? 'passed' : 'failed'}
+          <span
+            style={{
+              color:
+                status === 'success' ? '#34d399' : status === 'cancelled' ? '#fbbf24' : '#f87171',
+            }}
+          >
+            <i
+              className={`fa-solid ${
+                status === 'success'
+                  ? 'fa-circle-check'
+                  : status === 'cancelled'
+                    ? 'fa-ban'
+                    : 'fa-circle-xmark'
+              } me-2`}
+            />
+            {title.includes('plan') ? 'Plan' : 'Validation'}{' '}
+            {status === 'success' ? 'passed' : status === 'cancelled' ? 'cancelled' : 'failed'}
           </span>
           {exitCode != null && (
             <span style={{ color: 'var(--tx3)' }}>exit code {exitCode}</span>

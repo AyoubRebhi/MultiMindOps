@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { terraformValidateWsUrl } from '@/services/api/workflowApi';
+import { executionControlApi } from '@/services/api/executionControlApi';
 
 /* Backend LogLevel → the CSS level class used by .log-line (app.css). Identical
    to the Docker build console mapping — Terraform validation streams over the
@@ -63,9 +64,13 @@ const PING_MS = 20000;
  */
 export function useTerraformValidation(opts = {}) {
   const [logs, setLogs] = useState([]);
-  const [status, setStatus] = useState('idle'); // idle | running | success | failed
+  const [status, setStatus] = useState('idle'); // idle | running | success | failed | cancelled
   const [connectionState, setConnectionState] = useState('idle');
   const [exitCode, setExitCode] = useState(null);
+  // Phase 3A — operator-cancel state. cancellingRef gates reconnects (the
+  // authoritative phase status is still 'running' during the stop window).
+  const [cancelling, setCancelling] = useState(false);
+  const cancellingRef = useRef(false);
 
   const wsRef = useRef(null);
   const pingRef = useRef(null);
@@ -153,8 +158,17 @@ export function useTerraformValidation(opts = {}) {
           pushLine(toLine(msg));
           break;
         case 'complete': {
-          const final = msg.status === 'success' ? 'success' : 'failed';
+          // Phase 3A — 'cancelled' is a distinct terminal, never coerced to
+          // 'failed', so the UI shows a neutral stopped state.
+          const final =
+            msg.status === 'success'
+              ? 'success'
+              : msg.status === 'cancelled'
+                ? 'cancelled'
+                : 'failed';
           setStatus(final);
+          setCancelling(false);
+          cancellingRef.current = false;
           if (msg.exit_code != null) setExitCode(msg.exit_code);
           intentionalRef.current = true;
           clearTimers();
@@ -183,9 +197,14 @@ export function useTerraformValidation(opts = {}) {
     ws.onclose = () => {
       clearTimers();
       if (intentionalRef.current) return;
-      // Reconnect ONLY while the AUTHORITATIVE phase is still running — never on
-      // the ephemeral WS status — so a settled phase can't reconnect-storm.
-      if (phaseStatusRef.current === 'running' && attemptsRef.current < MAX_RECONNECTS) {
+      // Reconnect ONLY while the AUTHORITATIVE phase is still running AND we are
+      // not mid-cancel — never on the ephemeral WS status — so a settled or
+      // being-stopped phase can't reconnect-storm.
+      if (
+        phaseStatusRef.current === 'running' &&
+        !cancellingRef.current &&
+        attemptsRef.current < MAX_RECONNECTS
+      ) {
         attemptsRef.current += 1;
         setConnectionState('reconnecting');
         const delay = Math.min(1000 * 2 ** (attemptsRef.current - 1), 8000);
@@ -202,6 +221,33 @@ export function useTerraformValidation(opts = {}) {
     connect(taskIdRef.current);
   }, [connect]);
 
+  /**
+   * Phase 3A — request cancellation of THIS phase's durable job. The page owns
+   * project/job ids (job_id lives on phases_state[PHASE]), so they are passed in.
+   * Flags the job; the worker stops the terraform child and the WS then emits a
+   * `cancelled` complete frame. Optimistically reflects `cancelling` so the Stop
+   * button disables and reconnect loops stop (cancellingRef gates them while the
+   * authoritative phase status is still 'running').
+   */
+  const cancel = useCallback(async (projectId, jobId) => {
+    if (!projectId || !jobId || cancellingRef.current) return { ok: false };
+    cancellingRef.current = true;
+    setCancelling(true);
+    try {
+      const res = await executionControlApi.cancelJob(projectId, jobId);
+      if (res?.status === 'cancelled') {
+        setStatus('cancelled');
+        setCancelling(false);
+        cancellingRef.current = false;
+      }
+      return { ok: true, descriptor: res };
+    } catch (e) {
+      setCancelling(false);
+      cancellingRef.current = false;
+      return { ok: false, error: e };
+    }
+  }, []);
+
   // Tidy the socket on unmount.
   useEffect(() => () => disconnect(), [disconnect]);
 
@@ -211,6 +257,8 @@ export function useTerraformValidation(opts = {}) {
     connectionState,
     exitCode,
     running: status === 'running',
+    cancelling,
+    cancel,
     connect,
     reconnect,
     disconnect,

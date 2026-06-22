@@ -116,6 +116,78 @@ def loop_supports_subprocess(loop: Optional[asyncio.AbstractEventLoop] = None) -
     return isinstance(loop, asyncio.ProactorEventLoop)
 
 
+# ── Cooperative subprocess termination (Phase 3A: execution cancel) ───────────
+# A long-running phase (docker build / terraform validate|plan) runs under a
+# durable job; when an operator cancels it the worker cancels the handler task,
+# which raises ``CancelledError`` inside the streaming runner. These helpers stop
+# the child process the SAME way for both the asyncio-subprocess and the
+# synchronous-thread fallback paths: SIGTERM (``terminate()``), a short grace for
+# it to flush + exit, then SIGKILL (``kill()``). Logs already streamed are never
+# touched — only the child is stopped. ``grace`` is the seconds to wait between
+# terminate and kill.
+
+CANCEL_GRACE_SECONDS = 5.0
+
+
+async def terminate_async_process(proc, grace: float = CANCEL_GRACE_SECONDS) -> None:
+    """Stop an :class:`asyncio.subprocess.Process` gracefully, then forcibly.
+
+    Safe to call when the process has already exited. Never raises — a cancel
+    path must not blow up on a races-ahead exit. Awaitable so it does not block
+    the event loop while waiting out the grace period.
+    """
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except (ProcessLookupError, OSError):
+        return
+    try:
+        # ``shield`` so a still-pending cancellation can't abort the grace wait
+        # itself — we always reach the kill fallback if terminate didn't take.
+        await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=grace)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        try:
+            proc.kill()
+        except (ProcessLookupError, OSError):
+            pass
+    except Exception:  # noqa: BLE001 — best-effort stop
+        try:
+            proc.kill()
+        except (ProcessLookupError, OSError):
+            pass
+
+
+def terminate_sync_process(proc, grace: float = CANCEL_GRACE_SECONDS) -> None:
+    """Stop a synchronous :class:`subprocess.Popen` gracefully, then forcibly.
+
+    The sync-thread fallback owns a blocking ``Popen``; the cancelling coroutine
+    calls this (typically via ``asyncio.to_thread`` so the loop is not blocked)
+    to terminate→grace→kill the child. Safe on an already-exited process; never
+    raises.
+    """
+    import subprocess
+
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+    except (ProcessLookupError, OSError):
+        return
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except (ProcessLookupError, OSError):
+            pass
+    except Exception:  # noqa: BLE001 — best-effort stop
+        try:
+            proc.kill()
+        except (ProcessLookupError, OSError):
+            pass
+
+
 def default_daemon_endpoint() -> str:
     """OS-specific default daemon endpoint when ``DOCKER_HOST`` is unset."""
     return "npipe:////./pipe/docker_engine" if _IS_WINDOWS else "unix:///var/run/docker.sock"

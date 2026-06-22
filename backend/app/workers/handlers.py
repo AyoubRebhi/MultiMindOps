@@ -30,6 +30,7 @@ import between the worker and the route modules that enqueue jobs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Awaitable, Callable, Optional
 
@@ -262,6 +263,26 @@ async def _run_terraform_phase(job: ExecutionJob, *, steps_name: str) -> Optiona
             plan_json, infrastructure_summary = await _build_plan_summary(
                 artifact_dir, _publish
             )
+    except asyncio.CancelledError:
+        # Phase 3A — operator cancelled the job. The streaming runner already
+        # stopped the terraform child (terminate→grace→kill). Record the phase as
+        # cancelled (preserving artifact_id/job_id for Replay), finish the stream
+        # so the WS emits a `cancelled` complete frame, then re-raise so the worker
+        # finalises the job as cancelled. We do NOT fall through to the
+        # record_terraform_phase_result(failed) path below.
+        await _publish("== phase cancelled by operator ==")
+        await log_stream_manager.finish(stream_key)
+        db_c = SessionLocal()
+        try:
+            WorkflowOrchestrationService.record_terraform_phase_cancelled(
+                db_c,
+                workflow_id=workflow_id,
+                task_id=task_id,
+                phase=phase,
+            )
+        finally:
+            db_c.close()
+        raise
     except RuntimeError as exc:
         # Environment problem (binary missing / artifact dir gone). Record the
         # phase as failed AND propagate so the job itself is marked failed.

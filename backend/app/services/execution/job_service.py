@@ -284,6 +284,10 @@ class JobService:
             "[Jobs] FAILED job=%s (budget spent %d/%d): %s",
             job_id, job.retry_count, job.max_retries, error_message[:200],
         )
+        # Reconcile the workflow phase: a TF job that fails here without the
+        # handler having recorded the phase (reaped orphan, handler error before
+        # finalise) would otherwise leave the phase stuck 'running'.
+        JobService._reconcile_workflow_phase(db, job, "failed")
         return "failed"
 
     # ── Cancellation ────────────────────────────────────────────────────────
@@ -320,7 +324,38 @@ class JobService:
         job.completed_at = _now()
         db.commit()
         logger.info("[Jobs] CANCELLED job=%s", job.id)
+        JobService._reconcile_workflow_phase(db, job, "cancelled")
         return "cancelled"
+
+    @staticmethod
+    def _reconcile_workflow_phase(
+        db: Session, job: ExecutionJob, terminal_status: str,
+    ) -> None:
+        """Reflect a terminal TF job onto its workflow phase (best-effort).
+
+        The workflow phase's terminal status is normally written by the in-handler
+        finaliser. When a job goes terminal WITHOUT the handler running that code
+        — a pending-job cancel, a reaped orphan (process reload), or an error that
+        skipped the finaliser — the phase would stay ``running`` forever. This
+        bridges the job lifecycle back to ``Workflow.phases_state`` so the phase
+        settles regardless. Lazy import avoids a worker↔orchestration import cycle;
+        any failure is logged and swallowed so it never breaks the job's own
+        terminal transition. Terraform phases only for now.
+        """
+        if job is None or job.phase not in ("terraform_validate", "terraform_plan"):
+            return
+        try:
+            from backend.app.services.core.workflow_orchestration_service import (
+                WorkflowOrchestrationService,
+            )
+            WorkflowOrchestrationService.reconcile_phase_for_terminal_job(
+                db, job=job, terminal_status=terminal_status,
+            )
+        except Exception:  # noqa: BLE001 — reconcile must never break the job txn
+            logger.exception(
+                "[Jobs] workflow-phase reconcile failed for job=%s status=%s",
+                getattr(job, "id", "?"), terminal_status,
+            )
 
     @staticmethod
     def finalize_cancel_by_id(db: Session, job_id: str) -> Optional[str]:

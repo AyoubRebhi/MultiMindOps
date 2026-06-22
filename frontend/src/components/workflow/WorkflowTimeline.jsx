@@ -9,7 +9,7 @@ import {
  * workflow phase page. Renders the ordered phases (Analysis → Planning → Docker
  * → Terraform → Validation → Plan) with per-phase state.
  *
- * Supported states: not_started · running · completed · failed.
+ * Supported states: not_started · running · completed · cancelled · failed.
  *
  * Props:
  *  - current: phase key of the active page (e.g. "planning"). When `statuses`
@@ -23,6 +23,9 @@ import {
 const NODE_STATE = {
   completed: { cls: 'is-done', icon: 'fa-check' },
   running: { cls: 'is-running', icon: 'fa-spinner fa-spin' },
+  // Phase 3A — operator-stopped phase: neutral "ban" glyph, between running and
+  // failed (it is not an error). Reuses the failed node styling for visibility.
+  cancelled: { cls: 'is-failed', icon: 'fa-ban' },
   failed: { cls: 'is-failed', icon: 'fa-xmark' },
   not_started: { cls: '', icon: null },
 };
@@ -43,7 +46,11 @@ export default function WorkflowTimeline({
           const state = states[phase.key] || 'not_started';
           const node = NODE_STATE[state] || NODE_STATE.not_started;
           const isCurrent = phase.key === current;
-          const reached = state === 'completed' || state === 'running' || state === 'failed';
+          const reached =
+            state === 'completed' ||
+            state === 'running' ||
+            state === 'failed' ||
+            state === 'cancelled';
           const canNavigate = navigable && reached && phase.to && !isCurrent;
 
           return (

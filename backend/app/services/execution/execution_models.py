@@ -105,6 +105,9 @@ class ExecutionStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     RETRYING = "retrying"
+    # Phase 3A — operator stopped a running phase. Distinct from FAILED so the UI
+    # can show a neutral "stopped" badge (not an error) and offer Replay.
+    CANCELLED = "cancelled"
 
 
 class DockerBuildResult(BaseModel):

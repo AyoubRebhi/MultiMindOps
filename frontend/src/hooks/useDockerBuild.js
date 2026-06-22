@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dockerBuildApi, dockerBuildWsUrl } from '@/services/api/dockerBuildApi';
+import { executionControlApi } from '@/services/api/executionControlApi';
 
 /* Backend LogLevel → the CSS level class used by .log-line (app.css). */
 function normLevel(level) {
@@ -45,6 +46,11 @@ export function useDockerBuild(taskId, opts = {}) {
   const [imageTag, setImageTag] = useState(null);
   const [blockReason, setBlockReason] = useState(null);
   const [starting, setStarting] = useState(false);
+  // Phase 3A — the active/last build job + its project, needed to address the
+  // cancel endpoint. Captured from the build POST response and the status GET.
+  const [jobId, setJobId] = useState(null);
+  const [projectId, setProjectId] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const wsRef = useRef(null);
   const pingRef = useRef(null);
@@ -110,8 +116,16 @@ export function useDockerBuild(taskId, opts = {}) {
           setLogs((prev) => [...prev, toLine(msg)]);
           break;
         case 'complete': {
-          const final = msg.status === 'success' ? 'success' : 'failed';
+          // Phase 3A — 'cancelled' is a distinct terminal (operator stopped it),
+          // never coerced to 'failed', so the UI shows a neutral stopped state.
+          const final =
+            msg.status === 'success'
+              ? 'success'
+              : msg.status === 'cancelled'
+                ? 'cancelled'
+                : 'failed';
           setStatus(final);
+          setCancelling(false);
           if (msg.exit_code != null) setExitCode(msg.exit_code);
           intentionalRef.current = true;
           clearTimers();
@@ -165,8 +179,37 @@ export function useDockerBuild(taskId, opts = {}) {
     setStatus(s.status);
     setExitCode(s.exitCode);
     if (s.imageTag) setImageTag(s.imageTag);
+    if (s.jobId) setJobId(s.jobId);
+    if (s.projectId) setProjectId(s.projectId);
     return s;
   }, [taskId]);
+
+  /**
+   * Phase 3A — request cancellation of the running build. Flags the durable job;
+   * the worker stops the docker child and the WS then emits a `cancelled`
+   * complete frame. Optimistically reflects a `cancelling` state so the Stop
+   * button disables and reconnect loops never fire (status is no longer
+   * 'running'). No-op without a known job/project.
+   */
+  const cancel = useCallback(async () => {
+    if (!jobId || !projectId || cancelling) return { ok: false };
+    setCancelling(true);
+    try {
+      const res = await executionControlApi.cancelJob(projectId, jobId);
+      // A pending/terminal job settles immediately to 'cancelled'; a running job
+      // returns 'running' and the WS delivers the cancelled frame shortly.
+      if (res?.status === 'cancelled') {
+        setStatus('cancelled');
+        setCancelling(false);
+      } else {
+        setStatus('cancelling');
+      }
+      return { ok: true, descriptor: res };
+    } catch (e) {
+      setCancelling(false);
+      return { ok: false, error: e };
+    }
+  }, [jobId, projectId, cancelling]);
 
   const runBuild = useCallback(
     async (apiCall) => {
@@ -178,6 +221,9 @@ export function useDockerBuild(taskId, opts = {}) {
       try {
         const res = await apiCall();
         if (res?.image_tag) setImageTag(res.image_tag);
+        if (res?.job_id) setJobId(res.job_id);
+        if (res?.project_id) setProjectId(res.project_id);
+        setCancelling(false);
         attemptsRef.current = 0;
         connect();
         return { ok: true, descriptor: res };
@@ -213,6 +259,8 @@ export function useDockerBuild(taskId, opts = {}) {
       setStatus(s.status);
       setExitCode(s.exitCode);
       if (s.imageTag) setImageTag(s.imageTag);
+      if (s.jobId) setJobId(s.jobId);
+      if (s.projectId) setProjectId(s.projectId);
       if (s.status === 'running') {
         connect();
       } else if (Array.isArray(s.logs) && s.logs.length) {
@@ -235,6 +283,12 @@ export function useDockerBuild(taskId, opts = {}) {
     blockReason,
     starting,
     building: status === 'running',
+    // Phase 3A — execution control.
+    jobId,
+    projectId,
+    cancelling,
+    cancel,
+    canCancel: !!(jobId && projectId) && (status === 'running' || cancelling),
     start,
     rebuild,
     reconnect,

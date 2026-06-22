@@ -190,11 +190,14 @@ class ExecutionWorker:
         self, job_id: str, handler_task: asyncio.Task,
     ) -> None:
         """Bump the heartbeat on an interval; cancel the handler on a cancel
-        request or if the job vanished (reaped out from under us)."""
+        request or if the job vanished (reaped out from under us).
+
+        The heartbeat + cancel check runs at the TOP of each iteration, BEFORE
+        the sleep, so an operator stop is observed within at most one interval
+        of dead time rather than after a full interval (the old sleep-first loop
+        wasted the first whole interval before ever looking at the cancel flag).
+        """
         while not handler_task.done():
-            await asyncio.sleep(self.heartbeat_interval)
-            if handler_task.done():
-                return
             db = SessionLocal()
             try:
                 still_running = JobService.heartbeat(db, job_id)
@@ -209,6 +212,9 @@ class ExecutionWorker:
                     self.worker_id, job_id, cancel, still_running,
                 )
                 handler_task.cancel()
+                return
+            await asyncio.sleep(self.heartbeat_interval)
+            if handler_task.done():
                 return
 
     def _drain_finished(self) -> None:
