@@ -47,6 +47,11 @@ PHASE_TF_PLAN = "TERRAFORM_PLAN"
 
 _TF_PIPELINE_PHASES = {PHASE_TF_GENERATION, PHASE_TF_VALIDATION, PHASE_TF_PLAN}
 
+# Deployment orchestration phase — renders a GitHub Actions deploy workflow from
+# the validated Docker + Terraform artifacts + the architecture decision. Runs
+# INLINE (template render, no external process), like TERRAFORM_GENERATION.
+PHASE_GH_ACTIONS = "GITHUB_ACTIONS_GENERATION"
+
 # Workflow statuses that are TERMINAL — a project may create a new workflow once
 # its current one reaches any of these. Everything else (pending, running,
 # awaiting_input) is "active", and a project may have at most ONE active workflow
@@ -319,10 +324,18 @@ class WorkflowOrchestrationService:
                 phase=phase_upper,
             )
 
+        # Deployment orchestration — consumes the validated artifacts (no LLM
+        # generation, no infra execution), so it runs inline like TF generation.
+        if phase_upper == PHASE_GH_ACTIONS:
+            return WorkflowOrchestrationService._run_github_actions_generation(
+                db, project=project, workflow=workflow, task=task,
+            )
+
         if phase_upper != PHASE_DOCKER:
             raise ValueError(
                 f"Phase '{phase}' is not supported. Valid phases: DOCKER, "
-                "TERRAFORM_GENERATION, TERRAFORM_VALIDATION, TERRAFORM_PLAN."
+                "TERRAFORM_GENERATION, TERRAFORM_VALIDATION, TERRAFORM_PLAN, "
+                "GITHUB_ACTIONS_GENERATION."
             )
 
         prior_state = TaskService.load_workflow_state(db, task) or {}
@@ -418,6 +431,22 @@ class WorkflowOrchestrationService:
             if not _is_completed(PHASE_TF_GENERATION):
                 raise ValueError(
                     f"Cannot run {phase_upper}: run TERRAFORM_GENERATION first."
+                )
+        elif phase_upper == PHASE_GH_ACTIONS:
+            # The deploy workflow consumes the Docker + Terraform artifacts and
+            # the selected architecture decision — all three must be in place.
+            if not plan_selected:
+                raise ValueError(
+                    f"Cannot run {PHASE_GH_ACTIONS}: a plan must be selected first "
+                    "(PLAN_SELECTED)."
+                )
+            if not _is_completed(PHASE_DOCKER):
+                raise ValueError(
+                    f"Cannot run {PHASE_GH_ACTIONS}: run DOCKER generation first."
+                )
+            if not _is_completed(PHASE_TF_GENERATION):
+                raise ValueError(
+                    f"Cannot run {PHASE_GH_ACTIONS}: run TERRAFORM_GENERATION first."
                 )
 
     @staticmethod
@@ -516,6 +545,121 @@ class WorkflowOrchestrationService:
             workflow.status = "running"
         db.commit()
         return workflow
+
+    # ─── Deployment orchestration (GitHub Actions) ───────────────────────────
+
+    @staticmethod
+    def _run_github_actions_generation(
+        db: Session,
+        *,
+        project: Project,
+        workflow: Workflow,
+        task: Task,
+    ) -> Tuple[dict, List[str]]:
+        """Generate the ``.github/workflows/deploy.yml`` deploy workflow.
+
+        Consumes the validated Docker + Terraform artifacts and the selected
+        architecture decision (deployment target derived from the blueprint —
+        never asked). Pipeline: build context → select template → render →
+        optional LLM enrichment → YAML validation. The artifact is persisted
+        ONLY when validation passes; an invalid workflow records a ``failed``
+        phase with the errors (no artifact), mirroring TERRAFORM_GENERATION's
+        non-raising failure contract so the UI can surface it cleanly.
+
+        Atomic: artifact upsert + phase record + scratch state commit together.
+        A successful generation is the terminal artifact of the generation
+        pipeline, so the workflow is marked ``completed``.
+        """
+        from backend.app.services.core.artifact_persistence_service import (
+            ArtifactPersistenceService as _APS,
+        )
+        from backend.app.services.github_actions_generation.deployment_context_builder import (
+            DeploymentContextNotReady,
+        )
+        from backend.app.services.github_actions_generation.generation_service import (
+            WORKFLOW_PATH,
+            GitHubActionsGenerationService,
+        )
+
+        try:
+            result = GitHubActionsGenerationService.generate(
+                db, project=project, workflow=workflow, task=task,
+            )
+        except DeploymentContextNotReady as exc:
+            # Prerequisite-shaped failure (missing upstream artifacts) → 400.
+            raise ValueError(str(exc)) from exc
+
+        ctx = result.deployment_context
+        persisted_ids: List[str] = []
+        status = "completed" if result.valid else "failed"
+
+        # Persist the workflow file ONLY when it validated (Phase 5 contract).
+        if result.valid:
+            artifact = _APS.upsert_artifact(
+                db,
+                project_id=project.id,
+                workflow_id=workflow.id,
+                artifact_type="github_actions",
+                artifact_subtype=WORKFLOW_PATH,
+                content=result.content,
+                generated_by_agent="GitHubActionsGenerationService",
+                validation_status="passed",
+            )
+            persisted_ids = [artifact.id]
+
+        WorkflowOrchestrationService._record_phase(
+            workflow,
+            phase=PHASE_GH_ACTIONS,
+            status=status,
+            extra={
+                "deployment_target": ctx.deployment_target,
+                "template": result.template,
+                "workflow_path": WORKFLOW_PATH,
+                "artifact_count": len(persisted_ids),
+                "validation_status": result.validation.status,
+                "validation_errors": result.validation.errors,
+                "enrichment_applied": result.enrichment_applied,
+                "docker_artifacts": ctx.docker_artifacts,
+                "terraform_artifacts": ctx.terraform_artifacts,
+            },
+        )
+        workflow.current_phase = PHASE_GH_ACTIONS
+        if status == "completed":
+            workflow.status = "completed"
+            workflow.finished_at = datetime.now(timezone.utc)
+        else:
+            # Keep the run open so the phase can be re-run after a fix.
+            workflow.status = "running"
+
+        # Mirror the result into scratch state so the phase-run response + the
+        # read projection can render the generated workflow without a re-run.
+        state = TaskService.load_workflow_state(db, task) or {}
+        gh_state = state.setdefault("github_actions", {})
+        gh_state.update({
+            "deployment_target": ctx.deployment_target,
+            "template": result.template,
+            "workflow_path": WORKFLOW_PATH,
+            "content": result.content,
+            "validation": {
+                "status": result.validation.status,
+                "errors": result.validation.errors,
+                "warnings": result.validation.warnings,
+            },
+            "enrichment_applied": result.enrichment_applied,
+            "deployment_context": ctx.model_dump(),
+        })
+        state["logs"] = list(state.get("logs", [])) + result.logs
+        TaskService.stage_workflow_state(task, state)
+
+        db.commit()
+        db.refresh(workflow)
+
+        logger.info(
+            "[GitHubActions] generation complete project=%s target=%s status=%s "
+            "artifacts=%d",
+            project.id, ctx.deployment_target, status, len(persisted_ids),
+        )
+        return state, persisted_ids
 
     # ─── Infrastructure Lifecycle (Terraform MVP pipeline) ───────────────────
 

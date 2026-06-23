@@ -57,9 +57,13 @@ from backend.app.services.core.credentials_service import (
     CredentialsService,
 )
 from backend.app.schemas.docker_phase import DockerPhaseResponse
+from backend.app.schemas.github_actions_phase import GitHubActionsPhaseResponse
 from backend.app.schemas.workflow_analysis import WorkflowAnalysisResponse
 from backend.app.services.core.docker_phase_projection_service import (
     DockerPhaseProjectionService,
+)
+from backend.app.services.core.github_actions_phase_projection_service import (
+    GitHubActionsPhaseProjectionService,
 )
 from backend.app.services.core.project_analysis_service import ProjectAnalysisService
 from backend.app.services.core.workflow_analysis_aggregation_service import (
@@ -607,6 +611,31 @@ def get_docker_phase(
     """
     _, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
     return DockerPhaseProjectionService.build(
+        db, project_id=workflow.project_id, workflow=workflow, task=task,
+    )
+
+
+# ─── GitHub Actions Generation phase read (projection) ───────────────────────
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/github-actions",
+    response_model=GitHubActionsPhaseResponse,
+)
+def get_github_actions_phase(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Aggregated GitHub Actions Generation payload (deploy.yml + context + validation).
+
+    READ-ONLY projection over data the GITHUB_ACTIONS_GENERATION phase already
+    persisted — the deployment analogue of ``/docker``. It NEVER re-runs
+    generation or calls an LLM. Degrades gracefully: a workflow that has not
+    reached the phase projects to ``generated=False`` (200, not 404).
+    """
+    _, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    return GitHubActionsPhaseProjectionService.build(
         db, project_id=workflow.project_id, workflow=workflow, task=task,
     )
 

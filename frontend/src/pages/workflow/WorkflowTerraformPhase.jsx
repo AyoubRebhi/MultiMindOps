@@ -60,6 +60,7 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
   const toast = useToast();
   const { data, loading, error, refetch } = useTerraformPhase(projectId, workflowId);
   const [generating, setGenerating] = useState(false);
+  const [proceeding, setProceeding] = useState(false);
 
   // Authoritative phase status comes ONLY from phases_state (never inferred from
   // the presence of artifacts).
@@ -111,6 +112,24 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
       toast.error(e?.message || 'Could not generate Terraform. Please try again.');
     } finally {
       setGenerating(false);
+    }
+  }
+
+  // Advance to the GitHub Actions Generation phase. Runs the phase on the backend
+  // (inline render from the validated Docker + Terraform artifacts), then signals
+  // the resume router (WorkflowRunPage) — its current_phase becomes
+  // GITHUB_ACTIONS_GENERATION, so the view flips to the deployment surface.
+  async function handleProceedToGithubActions() {
+    if (!projectId || proceeding) return;
+    setProceeding(true);
+    try {
+      await workflowApi.runGithubActionsPhase(projectId, workflowId);
+      toast.success('Deployment workflow generation started.');
+      onAdvance?.();
+    } catch (e) {
+      toast.error(e?.message || 'Could not start GitHub Actions generation. Please try again.');
+    } finally {
+      setProceeding(false);
     }
   }
 
@@ -329,7 +348,25 @@ export default function WorkflowTerraformPhase({ workflowId, workflow, onAdvance
       status="completed"
       validateState={validateState}
       planState={planState}
-      actions={<RegenerateButton generating={generating} onClick={handleGenerate} />}
+      actions={
+        <div className="d-flex gap-2">
+          <RegenerateButton generating={generating} onClick={handleGenerate} />
+          <button
+            type="button"
+            className="bgrd btn px-3 py-2"
+            style={{ fontSize: '.82rem' }}
+            disabled={proceeding}
+            onClick={handleProceedToGithubActions}
+            title="Generate the GitHub Actions deploy workflow from these artifacts"
+          >
+            {proceeding ? (
+              <><span className="spinner me-2" />Starting…</>
+            ) : (
+              <><i className="fa-brands fa-github me-2" />Proceed to GitHub Actions</>
+            )}
+          </button>
+        </div>
+      }
     >
       {genValidationFailed && (
         <GenerationValidationWarning classification={gen?.failure_classification} />

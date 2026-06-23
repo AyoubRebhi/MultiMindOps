@@ -179,6 +179,7 @@ PhaseName = Literal[
     "TERRAFORM_VALIDATION",
     "TERRAFORM_PLAN",
     "DOCKER",
+    "GITHUB_ACTIONS_GENERATION",
 ]
 
 

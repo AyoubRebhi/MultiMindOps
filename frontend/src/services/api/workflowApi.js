@@ -317,6 +317,62 @@ export function mapDockerPhase(api = {}) {
   };
 }
 
+/* ── GitHub Actions Generation phase mapper ─────────────────────────────────── */
+
+/**
+ * Map the GET .../github-actions projection into the deployment-phase view model.
+ * Faithful to the backend — every field is read straight from the persisted
+ * GITHUB_ACTIONS_GENERATION state (rendered deploy.yml + deployment context +
+ * YAML validation). Tolerant of partials so a not-yet-reached run renders.
+ */
+export function mapGithubActionsPhase(api = {}) {
+  const ctx = api.deployment_context || {};
+  const val = api.validation || {};
+  const wf = api.workflow_file || null;
+  return {
+    workflowId: api.workflow_id || null,
+    projectId: api.project_id || null,
+    taskId: api.task_id || null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    phaseStatus: api.phase_status || null,
+    generated: !!api.generated,
+    deploymentTarget: api.deployment_target || ctx.deployment_target || null,
+    template: api.template || null,
+    enrichmentApplied: !!api.enrichment_applied,
+    deploymentContext: {
+      cloudProvider: ctx.cloud_provider || 'aws',
+      deploymentTarget: ctx.deployment_target || null,
+      awsRegion: ctx.aws_region || null,
+      projectName: ctx.project_name || null,
+      repositoryName: ctx.repository_name || null,
+      clusterName: ctx.cluster_name || null,
+      serviceName: ctx.service_name || null,
+      functionName: ctx.function_name || null,
+      containerPort: ctx.container_port ?? null,
+      terraformDirectory: ctx.terraform_directory || null,
+      dockerArtifacts: arr(ctx.docker_artifacts),
+      terraformArtifacts: arr(ctx.terraform_artifacts),
+    },
+    validation: {
+      status: val.status || 'not_run',
+      valid: val.valid !== false,
+      errors: arr(val.errors),
+      warnings: arr(val.warnings),
+    },
+    workflowFile: wf
+      ? {
+          path: wf.path || '.github/workflows/deploy.yml',
+          content: wf.content || '',
+          version: wf.version ?? null,
+          approvalState: wf.approval_state || null,
+          validationStatus: wf.validation_status || null,
+        }
+      : null,
+    infrastructureSummary: api.infrastructure_summary || {},
+  };
+}
+
 /* ── Terraform-phase mappers (Phase 2A: Generation only) ────────────────────── */
 
 /**
@@ -647,6 +703,40 @@ export const workflowApi = {
       )}/phases/DOCKER`,
       {}
     );
+  },
+
+  /**
+   * GET /projects/:projectId/workflows/:workflowId/github-actions — the
+   * aggregated GitHub Actions Generation payload (rendered deploy.yml +
+   * deployment context + YAML validation), in ONE read. Returns 200 with
+   * `generated: false` when the workflow hasn't reached the phase yet.
+   */
+  async getGithubActionsPhase(projectId, workflowId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/github-actions`
+    );
+    return mapGithubActionsPhase(data);
+  },
+
+  /**
+   * POST /projects/:projectId/workflows/:workflowId/phases/GITHUB_ACTIONS_GENERATION —
+   * render the deploy workflow from the validated Docker + Terraform artifacts +
+   * the selected architecture decision. The deployment target is derived from the
+   * blueprint (never asked). The BACKEND owns the transition + persistence; the
+   * frontend never mutates workflow state. Prerequisite (server-side):
+   * PLAN_SELECTED + DOCKER + TERRAFORM_GENERATION must be completed. Returns the
+   * mapped phase-run response ({ taskId, currentPhase, status, phasesState }).
+   */
+  async runGithubActionsPhase(projectId, workflowId) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/phases/GITHUB_ACTIONS_GENERATION`,
+      {}
+    );
+    return mapPhaseRun(data);
   },
 
   /**

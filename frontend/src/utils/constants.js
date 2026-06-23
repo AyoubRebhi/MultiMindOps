@@ -122,6 +122,7 @@ export const BACKEND_WORKFLOW_PHASE_META = {
   TERRAFORM_GENERATION: { label: 'Terraform Generation', icon: 'fa-cubes' },
   TERRAFORM_VALIDATION: { label: 'Terraform Validation', icon: 'fa-clipboard-check' },
   TERRAFORM_PLAN: { label: 'Terraform Plan', icon: 'fa-diagram-project' },
+  GITHUB_ACTIONS_GENERATION: { label: 'GitHub Actions Generation', icon: 'fa-github', brand: true },
 };
 
 /**
@@ -156,10 +157,16 @@ export const WORKFLOW_PHASE_VIEW = {
   TERRAFORM_GENERATION: 'terraform',
   TERRAFORM_VALIDATION: 'terraform',
   TERRAFORM_PLAN: 'terraform',
+  // Deployment orchestration — the final phase (Analysis → Architecture →
+  // Docker → Terraform → GitHub Actions). A resumed run that has reached (or
+  // completed) this phase lands on the GitHub Actions surface.
+  GITHUB_ACTIONS_GENERATION: 'github_actions',
 };
 
 /** Views that are fully integrated with live backend data today. */
-export const IMPLEMENTED_WORKFLOW_VIEWS = new Set(['analysis', 'planning', 'docker', 'terraform']);
+export const IMPLEMENTED_WORKFLOW_VIEWS = new Set([
+  'analysis', 'planning', 'docker', 'terraform', 'github_actions',
+]);
 
 /**
  * Resolve a workflow's saved phase to its view id. A null/unknown phase means

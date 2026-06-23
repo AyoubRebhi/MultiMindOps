@@ -84,6 +84,28 @@ export function useDockerPhase(projectId, workflowId) {
 }
 
 /**
+ * useGithubActionsPhase — fetch the aggregated GitHub Actions Generation payload
+ * (GET project-scoped .../github-actions). Both ids are required (the read + run
+ * endpoints are project-scoped). Returns { data, loading, error, refetch }.
+ * Read-only: generation already ran on the backend, so the surface polls via
+ * `refetch` only after it triggers the GITHUB_ACTIONS_GENERATION phase itself.
+ *
+ * @param {string} projectId
+ * @param {string} workflowId
+ */
+export function useGithubActionsPhase(projectId, workflowId) {
+  const ready = !!projectId && !!workflowId;
+  return useAsync(
+    () =>
+      ready
+        ? workflowApi.getGithubActionsPhase(projectId, workflowId)
+        : Promise.resolve(null),
+    [projectId, workflowId],
+    { immediate: ready }
+  );
+}
+
+/**
  * useTerraformPhase — fetch everything the Terraform surface needs (Generation
  * AND Validation) in ONE shot, from existing endpoints: the workflow's
  * authoritative `phases_state` (GET project-scoped workflow) and the project

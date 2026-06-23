@@ -14,6 +14,7 @@ import WorkflowAnalysisPhase from './WorkflowAnalysisPhase';
 import ArchitecturePlanningPhase from './ArchitecturePlanningPhase';
 import WorkflowDockerPhase from './WorkflowDockerPhase';
 import WorkflowTerraformPhase from './WorkflowTerraformPhase';
+import WorkflowGithubActionsPhase from './WorkflowGithubActionsPhase';
 
 /**
  * WorkflowRunPage — opens a workflow and RESUMES it from its last saved phase.
@@ -95,6 +96,12 @@ export default function WorkflowRunPage() {
         />
       ) : view === 'terraform' ? (
         <WorkflowTerraformPhase
+          workflowId={workflowId}
+          workflow={workflow}
+          onAdvance={refetch}
+        />
+      ) : view === 'github_actions' ? (
+        <WorkflowGithubActionsPhase
           workflowId={workflowId}
           workflow={workflow}
           onAdvance={refetch}
