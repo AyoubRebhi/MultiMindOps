@@ -1,0 +1,453 @@
+You are actually very close to the final architecture, but there is one important misunderstanding:
+
+> Today your platform STOPS at deploy.yml generation.
+>
+> It does NOT yet execute anything.
+
+Let's separate what you already have from what you still need.
+
+---
+
+# 1. What you currently have
+
+Your actual workflow is:
+
+```text
+Requirements
+        ↓
+Analysis (LLM)
+        ↓
+Architecture Decision (LLM)
+        ↓
+Docker Generation (LLM + templates)
+        ↓
+Terraform Generation (LLM + templates)
+        ↓
+Terraform Validation
+        ↓
+Terraform Plan
+        ↓
+GitHub Actions Generation (templates)
+```
+
+At the end you obtain:
+
+```text
+Dockerfile
+Terraform files
+deploy.yml
+```
+
+And then:
+
+```text
+STOP
+```
+
+Nothing executes.
+
+---
+
+# 2. Is GitHub Actions generation deterministic?
+
+Currently:
+
+```text
+deploy target
+        ↓
+template selection
+        ↓
+render variables
+        ↓
+validate yaml
+```
+
+This is:
+
+```text
+100% deterministic
+```
+
+No LLM.
+
+No GPT.
+
+No prompts.
+
+---
+
+# 3. What do YOU want?
+
+You want:
+
+```text
+Template
+        ↓
+GPT-5-mini
+        ↓
+deploy.yml
+        ↓
+Validation
+```
+
+This is completely reasonable.
+
+This is exactly the same strategy you already use for Terraform.
+
+---
+
+# Future GitHub Actions generation
+
+```text
+ecs_template.yml
+        ↓
+fill variables
+        ↓
+GPT-5-mini optimization
+        ↓
+yaml validation
+        ↓
+artifact persistence
+```
+
+GPT-5-mini would:
+
+* improve caching
+* improve permissions
+* improve concurrency
+* improve deployment steps
+* improve naming
+* improve conditions
+
+But:
+
+❌ never generate from scratch.
+
+The template remains the source of truth.
+
+---
+
+# 4. What you still DON'T have
+
+This is the missing piece:
+
+```text
+deploy.yml
+        ↓
+Push to GitHub
+        ↓
+GitHub Runner executes
+```
+
+This does not exist.
+
+---
+
+# Your final vision is:
+
+```text
+Requirements
+        ↓
+AI Platform
+        ↓
+Terraform
+        ↓
+Docker
+        ↓
+Deploy.yml
+        ↓
+GitHub Actions executes
+        ↓
+AWS infrastructure created
+        ↓
+Docker image deployed
+        ↓
+Logs returned
+```
+
+This is absolutely possible.
+
+---
+
+# Final Architecture
+
+## Phase 1
+
+Analysis.
+
+---
+
+## Phase 2
+
+Architecture.
+
+---
+
+## Phase 3
+
+Docker.
+
+---
+
+## Phase 4
+
+Terraform.
+
+---
+
+## Phase 5
+
+Terraform validation.
+
+---
+
+## Phase 6
+
+Terraform plan.
+
+---
+
+## Phase 7
+
+GitHub Actions generation.
+
+Current state:
+
+✅ implemented
+
+---
+
+## Phase 8
+
+GPT-5-mini enrichment.
+
+Future:
+
+```text
+Template
+    ↓
+GPT-5-mini
+    ↓
+Validation
+```
+
+---
+
+## Phase 9
+
+GitHub repository integration.
+
+The platform needs:
+
+* repository URL
+* branch
+* authentication
+
+Then:
+
+```text
+deploy.yml
+        ↓
+commit
+        ↓
+push
+```
+
+---
+
+## Phase 10
+
+GitHub execution monitoring.
+
+The platform calls:
+
+```text
+GitHub API
+```
+
+to retrieve:
+
+* run status
+* logs
+* errors
+
+---
+
+## Phase 11
+
+Deployment monitoring.
+
+Display:
+
+```text
+Terraform apply logs
+Docker logs
+Deployment logs
+Outputs
+```
+
+---
+
+# The real execution flow
+
+```text
+User
+    ↓
+AI platform
+
+Generates:
+
+    Dockerfile
+    Terraform
+    deploy.yml
+
+    ↓
+
+Push to GitHub
+
+    ↓
+
+GitHub Runner
+
+    terraform apply
+
+    ↓
+
+AWS resources
+
+    ↓
+
+docker build
+
+    ↓
+
+push ECR
+
+    ↓
+
+deploy ECS
+
+    ↓
+
+return logs
+```
+
+---
+
+# So what should you do NEXT?
+
+# STEP 1
+
+Add GPT-5-mini enrichment.
+
+Architecture:
+
+```text
+Template
+    ↓
+GPT-5-mini
+    ↓
+Validation
+```
+
+---
+
+# STEP 2
+
+Implement GitHub integration.
+
+The user provides:
+
+```text
+Repository URL
+Branch
+GitHub token
+```
+
+---
+
+# STEP 3
+
+Push deploy.yml automatically.
+
+The platform commits:
+
+```text
+.github/workflows/deploy.yml
+```
+
+---
+
+# STEP 4
+
+Trigger GitHub Actions.
+
+---
+
+# STEP 5
+
+Monitor execution.
+
+Display:
+
+```text
+Running...
+Terraform apply...
+Docker build...
+ECS deployment...
+Completed.
+```
+
+---
+
+# STEP 6
+
+Display outputs.
+
+Examples:
+
+```text
+ALB URL:
+https://xxx.amazonaws.com
+
+ECS Service:
+RUNNING
+
+Container:
+healthy
+```
+
+---
+
+# The complete finished product becomes
+
+```text
+User requirement
+        ↓
+AI analysis
+        ↓
+AI architecture
+        ↓
+AI Terraform
+        ↓
+AI Docker
+        ↓
+AI deploy pipeline
+        ↓
+GitHub execution
+        ↓
+AWS infrastructure
+        ↓
+Application deployed
+        ↓
+Monitoring
+```
+
+This is a very strong PFE because the AI is not only generating code:
+
+* it designs,
+* it validates,
+* it deploys,
+* it monitors.
+
+And yes, GPT-5-mini fits perfectly in the GitHub Actions generation phase, but as an **enhancement layer**, not as the main generator.

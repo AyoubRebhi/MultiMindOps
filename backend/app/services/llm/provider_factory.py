@@ -65,6 +65,13 @@ AGENT_PROVIDER_MAP: Dict[str, str] = {
     # the corrector JSON contract (root_cause/fixes/structured_patches) is
     # preserved. The deterministic preprocessing still runs LLM-free.
     "DockerCorrectorAgent": "openai_primary",
+    # GitHub Actions deploy.yml enrichment (optional polish pass inside
+    # GitHubActionsEnrichmentService): GPT-5-mini primary → Groq fallback, a
+    # SINGLE sync chat() call. NOT in AGENT_TOKEN_CONFIG, so the enricher's
+    # caller-provided max_tokens passes through unchanged. The model only
+    # refines an already-rendered template; the template stays the source of
+    # truth and every enriched candidate is guard-checked before acceptance.
+    "GitHubActionsEnricher": "openai_primary",
 }
 
 logger = logging.getLogger(__name__)
@@ -540,6 +547,7 @@ _AGENT_STAGE_MAP: Dict[str, str] = {
     "PlannerAgent": "planning",
     "CostEstimationAgent": "cost_estimation",
     "DockerCorrectorAgent": "docker_correction",
+    "GitHubActionsEnricher": "github_actions_enrichment",
 }
 
 

@@ -22,6 +22,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 from backend.app.services.github_actions_generation.models import DeploymentContext
 from backend.app.services.github_actions_generation.template_selector import (
     TEMPLATES_DIR,
+    PipelineKind,
     select_template,
 )
 
@@ -55,15 +56,18 @@ def _build_environment() -> Environment:
     )
 
 
-def render_workflow(context: DeploymentContext) -> tuple[str, str]:
-    """Render the deploy workflow for ``context``.
+def render_workflow(
+    context: DeploymentContext, kind: PipelineKind = "deploy"
+) -> tuple[str, str]:
+    """Render the ``kind`` workflow (``bootstrap`` | ``deploy``) for ``context``.
 
     Returns ``(template_filename, rendered_yaml)``. Raises
     :class:`WorkflowRenderError` on a template syntax error or an undeclared
     variable (StrictUndefined) — both indicate template/context drift that must
-    fail loudly rather than emit a half-blank workflow.
+    fail loudly rather than emit a half-blank workflow. Defaults to ``deploy`` so
+    existing single-file callers keep working.
     """
-    template_filename = select_template(context.deployment_target)
+    template_filename = select_template(context.deployment_target, kind)
     env = _build_environment()
     try:
         template = env.get_template(template_filename)
@@ -71,11 +75,11 @@ def render_workflow(context: DeploymentContext) -> tuple[str, str]:
     except TemplateError as exc:
         raise WorkflowRenderError(
             f"Failed to render '{template_filename}' for target "
-            f"'{context.deployment_target}': {exc}"
+            f"'{context.deployment_target}' ({kind}): {exc}"
         ) from exc
 
     logger.info(
-        "[GitHubActions] rendered template=%s target=%s bytes=%d",
-        template_filename, context.deployment_target, len(rendered),
+        "[GitHubActions] rendered template=%s target=%s kind=%s bytes=%d",
+        template_filename, context.deployment_target, kind, len(rendered),
     )
     return template_filename, rendered

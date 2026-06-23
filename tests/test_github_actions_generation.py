@@ -139,19 +139,41 @@ def test_render_and_validate_each_target(db, compute_type):
     assert entry["deployment_target"] == _COMPUTE_TO_TARGET[compute_type]
     assert entry["validation_status"] == "passed"
 
-    # Exactly one github_actions artifact, valid YAML, GH expressions preserved.
+    # TWO github_actions artifacts (bootstrap + deploy), one type, two subtypes.
     rows = (db.query(Artifact)
               .filter(Artifact.project_id == "proj-1",
                       Artifact.artifact_type == "github_actions").all())
-    assert len(rows) == 1 and rows[0].id in ids
-    content = rows[0].content
-    parsed = yaml.safe_load(content)
-    assert isinstance(parsed, dict) and "jobs" in parsed
-    assert "${{ secrets.AWS_ACCESS_KEY_ID }}" in content
-    assert "${{ steps.login-ecr.outputs.registry }}" in content
-    # Consumes the validated artifacts: terraform apply + ECR push are present.
-    assert "terraform apply" in content
-    assert "configure-aws-credentials" in content
+    assert len(rows) == 2
+    assert {r.id for r in rows} == set(ids)
+    by_path = {r.artifact_subtype: r.content for r in rows}
+    assert set(by_path) == {
+        ".github/workflows/bootstrap.yml",
+        ".github/workflows/deploy.yml",
+    }
+
+    bootstrap = by_path[".github/workflows/bootstrap.yml"]
+    deploy = by_path[".github/workflows/deploy.yml"]
+
+    # Both are valid GitHub Actions YAML with GH expressions preserved untouched.
+    for content in (bootstrap, deploy):
+        parsed = yaml.safe_load(content)
+        assert isinstance(parsed, dict) and "jobs" in parsed
+        assert "${{ secrets.AWS_ACCESS_KEY_ID }}" in content
+        assert "configure-aws-credentials" in content
+
+    # bootstrap PROVISIONS (terraform) and is manual-only (no push trigger).
+    assert "terraform init" in bootstrap
+    assert "terraform apply" in bootstrap
+    assert "workflow_dispatch" in bootstrap
+    assert "push:" not in bootstrap
+
+    # deploy DELIVERS only — never any terraform; push-triggered + concurrency.
+    assert "terraform init" not in deploy
+    assert "terraform apply" not in deploy
+    assert "docker build" in deploy
+    assert "docker push" in deploy
+    assert "push:" in deploy
+    assert "concurrency:" in deploy
 
 
 # ── 2. Workflow reaches a terminal completed state ───────────────────────────
@@ -179,9 +201,23 @@ def test_projection_after_generation(db):
     assert resp.generated is True
     assert resp.deployment_target == "eks"
     assert resp.phase_status == "completed"
+
+    # Both pipelines are projected, bootstrap first then deploy.
+    assert [p.kind for p in resp.pipelines] == ["bootstrap", "deploy"]
+    pipelines = {p.kind: p for p in resp.pipelines}
+    assert pipelines["bootstrap"].path == ".github/workflows/bootstrap.yml"
+    assert pipelines["deploy"].path == ".github/workflows/deploy.yml"
+    assert pipelines["bootstrap"].name == "Infrastructure Pipeline"
+    assert pipelines["deploy"].name == "Delivery Pipeline"
+    assert "terraform apply" in pipelines["bootstrap"].content
+    assert "terraform apply" not in pipelines["deploy"].content
+    assert pipelines["deploy"].version == 1  # DB-backed provenance
+
+    # Back-compat: workflow_file still points at the delivery (deploy.yml) file.
     assert resp.workflow_file is not None
     assert resp.workflow_file.path == ".github/workflows/deploy.yml"
     assert "jobs:" in resp.workflow_file.content
+    assert "terraform apply" not in resp.workflow_file.content
     assert resp.deployment_context.terraform_artifacts  # consumed artifacts listed
 
 
@@ -244,11 +280,120 @@ def test_yaml_validator_rejects_empty_invalid_malformed():
 
 # ── 6. Idempotent re-run keeps a single artifact ─────────────────────────────
 
+def test_two_artifact_persistence_subtypes(db):
+    """The phase persists exactly two github_actions rows keyed by on-disk path."""
+    proj, wf, task = _seed(db, "Lambda")
+    _, ids = WOS.run_phase(
+        db, project=proj, workflow=wf, task=task, phase=PHASE_GH_ACTIONS,
+    )
+    rows = (db.query(Artifact)
+              .filter(Artifact.project_id == "proj-1",
+                      Artifact.artifact_type == "github_actions").all())
+    assert len(ids) == 2 and len(rows) == 2
+    # One artifact_type, two subtypes — no new artifact type introduced.
+    assert {r.artifact_type for r in rows} == {"github_actions"}
+    assert {r.artifact_subtype for r in rows} == {
+        ".github/workflows/bootstrap.yml",
+        ".github/workflows/deploy.yml",
+    }
+    assert all(r.validation_status == "passed" for r in rows)
+
+
+# ── 7. Pipeline-aware validation: terraform required/forbidden ───────────────
+
+def test_validate_pipeline_bootstrap_requires_terraform():
+    from backend.app.services.github_actions_generation.yaml_validator import (
+        validate_pipeline,
+    )
+    from backend.app.services.github_actions_generation.models import DeploymentContext
+    from backend.app.services.github_actions_generation.renderer import render_workflow
+
+    ctx = DeploymentContext(deployment_target="ecs", project_name="x",
+                            cluster_name="c", service_name="s")
+    _, bootstrap = render_workflow(ctx, "bootstrap")
+    assert validate_pipeline(bootstrap, kind="bootstrap").valid is True
+
+    # A structurally valid workflow that provisions nothing (terraform init but
+    # no apply) must be rejected as a bootstrap pipeline.
+    no_apply = (
+        "name: x\n"
+        "on:\n  workflow_dispatch:\n"
+        "jobs:\n  bootstrap:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - name: init\n        run: terraform init -input=false\n"
+    )
+    res = validate_pipeline(no_apply, kind="bootstrap")
+    assert res.valid is False
+    assert any("terraform apply" in e for e in res.errors)
+
+
+def test_validate_pipeline_deploy_forbids_terraform():
+    from backend.app.services.github_actions_generation.yaml_validator import (
+        validate_pipeline,
+    )
+    from backend.app.services.github_actions_generation.models import DeploymentContext
+    from backend.app.services.github_actions_generation.renderer import render_workflow
+
+    ctx = DeploymentContext(deployment_target="ecs", project_name="x",
+                            cluster_name="c", service_name="s")
+    _, deploy = render_workflow(ctx, "deploy")
+    assert validate_pipeline(deploy, kind="deploy", deployment_target="ecs").valid is True
+
+    # Inject a terraform step → delivery workflow must be rejected.
+    bad = deploy + "\n      - name: oops\n        run: terraform apply\n"
+    res = validate_pipeline(bad, kind="deploy", deployment_target="ecs")
+    assert res.valid is False
+    assert any("must not contain 'terraform apply'" in e for e in res.errors)
+
+
+@pytest.mark.parametrize("target,command", [
+    ("ecs", "aws ecs update-service"),
+    ("eks", "kubectl"),
+    ("lambda", "aws lambda update-function-code"),
+    ("ec2", "aws ssm send-command"),
+])
+def test_deploy_requires_docker_and_deployment_command(target, command):
+    from backend.app.services.github_actions_generation.yaml_validator import (
+        validate_pipeline,
+    )
+    from backend.app.services.github_actions_generation.models import DeploymentContext
+    from backend.app.services.github_actions_generation.renderer import render_workflow
+
+    ctx = DeploymentContext(deployment_target=target, project_name="x",
+                            cluster_name="c", service_name="s", function_name="f")
+    _, deploy = render_workflow(ctx, "deploy")
+    assert "docker build" in deploy and "docker push" in deploy
+    assert command in deploy
+    assert validate_pipeline(deploy, kind="deploy", deployment_target=target).valid is True
+
+
+def test_deploy_has_test_detection_and_concurrency():
+    """Option B: deploy.yml auto-detects the toolchain and serialises deploys."""
+    from backend.app.services.github_actions_generation.models import DeploymentContext
+    from backend.app.services.github_actions_generation.renderer import render_workflow
+
+    ctx = DeploymentContext(deployment_target="ecs", project_name="x",
+                            cluster_name="c", service_name="s")
+    _, deploy = render_workflow(ctx, "deploy")
+    # Toolchain detection markers (Spring Boot / Gradle / Node / Angular / Python).
+    for marker in ("pom.xml", "build.gradle", "package.json", "angular.json",
+                   "pytest", "mvn -B test"):
+        assert marker in deploy
+    assert "continue-on-error: true" in deploy
+    assert "concurrency:" in deploy and "cancel-in-progress: true" in deploy
+
+
 def test_rerun_is_idempotent(db):
     proj, wf, task = _seed(db, "ECS")
     WOS.run_phase(db, project=proj, workflow=wf, task=task, phase=PHASE_GH_ACTIONS)
     WOS.run_phase(db, project=proj, workflow=wf, task=task, phase=PHASE_GH_ACTIONS)
     rows = (db.query(Artifact)
               .filter(Artifact.project_id == "proj-1",
-                      Artifact.artifact_type == "github_actions").count())
-    assert rows == 1  # upsert dedupes by (project, type, subtype)
+                      Artifact.artifact_type == "github_actions").all())
+    # Still exactly TWO rows — upsert dedupes by (project, type, subtype); the two
+    # subtypes (bootstrap.yml + deploy.yml) are the only github_actions artifacts.
+    assert len(rows) == 2
+    assert {r.artifact_subtype for r in rows} == {
+        ".github/workflows/bootstrap.yml",
+        ".github/workflows/deploy.yml",
+    }
+    assert all(r.version == 1 for r in rows)  # identical content → no version bump

@@ -88,6 +88,15 @@ class Settings(BaseSettings):
     OPENAI_TIMEOUT: float = 120.0
     OPENAI_MAX_RETRIES: int = 2
 
+    # GitHub Actions deploy.yml enrichment (OPTIONAL polish pass).
+    # When true, the rendered deployment workflow is handed to GPT-5-mini for
+    # conservative, additive improvements (caching/permissions/concurrency/
+    # comments/retention) AFTER rendering and BEFORE YAML validation. The
+    # template stays the source of truth: any deviation, invalid YAML, or removed
+    # job/terraform/Docker/deploy step falls back to the deterministic render.
+    # DEFAULT-OFF so generation is fully deterministic unless explicitly enabled.
+    ENABLE_GITHUB_ACTIONS_ENRICHMENT: bool = False
+
     # GitHub Models — retained for legacy LLMRouter usage (Azure-backed, OpenAI-compatible)
     # Get a token at https://github.com/settings/tokens (no scopes required for public models)
     GITHUB_TOKEN: str = ""

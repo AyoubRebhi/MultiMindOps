@@ -5,20 +5,23 @@ Assembles the ONE payload the GitHub Actions surface consumes
 the GITHUB_ACTIONS_GENERATION phase already persisted. It is the deployment
 analogue of ``DockerPhaseProjectionService``:
 
-* reads the backing task's ``workflow_state["github_actions"]`` (rendered YAML,
-  deployment context, inline validation),
+* reads the backing task's ``workflow_state["github_actions"]`` (rendered YAML for
+  each pipeline, deployment context, inline validation),
 * reads ``Workflow.phases_state`` for the authoritative phase status,
-* reads the DB-backed ``github_actions`` ``Artifact`` row for the deploy.yml's
-  version + approval + validation status (source of truth for the persisted file).
+* reads the DB-backed ``github_actions`` ``Artifact`` rows (one per file:
+  ``bootstrap.yml`` + ``deploy.yml``) for each file's version + approval +
+  validation status (source of truth for the persisted bytes).
 
 It NEVER re-runs generation and NEVER calls an LLM. A workflow that has not
 reached the phase projects to ``generated=False`` with well-formed empty
-sub-objects (200, not 404).
+sub-objects (200, not 404). The response exposes the bootstrap/deploy split as
+``pipelines`` and keeps ``workflow_file`` pointed at the delivery file for
+backward compatibility.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -29,12 +32,21 @@ from backend.app.schemas.github_actions_phase import (
     DeploymentContextView,
     GitHubActionsArtifact,
     GitHubActionsPhaseResponse,
+    PipelineFileView,
     WorkflowYamlValidation,
 )
 from backend.app.services.core.task_service import TaskService
 
 _PHASE_KEY = "GITHUB_ACTIONS_GENERATION"
-_WORKFLOW_PATH = ".github/workflows/deploy.yml"
+_BOOTSTRAP_PATH = ".github/workflows/bootstrap.yml"
+_DEPLOY_PATH = ".github/workflows/deploy.yml"
+
+# Path → (kind, human name). Used to reconstruct pipeline identity when projecting
+# from DB rows alone (e.g. a legacy run with no scratch ``pipelines`` block).
+_PIPELINE_BY_PATH: Dict[str, tuple[str, str]] = {
+    _BOOTSTRAP_PATH: ("bootstrap", "Infrastructure Pipeline"),
+    _DEPLOY_PATH: ("deploy", "Delivery Pipeline"),
+}
 
 
 class GitHubActionsPhaseProjectionService:
@@ -57,28 +69,35 @@ class GitHubActionsPhaseProjectionService:
         phase_entry = phases_state.get(_PHASE_KEY) or {}
         phase_status = phase_entry.get("status")
 
-        row = GitHubActionsPhaseProjectionService._artifact_row(
+        rows_by_path = GitHubActionsPhaseProjectionService._artifact_rows(
             db, project_id=project_id
         )
 
-        # Prefer the persisted DB content (canonical) but fall back to the
-        # scratch render so an un-persisted (e.g. failed-validation) result shows.
-        db_content = str(getattr(row, "content", "") or "")
-        content = db_content or str(gh.get("content") or "")
-        generated = bool(content.strip())
+        pipelines = GitHubActionsPhaseProjectionService._build_pipelines(
+            gh, phase_entry, rows_by_path
+        )
+        generated = any(p.content.strip() for p in pipelines)
+
+        # Back-compat: the delivery (deploy.yml) file as the legacy single artifact.
+        deploy_view = next(
+            (p for p in pipelines if p.kind == "deploy" and p.content.strip()), None
+        )
+        workflow_file: Optional[GitHubActionsArtifact] = None
+        if deploy_view is not None:
+            workflow_file = GitHubActionsArtifact(
+                path=deploy_view.path or _DEPLOY_PATH,
+                content=deploy_view.content,
+                version=deploy_view.version,
+                approval_state=deploy_view.approval_state,
+                validation_status=deploy_view.validation_status,
+            )
 
         context_view = GitHubActionsPhaseProjectionService._context_view(gh, phase_entry)
-        validation = GitHubActionsPhaseProjectionService._validation(gh, phase_entry)
-
-        workflow_file: Optional[GitHubActionsArtifact] = None
-        if generated:
-            workflow_file = GitHubActionsArtifact(
-                path=_WORKFLOW_PATH,
-                content=content,
-                version=getattr(row, "version", None),
-                approval_state=getattr(row, "approval_state", None),
-                validation_status=getattr(row, "validation_status", None),
-            )
+        # Top-level validation mirrors the delivery file (legacy single-file field).
+        validation = (
+            deploy_view.validation if deploy_view is not None
+            else GitHubActionsPhaseProjectionService._validation(gh, phase_entry)
+        )
 
         return GitHubActionsPhaseResponse(
             workflow_id=workflow.id,
@@ -97,6 +116,7 @@ class GitHubActionsPhaseProjectionService:
             ),
             deployment_context=context_view,
             validation=validation,
+            pipelines=pipelines,
             workflow_file=workflow_file,
             infrastructure_summary=(
                 gh.get("deployment_context", {}).get("infrastructure_summary")
@@ -105,18 +125,122 @@ class GitHubActionsPhaseProjectionService:
             ) or {},
         )
 
+    # ── Pipelines (bootstrap + deploy) ────────────────────────────────────────
+
+    @staticmethod
+    def _build_pipelines(
+        gh: Dict[str, Any],
+        phase_entry: Dict[str, Any],
+        rows_by_path: Dict[str, Artifact],
+    ) -> List[PipelineFileView]:
+        """Reconstruct both pipeline files, preferring DB bytes over scratch.
+
+        Source order:
+          1. scratch ``github_actions.pipelines`` (carries rendered content +
+             inline validation per file) — the normal path,
+          2. the DB-backed ``github_actions`` Artifact rows (canonical bytes /
+             version / approval) merged in,
+          3. a legacy single-file scratch render (``gh['content']``) as a last
+             resort so old runs still project.
+        """
+        scratch_pipelines = gh.get("pipelines")
+        views: List[PipelineFileView] = []
+        seen_paths: set[str] = set()
+
+        if isinstance(scratch_pipelines, list) and scratch_pipelines:
+            for item in scratch_pipelines:
+                if not isinstance(item, dict):
+                    continue
+                path = item.get("path") or ""
+                row = rows_by_path.get(path)
+                views.append(
+                    GitHubActionsPhaseProjectionService._pipeline_view(item, path, row)
+                )
+                seen_paths.add(path)
+
+        # Merge any DB rows not represented in scratch (e.g. scratch lost).
+        for path, row in rows_by_path.items():
+            if path in seen_paths:
+                continue
+            views.append(
+                GitHubActionsPhaseProjectionService._pipeline_view({}, path, row)
+            )
+            seen_paths.add(path)
+
+        # Legacy fallback: a single-file run with no per-pipeline block.
+        if not views:
+            legacy_content = str(gh.get("content") or "")
+            if legacy_content.strip():
+                kind, name = _PIPELINE_BY_PATH.get(
+                    _DEPLOY_PATH, ("deploy", "Delivery Pipeline")
+                )
+                views.append(
+                    PipelineFileView(
+                        name=name,
+                        kind=kind,
+                        path=gh.get("workflow_path") or _DEPLOY_PATH,
+                        content=legacy_content,
+                        template=gh.get("template"),
+                        validation=GitHubActionsPhaseProjectionService._validation(
+                            gh, phase_entry
+                        ),
+                        enrichment_applied=bool(gh.get("enrichment_applied")),
+                    )
+                )
+
+        # Stable order: bootstrap first, then deploy, then anything else.
+        order = {_BOOTSTRAP_PATH: 0, _DEPLOY_PATH: 1}
+        views.sort(key=lambda v: order.get(v.path, 99))
+        return views
+
+    @staticmethod
+    def _pipeline_view(
+        item: Dict[str, Any], path: str, row: Optional[Artifact]
+    ) -> PipelineFileView:
+        """Build one :class:`PipelineFileView`, preferring DB content over scratch."""
+        kind, default_name = _PIPELINE_BY_PATH.get(path, ("", ""))
+        db_content = str(getattr(row, "content", "") or "") if row else ""
+        content = db_content or str(item.get("content") or "")
+
+        val = item.get("validation")
+        validation = (
+            WorkflowYamlValidation(
+                status=val.get("status", "not_run"),
+                valid=val.get("status", "") != "failed",
+                errors=list(val.get("errors") or []),
+                warnings=list(val.get("warnings") or []),
+            )
+            if isinstance(val, dict) and val
+            else WorkflowYamlValidation()
+        )
+
+        return PipelineFileView(
+            name=item.get("name") or default_name,
+            kind=item.get("kind") or kind,
+            path=path,
+            content=content,
+            template=item.get("template"),
+            version=getattr(row, "version", None) if row else None,
+            approval_state=getattr(row, "approval_state", None) if row else None,
+            validation_status=getattr(row, "validation_status", None) if row else None,
+            validation=validation,
+            enrichment_applied=bool(item.get("enrichment_applied")),
+        )
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _artifact_row(db: Session, *, project_id: str) -> Optional[Artifact]:
-        return (
+    def _artifact_rows(db: Session, *, project_id: str) -> Dict[str, Artifact]:
+        """Return the project's ``github_actions`` Artifact rows keyed by path."""
+        rows = (
             db.query(Artifact)
             .filter(
                 Artifact.project_id == project_id,
                 Artifact.artifact_type == "github_actions",
             )
-            .first()
+            .all()
         )
+        return {row.artifact_subtype: row for row in rows if row.artifact_subtype}
 
     @staticmethod
     def _context_view(

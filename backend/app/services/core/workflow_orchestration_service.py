@@ -577,7 +577,6 @@ class WorkflowOrchestrationService:
             DeploymentContextNotReady,
         )
         from backend.app.services.github_actions_generation.generation_service import (
-            WORKFLOW_PATH,
             GitHubActionsGenerationService,
         )
 
@@ -591,21 +590,39 @@ class WorkflowOrchestrationService:
 
         ctx = result.deployment_context
         persisted_ids: List[str] = []
-        status = "completed" if result.valid else "failed"
+        pipelines_meta: List[dict] = []
 
-        # Persist the workflow file ONLY when it validated (Phase 5 contract).
-        if result.valid:
-            artifact = _APS.upsert_artifact(
-                db,
-                project_id=project.id,
-                workflow_id=workflow.id,
-                artifact_type="github_actions",
-                artifact_subtype=WORKFLOW_PATH,
-                content=result.content,
-                generated_by_agent="GitHubActionsGenerationService",
-                validation_status="passed",
-            )
-            persisted_ids = [artifact.id]
+        # Persist each file that individually validated (Phase 5 contract). The
+        # artifact_type stays "github_actions"; the two files are distinguished by
+        # artifact_subtype (their on-disk path) — no new artifact type, no migration.
+        for f in result.files:
+            if f.valid:
+                artifact = _APS.upsert_artifact(
+                    db,
+                    project_id=project.id,
+                    workflow_id=workflow.id,
+                    artifact_type="github_actions",
+                    artifact_subtype=f.path,
+                    content=f.content,
+                    generated_by_agent="GitHubActionsGenerationService",
+                    validation_status="passed",
+                )
+                persisted_ids.append(artifact.id)
+            pipelines_meta.append({
+                "name": f.name,
+                "kind": f.kind,
+                "path": f.path,
+                "template": f.template,
+                "validation_status": f.validation.status,
+                "validation_errors": f.validation.errors,
+                "enrichment_applied": f.enrichment_applied,
+                "persisted": f.valid,
+            })
+
+        # The phase completes only when BOTH files validated; otherwise the run
+        # stays open so it can be re-run after a fix (any valid file is still saved).
+        status = "completed" if result.valid else "failed"
+        enrichment_applied = any(f.enrichment_applied for f in result.files)
 
         WorkflowOrchestrationService._record_phase(
             workflow,
@@ -613,14 +630,16 @@ class WorkflowOrchestrationService:
             status=status,
             extra={
                 "deployment_target": ctx.deployment_target,
-                "template": result.template,
-                "workflow_path": WORKFLOW_PATH,
+                "pipelines": pipelines_meta,
                 "artifact_count": len(persisted_ids),
-                "validation_status": result.validation.status,
-                "validation_errors": result.validation.errors,
-                "enrichment_applied": result.enrichment_applied,
+                "enrichment_applied": enrichment_applied,
                 "docker_artifacts": ctx.docker_artifacts,
                 "terraform_artifacts": ctx.terraform_artifacts,
+                # Back-compat scalar mirrors of the delivery (deploy) file.
+                "template": result.deploy.template,
+                "workflow_path": result.deploy.path,
+                "validation_status": result.deploy.validation.status,
+                "validation_errors": result.deploy.validation.errors,
             },
         )
         workflow.current_phase = PHASE_GH_ACTIONS
@@ -632,21 +651,38 @@ class WorkflowOrchestrationService:
             workflow.status = "running"
 
         # Mirror the result into scratch state so the phase-run response + the
-        # read projection can render the generated workflow without a re-run.
+        # read projection can render the generated workflows without a re-run.
         state = TaskService.load_workflow_state(db, task) or {}
         gh_state = state.setdefault("github_actions", {})
         gh_state.update({
             "deployment_target": ctx.deployment_target,
-            "template": result.template,
-            "workflow_path": WORKFLOW_PATH,
-            "content": result.content,
-            "validation": {
-                "status": result.validation.status,
-                "errors": result.validation.errors,
-                "warnings": result.validation.warnings,
-            },
-            "enrichment_applied": result.enrichment_applied,
             "deployment_context": ctx.model_dump(),
+            "enrichment_applied": enrichment_applied,
+            "pipelines": [
+                {
+                    "name": f.name,
+                    "kind": f.kind,
+                    "path": f.path,
+                    "template": f.template,
+                    "content": f.content,
+                    "validation": {
+                        "status": f.validation.status,
+                        "errors": f.validation.errors,
+                        "warnings": f.validation.warnings,
+                    },
+                    "enrichment_applied": f.enrichment_applied,
+                }
+                for f in result.files
+            ],
+            # Back-compat scalar mirrors of the delivery (deploy) file.
+            "template": result.deploy.template,
+            "workflow_path": result.deploy.path,
+            "content": result.deploy.content,
+            "validation": {
+                "status": result.deploy.validation.status,
+                "errors": result.deploy.validation.errors,
+                "warnings": result.deploy.validation.warnings,
+            },
         })
         state["logs"] = list(state.get("logs", [])) + result.logs
         TaskService.stage_workflow_state(task, state)

@@ -45,13 +45,36 @@ class WorkflowYamlValidation(BaseModel):
 
 
 class GitHubActionsArtifact(BaseModel):
-    """The generated deploy.yml — read-only, with version/approval provenance."""
+    """The generated deploy.yml — read-only, with version/approval provenance.
+
+    Retained for backward compatibility; new clients should read ``pipelines``.
+    """
 
     path: str = ".github/workflows/deploy.yml"
     content: str = ""
     version: Optional[int] = None
     approval_state: Optional[str] = None
     validation_status: Optional[str] = None
+
+
+class PipelineFileView(BaseModel):
+    """One generated workflow file in the bootstrap/deploy split.
+
+    ``kind`` is ``bootstrap`` (Infrastructure Pipeline — provisioning + first
+    deploy, manual trigger) or ``deploy`` (Delivery Pipeline — continuous delivery
+    on every push, no Terraform).
+    """
+
+    name: str = ""                            # human label
+    kind: str = ""                            # bootstrap | deploy
+    path: str = ""                            # .github/workflows/<file>.yml
+    content: str = ""
+    template: Optional[str] = None
+    version: Optional[int] = None
+    approval_state: Optional[str] = None
+    validation_status: Optional[str] = None
+    validation: WorkflowYamlValidation = WorkflowYamlValidation()
+    enrichment_applied: bool = False
 
 
 class GitHubActionsPhaseResponse(BaseModel):
@@ -71,5 +94,10 @@ class GitHubActionsPhaseResponse(BaseModel):
 
     deployment_context: DeploymentContextView = DeploymentContextView()
     validation: WorkflowYamlValidation = WorkflowYamlValidation()
+    # The bootstrap + deploy split. Empty until the phase has generated files.
+    pipelines: List[PipelineFileView] = []
+    # Back-compat: the delivery (deploy.yml) file. New clients should read
+    # ``pipelines``; this mirrors the deploy pipeline so existing readers keep
+    # working during the migration.
     workflow_file: Optional[GitHubActionsArtifact] = None
     infrastructure_summary: Dict[str, Any] = {}

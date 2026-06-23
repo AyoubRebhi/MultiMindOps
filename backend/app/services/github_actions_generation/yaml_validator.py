@@ -13,11 +13,25 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# ── Pipeline-kind marker rules (Phase 4) ─────────────────────────────────────
+# Markers are matched case-insensitively against the rendered text. They encode
+# the bootstrap/deploy contract: provisioning belongs ONLY to bootstrap.yml.
+_TERRAFORM_MARKERS: tuple[str, ...] = ("terraform init", "terraform apply")
+_DELIVERY_MARKERS: tuple[str, ...] = ("docker build", "docker push")
+
+# Target-specific deployment command a delivery workflow must contain.
+_DEPLOY_COMMAND_BY_TARGET: Dict[str, tuple[str, ...]] = {
+    "ecs": ("aws ecs update-service",),
+    "eks": ("kubectl",),
+    "lambda": ("aws lambda update-function-code",),
+    "ec2": ("aws ssm send-command",),
+}
 
 
 @dataclass
@@ -88,4 +102,68 @@ def validate_workflow_yaml(content: str) -> YamlValidationResult:
         logger.warning("[GitHubActions] YAML validation failed: %s", errors)
     return YamlValidationResult(
         valid=valid, errors=errors, warnings=warnings, parsed=parsed
+    )
+
+
+def validate_pipeline(
+    content: str,
+    *,
+    kind: str,
+    deployment_target: Optional[str] = None,
+) -> YamlValidationResult:
+    """Validate a rendered workflow for its pipeline ``kind`` (Phase 4).
+
+    Layers kind-specific marker rules on top of the base structural validation:
+
+    * ``bootstrap`` — MUST contain ``terraform init`` + ``terraform apply``
+      (it is the one place infrastructure is provisioned).
+    * ``deploy`` — MUST NOT contain any terraform step, and MUST contain
+      ``docker build`` + ``docker push`` and the target's deployment command
+      (e.g. ``aws ecs update-service`` / ``kubectl`` / ``aws lambda
+      update-function-code`` / ``aws ssm send-command``).
+
+    An unknown ``kind`` falls back to base structural validation only.
+    """
+    base = validate_workflow_yaml(content)
+    lowered = (content or "").lower()
+    errors: List[str] = list(base.errors)
+
+    if kind == "bootstrap":
+        for marker in _TERRAFORM_MARKERS:
+            if marker not in lowered:
+                errors.append(
+                    f"bootstrap workflow is missing required step '{marker}'."
+                )
+    elif kind == "deploy":
+        for marker in _TERRAFORM_MARKERS:
+            if marker in lowered:
+                errors.append(
+                    f"deploy workflow must not contain '{marker}' — infrastructure "
+                    "provisioning belongs to bootstrap.yml."
+                )
+        for marker in _DELIVERY_MARKERS:
+            if marker not in lowered:
+                errors.append(
+                    f"deploy workflow is missing required step '{marker}'."
+                )
+        commands = _DEPLOY_COMMAND_BY_TARGET.get((deployment_target or "").lower())
+        if commands is None:
+            # Unknown target — accept any recognised deployment command.
+            commands = tuple(
+                cmd for cmds in _DEPLOY_COMMAND_BY_TARGET.values() for cmd in cmds
+            )
+        if not any(cmd in lowered for cmd in commands):
+            errors.append(
+                "deploy workflow is missing its deployment command "
+                f"({' or '.join(commands)})."
+            )
+
+    valid = not errors
+    if not valid:
+        logger.warning(
+            "[GitHubActions] pipeline validation failed (kind=%s target=%s): %s",
+            kind, deployment_target, errors,
+        )
+    return YamlValidationResult(
+        valid=valid, errors=errors, warnings=base.warnings, parsed=base.parsed
     )
