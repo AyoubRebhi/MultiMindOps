@@ -75,6 +75,8 @@ export default function WorkflowGithubActionsPhase({ workflowId, workflow, onAdv
   }
 
   const done = data.phaseStatus === 'completed';
+  const pipelines = Array.isArray(data.pipelines) ? data.pipelines.filter((p) => p && p.content) : [];
+  const hasPipelines = pipelines.length > 0;
 
   return (
     <Shell
@@ -93,9 +95,195 @@ export default function WorkflowGithubActionsPhase({ workflowId, workflow, onAdv
       }
     >
       <DeploymentSummary ctx={data.deploymentContext} target={data.deploymentTarget} template={data.template} />
-      <ValidationCard validation={data.validation} enrichmentApplied={data.enrichmentApplied} />
-      <WorkflowFileViewer file={data.workflowFile} toast={toast} />
+
+      {hasPipelines ? (
+        /* New: the bootstrap/deploy split — Infrastructure + Delivery pipelines. */
+        <>
+          <LifecycleLegend />
+          {pipelines.map((p) => (
+            <PipelineCard key={p.path || p.kind} pipeline={p} toast={toast} />
+          ))}
+        </>
+      ) : (
+        /* Fallback: a legacy single-file run still renders the old deploy view. */
+        <>
+          <ValidationCard validation={data.validation} enrichmentApplied={data.enrichmentApplied} />
+          <WorkflowFileViewer file={data.workflowFile} toast={toast} />
+        </>
+      )}
     </Shell>
+  );
+}
+
+/* ── Pipeline metadata (kind → identity, icon, trigger, lifecycle copy) ──────── */
+
+const PIPELINE_META = {
+  bootstrap: {
+    title: 'Infrastructure Pipeline',
+    file: 'bootstrap.yml',
+    icon: 'fa-screwdriver-wrench',
+    color: '#a78bfa',
+    purpose: 'Infrastructure provisioning',
+    description: 'Creates and updates infrastructure.',
+    trigger: 'workflow_dispatch (manual)',
+  },
+  deploy: {
+    title: 'Delivery Pipeline',
+    file: 'deploy.yml',
+    icon: 'fa-cloud-arrow-up',
+    color: '#22c55e',
+    purpose: 'Continuous delivery',
+    description: 'Deploys application changes.',
+    trigger: 'push + workflow_dispatch',
+  },
+};
+
+function pipelineMeta(kind) {
+  return PIPELINE_META[kind] || {
+    title: 'Pipeline',
+    file: 'workflow.yml',
+    icon: 'fa-file-code',
+    color: '#94a3b8',
+    purpose: 'GitHub Actions workflow',
+    description: '',
+    trigger: 'workflow_dispatch',
+  };
+}
+
+/* ── Lifecycle legend (explains the two stages of the DevOps lifecycle) ──────── */
+
+function LifecycleLegend() {
+  return (
+    <div className="surface mt-3 d-flex align-items-center flex-wrap gap-3" style={{ fontSize: '.78rem' }}>
+      <span className="d-flex align-items-center gap-2">
+        <i className="fa-solid fa-screwdriver-wrench" style={{ color: PIPELINE_META.bootstrap.color }} />
+        <strong>Infrastructure Pipeline</strong>
+        <span className="text-muted">creates and updates infrastructure.</span>
+      </span>
+      <i className="fa-solid fa-arrow-right text-muted d-none d-md-inline" />
+      <span className="d-flex align-items-center gap-2">
+        <i className="fa-solid fa-cloud-arrow-up" style={{ color: PIPELINE_META.deploy.color }} />
+        <strong>Delivery Pipeline</strong>
+        <span className="text-muted">deploys application changes.</span>
+      </span>
+    </div>
+  );
+}
+
+/* ── One pipeline card: identity + meta + validation + YAML viewer ───────────── */
+
+function PipelineCard({ pipeline, toast }) {
+  const meta = pipelineMeta(pipeline.kind);
+  const title = pipeline.name || meta.title;
+  const filename = (pipeline.path || '').split('/').pop() || meta.file;
+  const v = pipeline.validation || { status: 'not_run', errors: [], warnings: [] };
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(pipeline.content || '');
+      toast.success(`${filename} copied to clipboard.`);
+    } catch {
+      toast.error('Could not copy to clipboard.');
+    }
+  }
+
+  return (
+    <div
+      className="surface mt-3"
+      style={{ borderLeft: `3px solid ${meta.color}` }}
+    >
+      {/* Header: icon + identity + copy */}
+      <div className="d-flex align-items-start justify-content-between flex-wrap gap-2">
+        <div className="d-flex align-items-center gap-2">
+          <i className={`fa-solid ${meta.icon}`} style={{ color: meta.color, fontSize: '1.05rem' }} />
+          <div>
+            <div className="d-flex align-items-center gap-2">
+              <strong style={{ fontSize: '.95rem' }}>{title}</strong>
+              <code style={{ fontSize: '.74rem' }}>{filename}</code>
+              {pipeline.version != null && (
+                <span className="text-muted" style={{ fontSize: '.72rem' }}>v{pipeline.version}</span>
+              )}
+            </div>
+            <div className="text-muted" style={{ fontSize: '.78rem' }}>{meta.description}</div>
+          </div>
+        </div>
+        <button type="button" className="boc btn px-3 py-1" style={{ fontSize: '.78rem' }} onClick={copy}>
+          <i className="fa-regular fa-copy me-2" />Copy
+        </button>
+      </div>
+
+      {/* Meta strip: purpose · trigger · template · validation */}
+      <div className="d-flex flex-wrap gap-2 mt-3">
+        <MetaChip icon="fa-bullseye" label="Purpose" value={meta.purpose} />
+        <MetaChip icon="fa-bolt" label="Trigger" value={meta.trigger} mono />
+        {pipeline.template && <MetaChip icon="fa-layer-group" label="Template" value={pipeline.template} mono />}
+        <PipelineValidationChip validation={v} />
+        {pipeline.enrichmentApplied && (
+          <span className="badge bg-info text-dark align-self-center" style={{ fontSize: '.7rem' }}>
+            <i className="fa-solid fa-wand-magic-sparkles me-1" />LLM enriched
+          </span>
+        )}
+      </div>
+
+      {/* Validation messages (if any) */}
+      {v.errors.length > 0 && (
+        <ul className="mt-2 mb-0" style={{ fontSize: '.76rem', color: '#ef4444' }}>
+          {v.errors.map((e, i) => <li key={i}>{e}</li>)}
+        </ul>
+      )}
+      {v.warnings.length > 0 && (
+        <ul className="mt-2 mb-0" style={{ fontSize: '.76rem', color: '#eab308' }}>
+          {v.warnings.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      )}
+
+      {/* YAML viewer */}
+      <pre
+        className="mb-0 mt-3"
+        style={{
+          maxHeight: 420,
+          overflow: 'auto',
+          background: 'rgba(0,0,0,.35)',
+          borderRadius: 8,
+          padding: '12px 14px',
+          fontSize: '.76rem',
+          lineHeight: 1.5,
+        }}
+      >
+        <code>{pipeline.content}</code>
+      </pre>
+      <p className="text-muted mt-2 mb-0" style={{ fontSize: '.74rem' }}>
+        Commit this file to <code>{pipeline.path || `.github/workflows/${filename}`}</code>.
+      </p>
+    </div>
+  );
+}
+
+function MetaChip({ icon, label, value, mono }) {
+  return (
+    <div className="surface" style={{ padding: '6px 10px' }}>
+      <div className="text-muted d-flex align-items-center gap-1" style={{ fontSize: '.66rem' }}>
+        <i className={`fa-solid ${icon}`} />{label}
+      </div>
+      <div style={{ fontSize: '.8rem', fontFamily: mono ? 'monospace' : undefined }}>{value}</div>
+    </div>
+  );
+}
+
+function PipelineValidationChip({ validation }) {
+  const status = validation.status || 'not_run';
+  const map = {
+    passed: { icon: 'fa-circle-check', color: '#22c55e', text: 'Validation passed' },
+    warnings: { icon: 'fa-triangle-exclamation', color: '#eab308', text: 'Validation warnings' },
+    failed: { icon: 'fa-circle-xmark', color: '#ef4444', text: 'Validation failed' },
+    not_run: { icon: 'fa-circle-minus', color: '#94a3b8', text: 'Not validated' },
+  };
+  const m = map[status] || map.not_run;
+  return (
+    <div className="surface d-flex align-items-center gap-2" style={{ padding: '6px 10px' }}>
+      <i className={`fa-solid ${m.icon}`} style={{ color: m.color }} />
+      <span style={{ fontSize: '.8rem' }}>{m.text}</span>
+    </div>
   );
 }
 
@@ -123,7 +311,7 @@ function Shell({ status, actions, children }) {
         brand
         eyebrow="Phase 7 · Deployment Orchestration"
         title="GitHub Actions Generation"
-        subtitle="Generate the GitHub Actions deploy workflow that ships the validated Docker image and Terraform infrastructure. The deployment target is derived from your architecture decision."
+        subtitle="Generate the GitHub Actions pipelines that represent the full DevOps lifecycle — an Infrastructure pipeline (bootstrap.yml) that provisions and updates your Terraform infrastructure, and a Delivery pipeline (deploy.yml) that ships application changes. Targets are derived from your architecture decision."
         status={status}
         actions={actions}
       />
@@ -288,8 +476,8 @@ function NotGenerated({ projectId, generating, onGenerate }) {
   return (
     <EmptyState
       icon="fa-github"
-      title="No deployment workflow generated yet"
-      message="Docker and Terraform are ready — generate the GitHub Actions workflow that deploys them. The deployment target (ECS / EKS / Lambda / EC2) is derived from your selected architecture; the workflow is rendered from a vetted template and validated before it's saved."
+      title="No deployment pipelines generated yet"
+      message="Docker and Terraform are ready — generate the GitHub Actions pipelines that ship them: an Infrastructure pipeline (bootstrap.yml) that provisions your Terraform infrastructure, and a Delivery pipeline (deploy.yml) for continuous delivery. The deployment target (ECS / EKS / Lambda / EC2) is derived from your selected architecture; each pipeline is rendered from a vetted template and validated before it's saved."
       action={
         <div className="d-flex gap-2 justify-content-center">
           <button
@@ -302,7 +490,7 @@ function NotGenerated({ projectId, generating, onGenerate }) {
             {generating ? (
               <><span className="spinner me-2" />Generating…</>
             ) : (
-              <><i className="fa-brands fa-github me-2" />Generate deploy workflow</>
+              <><i className="fa-brands fa-github me-2" />Generate deployment pipelines</>
             )}
           </button>
           {projectId && (

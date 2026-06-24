@@ -325,6 +325,36 @@ export function mapDockerPhase(api = {}) {
  * GITHUB_ACTIONS_GENERATION state (rendered deploy.yml + deployment context +
  * YAML validation). Tolerant of partials so a not-yet-reached run renders.
  */
+/** Normalize one per-pipeline YAML validation block. */
+function pipelineValidation(v = {}) {
+  return {
+    status: v.status || 'not_run',
+    valid: v.valid !== false,
+    errors: arr(v.errors),
+    warnings: arr(v.warnings),
+  };
+}
+
+/**
+ * Map ONE backend PipelineFileView (the bootstrap/deploy split) into the
+ * camelCase shape the GitHub Actions cards consume. Faithful to the backend —
+ * `kind` ('bootstrap' | 'deploy') drives the card's identity, icon and trigger.
+ */
+export function mapPipelineFile(p = {}) {
+  return {
+    name: p.name || '',
+    kind: p.kind || '',
+    path: p.path || '',
+    content: p.content || '',
+    template: p.template || null,
+    version: p.version ?? null,
+    approvalState: p.approval_state || null,
+    validationStatus: p.validation_status || null,
+    validation: pipelineValidation(p.validation),
+    enrichmentApplied: !!p.enrichment_applied,
+  };
+}
+
 export function mapGithubActionsPhase(api = {}) {
   const ctx = api.deployment_context || {};
   const val = api.validation || {};
@@ -360,6 +390,10 @@ export function mapGithubActionsPhase(api = {}) {
       errors: arr(val.errors),
       warnings: arr(val.warnings),
     },
+    // The bootstrap/deploy split (Infrastructure + Delivery pipelines). Backend
+    // orders bootstrap first, then deploy. Empty for legacy single-file runs.
+    pipelines: arr(api.pipelines).map(mapPipelineFile),
+    // Back-compat: the delivery (deploy.yml) file as the legacy single artifact.
     workflowFile: wf
       ? {
           path: wf.path || '.github/workflows/deploy.yml',
