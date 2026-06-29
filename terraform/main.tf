@@ -1,0 +1,162 @@
+# ── microservices / low_cost ──────────────────────────────────────────────────
+# Minimal-cost EKS sandbox. Cost levers, relative to microservices/balanced:
+#   • public subnets only — NO NAT gateway (the single largest always-on EKS
+#     line item: ~$32/mo per AZ + data processing). Nodes get public IPs and
+#     egress straight through the internet gateway.
+#   • EKS control plane spans two AZs (a hard AWS requirement) but the worker
+#     node group is pinned to ONE subnet/AZ.
+#   • exactly one t3.small node (desired = min = max = 1) — no autoscaling.
+#   • no ElastiCache, no private subnets, no cross-AZ data transfer.
+# Suitable for development / staging / demos — NOT production HA.
+
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# ── VPC ───────────────────────────────────────────────────────────────────────
+
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = {
+    Name                                        = "${var.project_name}-vpc"
+    "kubernetes.io/cluster/${var.project_name}" = "shared"
+  }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "${var.project_name}-igw" }
+}
+
+# Two public subnets across two AZs. EKS requires its control-plane ENIs to span
+# at least two availability zones; deriving the CIDRs with cidrsubnet keeps this
+# self-contained regardless of the single-AZ subnet allocation upstream.
+resource "aws_subnet" "public" {
+  count                   = 2
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name                                        = "${var.project_name}-public-${count.index}"
+    "kubernetes.io/cluster/${var.project_name}" = "shared"
+    "kubernetes.io/role/elb"                    = "1"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count          = length(aws_subnet.public)
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+# ── ECR ───────────────────────────────────────────────────────────────────────
+
+resource "aws_ecr_repository" "app" {
+  name                 = "d96e-49b7-4499-8472-c79ca134c376"
+  image_tag_mutability = "IMMUTABLE"
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+}
+
+# ── IAM for EKS cluster + node group ──────────────────────────────────────────
+
+resource "aws_iam_role" "eks_cluster" {
+  name = "d96e-49b7-4499-8472-c79ca134c376-eks-cluster"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
+  role       = aws_iam_role.eks_cluster.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+}
+
+resource "aws_iam_role" "eks_node" {
+  name = "d96e-49b7-4499-8472-c79ca134c376-eks-node"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eks_node_worker" {
+  role       = aws_iam_role.eks_node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "eks_node_cni" {
+  role       = aws_iam_role.eks_node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+}
+
+resource "aws_iam_role_policy_attachment" "eks_node_ecr" {
+  role       = aws_iam_role.eks_node.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+# ── EKS cluster (control plane spans both public subnets / AZs) ────────────────
+
+resource "aws_eks_cluster" "main" {
+  name     = "d96e-49b7-4499-8472-c79ca134c376"
+  version  = var.eks_version
+  role_arn = aws_iam_role.eks_cluster.arn
+
+  vpc_config {
+    subnet_ids = aws_subnet.public[*].id
+  }
+
+  depends_on = [aws_iam_role_policy_attachment.eks_cluster_policy]
+}
+
+# ── EKS node group — single t3.small node, single AZ (cost floor) ──────────────
+
+resource "aws_eks_node_group" "main" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "d96e-49b7-4499-8472-c79ca134c376-ng"
+  node_role_arn   = aws_iam_role.eks_node.arn
+  # Single AZ on purpose — pin the node group to one subnet to avoid cross-AZ
+  # data-transfer charges and keep the sandbox to one node.
+  subnet_ids      = [aws_subnet.public[0].id]
+  instance_types  = [var.node_instance_type]
+
+  # Fixed single-node capacity — the low_cost contract. No autoscaling.
+  scaling_config {
+    desired_size = 1
+    min_size     = 1
+    max_size     = 1
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_node_worker,
+    aws_iam_role_policy_attachment.eks_node_cni,
+    aws_iam_role_policy_attachment.eks_node_ecr,
+  ]
+}
