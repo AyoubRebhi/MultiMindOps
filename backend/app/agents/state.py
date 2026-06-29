@@ -54,6 +54,13 @@ class OrchestratorState(TypedDict, total=False):
 
     application_profile: Optional[Dict[str, Any]]
 
+    # Structured diagnostics recorded when the analysis output was incomplete
+    # and had to be repaired with safe defaults (e.g. a missing/partial
+    # application_profile). Empty list means the analysis was complete.
+    # Each entry: {"field": str, "issue": "missing|empty|wrong_type|defaulted",
+    #              "detail": str}.
+    analysis_validation_errors: Optional[List[Dict[str, Any]]]
+
     # TerraformAgent → KubernetesAgent contract
     # Keys: cluster_endpoint, cluster_name, load_balancer_dns, ecr_repository_url
     terraform_outputs: Optional[Dict[str, Any]]

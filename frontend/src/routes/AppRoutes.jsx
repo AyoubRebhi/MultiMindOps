@@ -34,6 +34,7 @@ const CompleteRegistrationPage = lazy(() => import('@/pages/invite/CompleteRegis
 const DashboardRouter = lazy(() => import('@/pages/Dashboard/DashboardRouter'));
 const Projects = lazy(() => import('@/pages/Projects/Projects'));
 const ProjectDetails = lazy(() => import('@/pages/ProjectDetails/ProjectDetails'));
+const ProjectSettings = lazy(() => import('@/pages/ProjectSettings/ProjectSettings'));
 const Workflows = lazy(() => import('@/pages/Workflows/Workflows'));
 const Architecture = lazy(() => import('@/pages/Architecture/Architecture'));
 const Infrastructure = lazy(() => import('@/pages/Infrastructure/Infrastructure'));
@@ -86,11 +87,15 @@ export default function AppRoutes() {
             <Route path="change-password" element={<ChangePasswordPage />} />
             <Route path="projects" element={<Projects />} />
             <Route path="projects/:id" element={<ProjectDetails />} />
+            <Route path="projects/:id/settings" element={<ProjectSettings />} />
             <Route path="workflows" element={<Workflows />} />
             {/* Resume a workflow from its last saved phase (real backend data).
                 Reads status + current_phase and renders the correct phase
-                surface — the Analysis phase is the integrated one today. */}
+                surface. The optional :view segment lets a phase be addressed
+                DIRECTLY (e.g. .../monitoring) — used by the "Proceed to …"
+                buttons — while the bare path still resumes from current_phase. */}
             <Route path="workflows/run/:workflowId" element={<WorkflowRunPage />} />
+            <Route path="workflows/run/:workflowId/:view" element={<WorkflowRunPage />} />
             {/* Project-scoped Workflow Analysis dashboard (the AI's understanding
                 of a repository — single aggregated analysis surface). */}
             <Route path="workflows/:projectId/analysis" element={<WorkflowAnalysisDashboard />} />

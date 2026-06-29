@@ -407,6 +407,102 @@ export function mapGithubActionsPhase(api = {}) {
   };
 }
 
+/* ── Repository Installation phase mapper ───────────────────────────────────── */
+
+/**
+ * Map the GET .../repository-installation projection into the installation-phase
+ * view model. Faithful to the backend — every field is read straight from the
+ * persisted REPOSITORY_INSTALLATION state (installation branch + commit + PR +
+ * human log lines). Tolerant of partials so a not-yet-reached run renders.
+ */
+export function mapRepositoryInstallationPhase(api = {}) {
+  return {
+    workflowId: api.workflow_id || null,
+    projectId: api.project_id || null,
+    taskId: api.task_id || null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    phaseStatus: api.phase_status || null,
+    installed: !!api.installed,
+    prerequisitesMet: !!api.prerequisites_met,
+    hasRepoUrl: !!api.has_repo_url,
+    hasGithubToken: !!api.has_github_token,
+    missingRequirements: arr(api.missing_requirements),
+    repoUrl: api.repo_url || null,
+    branch: api.branch || null,
+    baseBranch: api.base_branch || null,
+    commitSha: api.commit_sha || null,
+    pushed: !!api.pushed,
+    committed: !!api.committed,
+    noChanges: !!api.no_changes,
+    prUrl: api.pr_url || null,
+    prCreated: !!api.pr_created,
+    prSkippedReason: api.pr_skipped_reason || null,
+    files: arr(api.files),
+    error: api.error || null,
+    logs: arr(api.logs),
+  };
+}
+
+/* ── Workflow Monitoring phase mapper ───────────────────────────────────────── */
+
+/**
+ * Map ONE backend PipelineRunView (the latest GitHub Actions run of a pipeline)
+ * into the camelCase shape the monitoring cards consume. Faithful to the
+ * backend — every field is read straight from the live GitHub Actions response.
+ * `kind` ('bootstrap' | 'deploy') drives the card identity (Infrastructure vs
+ * Delivery). `available` = the API was reachable; `found` = a run exists.
+ */
+export function mapPipelineRun(p = {}) {
+  return {
+    pipeline: p.pipeline || p.kind || '',
+    kind: p.kind || p.pipeline || '',
+    name: p.name || '',
+    workflowFile: p.workflow_file || '',
+    workflowUrl: p.workflow_url || null,
+    available: p.available !== false,
+    found: !!p.found,
+    runId: p.run_id ?? null,
+    runNumber: p.run_number ?? null,
+    status: p.status || null,
+    conclusion: p.conclusion || null,
+    branch: p.branch || null,
+    commitSha: p.commit_sha || null,
+    actor: p.actor || null,
+    event: p.event || null,
+    startedAt: p.started_at || null,
+    completedAt: p.completed_at || null,
+    durationSeconds: typeof p.duration_seconds === 'number' ? p.duration_seconds : null,
+    htmlUrl: p.html_url || null,
+    currentJob: p.current_job || null,
+    currentStep: p.current_step || null,
+    error: p.error || null,
+  };
+}
+
+/**
+ * Map the GET .../monitoring projection into the monitoring-phase view model.
+ * Read-only: the backend queries GitHub Actions live on each call. Tolerant of
+ * partials so a degraded/not-yet-installed run still renders.
+ */
+export function mapWorkflowMonitoring(api = {}) {
+  return {
+    workflowId: api.workflow_id || null,
+    projectId: api.project_id || null,
+    taskId: api.task_id || null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    phaseStatus: api.phase_status || null,
+    monitoringAvailable: !!api.monitoring_available,
+    stale: !!api.stale,
+    fetchedAt: api.fetched_at || null,
+    repoUrl: api.repo_url || null,
+    error: api.error || null,
+    infrastructure: mapPipelineRun(api.infrastructure),
+    delivery: mapPipelineRun(api.delivery),
+  };
+}
+
 /* ── Terraform-phase mappers (Phase 2A: Generation only) ────────────────────── */
 
 /**
@@ -423,6 +519,47 @@ export function mapWorkflowDetail(api) {
     status: api.status,
     phasesState: api.phases_state || {},
     updatedAt: api.updated_at || null,
+  };
+}
+
+/* ── Workflow revision mappers (regenerate + revision history) ─────────────── */
+
+/** Map the POST .../regenerate reply (RegeneratePhaseResponse) to camelCase. */
+export function mapRegenerateResult(api = {}) {
+  return {
+    workflowId: api.workflow_id || null,
+    taskId: api.task_id || null,
+    phase: api.phase || null,
+    revised: !!api.revised,
+    revision: api.revision ?? null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    phasesState: api.phases_state || {},
+    invalidatedPhases: arr(api.invalidated_phases),
+    supersededArtifacts: api.superseded_artifacts || {},
+    persistedArtifactIds: arr(api.persisted_artifact_ids),
+  };
+}
+
+/** Map ONE revision-history entry (WorkflowRevisionEntry) to camelCase. */
+export function mapRevisionEntry(e = {}) {
+  return {
+    phase: e.phase || null,
+    revision: e.revision ?? null,
+    invalidatedPhases: arr(e.invalidated_phases),
+    supersededArtifacts: e.superseded_artifacts || {},
+    revisedBy: e.revised_by || null,
+    revisedAt: e.revised_at || null,
+  };
+}
+
+/** Map the GET .../revisions payload (newest first) to the view model. */
+export function mapRevisionHistory(api = {}) {
+  return {
+    workflowId: api.workflow_id || null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    revisions: arr(api.revisions).map(mapRevisionEntry),
   };
 }
 
@@ -774,6 +911,60 @@ export const workflowApi = {
   },
 
   /**
+   * GET /projects/:projectId/workflows/:workflowId/repository-installation — the
+   * aggregated installation payload (installation branch + commit SHA + PR URL +
+   * log lines), in ONE read. Returns 200 with `installed: false` when the
+   * workflow hasn't installed yet; `prerequisitesMet` reflects whether the
+   * generated pipelines exist so the surface can offer "Install".
+   */
+  async getRepositoryInstallationPhase(projectId, workflowId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/repository-installation`
+    );
+    return mapRepositoryInstallationPhase(data);
+  },
+
+  /**
+   * POST /projects/:projectId/workflows/:workflowId/phases/REPOSITORY_INSTALLATION —
+   * commit the generated bootstrap.yml + deploy.yml onto a DEDICATED branch of the
+   * user's repository (+ best-effort PR). The BACKEND owns the safe git flow
+   * (clone → branch → write → commit → push, never force, never to a protected
+   * branch); the frontend never touches the repo. Prerequisite (server-side):
+   * GITHUB_ACTIONS_GENERATION must be completed, plus a github_pat credential.
+   * Returns the mapped phase-run response ({ taskId, currentPhase, status,
+   * phasesState }).
+   */
+  async runRepositoryInstallationPhase(projectId, workflowId) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/phases/REPOSITORY_INSTALLATION`,
+      {}
+    );
+    return mapPhaseRun(data);
+  },
+
+  /**
+   * GET /projects/:projectId/workflows/:workflowId/monitoring — the live
+   * GitHub Actions monitoring snapshot for the two installed pipelines
+   * (bootstrap → Infrastructure, deploy → Delivery). READ-ONLY: the backend
+   * never triggers/reruns/cancels a workflow. Returns 200 with
+   * `monitoringAvailable: false` + a reason when it can't observe (no token,
+   * missing permission, deleted repo/workflow, rate limit). Polled ~30s by the
+   * surface (no WebSocket streaming).
+   */
+  async getWorkflowMonitoring(projectId, workflowId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/monitoring`
+    );
+    return mapWorkflowMonitoring(data);
+  },
+
+  /**
    * GET /projects/:projectId/workflows/:workflowId — the full workflow row,
    * including `phases_state`. The Terraform surface reads its phase status
    * exclusively from this (the resume summary has no phases_state).
@@ -856,6 +1047,43 @@ export const workflowApi = {
       {}
     );
     return mapPhaseRun(data);
+  },
+
+  /**
+   * POST /projects/:projectId/workflows/:workflowId/phases/:phase/regenerate —
+   * regenerate a COMPLETED phase and invalidate everything downstream. The
+   * BACKEND owns the whole transition: it re-runs the phase (creating the next
+   * ArtifactVersion — the previous bytes are preserved, never deleted), marks the
+   * transitive downstream phases `invalidated`, points current_phase back at the
+   * regenerated phase, and records a revision-history entry. Only the inline
+   * generation phases are regeneratable (DOCKER / TERRAFORM_GENERATION /
+   * GITHUB_ACTIONS_GENERATION). Returns the mapped regenerate result
+   * ({ revised, revision, invalidatedPhases, supersededArtifacts, phasesState }).
+   */
+  async regeneratePhase(projectId, workflowId, phase) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/phases/${encodeURIComponent(phase)}/regenerate`,
+      {}
+    );
+    return mapRegenerateResult(data);
+  },
+
+  /**
+   * GET /projects/:projectId/workflows/:workflowId/revisions — the workflow's
+   * revision history (newest first). Read-only: assembled from the entries the
+   * regenerate endpoint records in Workflow.logs (no extra table). Each entry
+   * names the regenerated phase, its new revision, the downstream phases it
+   * invalidated, and the artifact versions it superseded.
+   */
+  async getRevisionHistory(projectId, workflowId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/revisions`
+    );
+    return mapRevisionHistory(data);
   },
 };
 

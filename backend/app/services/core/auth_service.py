@@ -350,6 +350,59 @@ def change_password(
     return user
 
 
+def update_profile(
+    db: Session,
+    *,
+    user: User,
+    display_name: Optional[str] = None,
+    email: Optional[str] = None,
+    current_password: Optional[str] = None,
+) -> User:
+    """Update the caller's OWN profile (display name and/or email).
+
+    Deliberately scoped to identity fields only:
+
+    * ``role`` is NOT updatable here. ``User.role`` is the global workspace
+      role that gates admin surfaces; self-editing it would be a privilege
+      escalation. Role changes belong to the admin member-management flow.
+    * Changing ``email`` requires the correct ``current_password`` (re-auth) so
+      a hijacked-but-unlocked session cannot silently move the recovery email,
+      and enforces email uniqueness. A successful change resets
+      ``email_verified`` so a future verification flow can re-confirm.
+
+    ``display_name`` is a low-risk field and needs no re-auth. Only fields that
+    are explicitly passed are touched (a partial update).
+    """
+    from backend.app.schemas.auth import _normalize_email
+
+    if display_name is not None:
+        user.display_name = display_name.strip() or None
+
+    if email is not None:
+        try:
+            new_email = _normalize_email(email)
+        except ValueError as exc:
+            raise AuthError(str(exc)) from exc
+
+        if new_email != user.email:
+            # Re-auth gate — changing the recovery email is sensitive.
+            if not verify_password(current_password or "", user.password_hash):
+                raise AuthError("Current password is incorrect")
+            existing = (
+                db.query(User)
+                .filter(User.email == new_email, User.id != user.id)
+                .first()
+            )
+            if existing is not None:
+                raise AuthError("An account with this email already exists")
+            user.email = new_email
+            user.email_verified = "false"
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def revoke_session(db: Session, *, user: User, refresh_token: Optional[str]) -> int:
     """Revoke one session (if a refresh token is supplied) or ALL of the
     user's sessions otherwise.

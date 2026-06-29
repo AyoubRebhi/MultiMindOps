@@ -21,6 +21,7 @@ exists only for API symmetry with the other services in this directory.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import List, Optional
 
@@ -32,12 +33,18 @@ from backend.app.models.credentials import ProjectCredential
 logger = logging.getLogger(__name__)
 
 
+# Canonical provider keys. The two DevOps credential types the platform manages
+# per-project. Kept as constants so the typed routes + the project-settings
+# aggregator never disagree on the spelling.
+GITHUB_PROVIDER = "github_pat"
+AWS_PROVIDER = "aws_iam"
+
 # Provider names recognised by the platform today. The service accepts any
 # string, but tracking the known set in one place lets API validation refuse
 # obvious typos at the route layer.
 KNOWN_PROVIDERS = {
-    "github_pat",       # GitHub personal access token (clone, push)
-    "aws_iam",          # AWS access-key-id + secret-access-key bundle (JSON)
+    GITHUB_PROVIDER,    # GitHub personal access token (clone, push)
+    AWS_PROVIDER,       # AWS access-key-id + secret-access-key bundle (JSON)
     "docker_registry",  # Registry username/password bundle (JSON)
 }
 
@@ -229,6 +236,80 @@ class CredentialsService:
             .first()
             is not None
         )
+
+    # ── AWS bundle helpers ───────────────────────────────────────────────────
+    #
+    # AWS needs four fields but only two are secret. We keep the SECRETS
+    # (access_key_id + secret_access_key) encrypted in ``encrypted_payload`` as
+    # a JSON bundle, and the NON-SECRET display metadata (region, account_name,
+    # and the access-key-id last-4 recognisability hint) in ``label`` as JSON.
+    # That lets ``get_aws_status`` render "configured + region/account/last-4"
+    # WITHOUT a decrypt, while the secret access key never leaves the cipher.
+
+    @staticmethod
+    def set_aws_credential(
+        db: Session,
+        *,
+        project_id: str,
+        access_key_id: str,
+        secret_access_key: str,
+        region: str,
+        account_name: Optional[str],
+        created_by: Optional[str],
+    ) -> ProjectCredential:
+        """Create or rotate the project's AWS credential bundle.
+
+        The secret access key is encrypted; region/account/last-4 are stored as
+        non-secret label metadata for cheap, decrypt-free status reads.
+        """
+        secret_bundle = json.dumps(
+            {"access_key_id": access_key_id, "secret_access_key": secret_access_key}
+        )
+        label_meta = json.dumps(
+            {
+                "region": region,
+                "account_name": account_name,
+                # last-4 of the access-key-id is an identifier hint, not a
+                # secret — safe to store in the clear for the "is this the
+                # right account" UI affordance.
+                "access_key_id_last4": access_key_id[-4:],
+            }
+        )
+        return CredentialsService.set_credential(
+            db,
+            project_id=project_id,
+            provider=AWS_PROVIDER,
+            plaintext=secret_bundle,
+            created_by=created_by,
+            label=label_meta,
+        )
+
+    @staticmethod
+    def get_aws_status(db: Session, *, project_id: str) -> Optional[dict]:
+        """Return NON-SECRET AWS display metadata, or None if not configured.
+
+        Reads only ``label`` — never decrypts the secret bundle. Shape:
+        ``{"region", "account_name", "access_key_id_last4"}``.
+        """
+        row = (
+            db.query(ProjectCredential)
+            .filter(
+                ProjectCredential.project_id == project_id,
+                ProjectCredential.provider == AWS_PROVIDER,
+            )
+            .first()
+        )
+        if row is None:
+            return None
+        try:
+            meta = json.loads(row.label or "{}")
+        except (ValueError, TypeError):
+            meta = {}
+        return {
+            "region": meta.get("region"),
+            "account_name": meta.get("account_name"),
+            "access_key_id_last4": meta.get("access_key_id_last4"),
+        }
 
     # ── Runtime state hydration ──────────────────────────────────────────────
 

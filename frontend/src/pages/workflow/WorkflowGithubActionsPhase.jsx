@@ -82,16 +82,28 @@ export default function WorkflowGithubActionsPhase({ workflowId, workflow, onAdv
     <Shell
       status={done ? 'completed' : workflow?.status}
       actions={
-        <button
-          type="button"
-          className="boc btn px-3 py-2"
-          style={{ fontSize: '.82rem' }}
-          disabled={generating}
-          onClick={handleGenerate}
-        >
-          {generating ? <span className="spinner me-2" /> : <i className="fa-solid fa-rotate-right me-2" />}
-          Regenerate
-        </button>
+        <div className="d-flex gap-2">
+          {done && (
+            <Link
+              to={`/workflows/run/${workflowId}/repository_installation`}
+              className="bgrd btn px-3 py-2"
+              style={{ fontSize: '.82rem' }}
+            >
+              <i className="fa-solid fa-code-branch me-2" />
+              Proceed to Installation
+            </Link>
+          )}
+          <button
+            type="button"
+            className="boc btn px-3 py-2"
+            style={{ fontSize: '.82rem' }}
+            disabled={generating}
+            onClick={handleGenerate}
+          >
+            {generating ? <span className="spinner me-2" /> : <i className="fa-solid fa-rotate-right me-2" />}
+            Regenerate
+          </button>
+        </div>
       }
     >
       <DeploymentSummary ctx={data.deploymentContext} target={data.deploymentTarget} template={data.template} />

@@ -97,6 +97,14 @@ export default function ProjectDetails() {
               </a>
             )}
             <Link
+              to={`/projects/${project.id}/settings`}
+              className="boc btn px-3 py-2"
+              style={{ fontSize: '.85rem' }}
+            >
+              <i className="fa-solid fa-gear me-2" />
+              Settings
+            </Link>
+            <Link
               to={`/workflows/${project.id}/analysis`}
               className="bgrd btn px-3 py-2"
               style={{ fontSize: '.85rem' }}

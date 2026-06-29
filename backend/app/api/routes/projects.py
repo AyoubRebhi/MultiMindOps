@@ -39,25 +39,40 @@ from backend.app.schemas.project import (
     ProjectContextResponse,
     ProjectCreate,
     ProjectDetailResponse,
+    ProjectCredentialStatus,
     ProjectMemberCreate,
     ProjectMemberResponse,
     ProjectMemberUpdate,
     ProjectResponse,
+    ProjectSettingsResponse,
+    ProjectSettingsUpdateRequest,
     ProjectUpdate,
+    ProviderConfigured,
+    RegeneratePhaseResponse,
     SelectPlanRequest,
     StartWorkflowRequest,
     WorkflowPhaseRunResponse,
     WorkflowResponse,
+    WorkflowRevisionHistoryResponse,
     WorkflowStartResponse,
 )
 from backend.app.services.core.artifact_approval_service import ArtifactApprovalService
 from backend.app.services.core.artifact_persistence_service import ArtifactPersistenceService
+from backend.app.schemas.credentials import AwsCredentialStatus
 from backend.app.services.core.credentials_service import (
+    AWS_PROVIDER,
+    GITHUB_PROVIDER,
     CredentialError,
     CredentialsService,
 )
 from backend.app.schemas.docker_phase import DockerPhaseResponse
 from backend.app.schemas.github_actions_phase import GitHubActionsPhaseResponse
+from backend.app.schemas.repository_installation_phase import (
+    RepositoryInstallationPhaseResponse,
+)
+from backend.app.schemas.workflow_monitoring_phase import (
+    WorkflowMonitoringPhaseResponse,
+)
 from backend.app.schemas.workflow_analysis import WorkflowAnalysisResponse
 from backend.app.services.core.docker_phase_projection_service import (
     DockerPhaseProjectionService,
@@ -65,6 +80,10 @@ from backend.app.services.core.docker_phase_projection_service import (
 from backend.app.services.core.github_actions_phase_projection_service import (
     GitHubActionsPhaseProjectionService,
 )
+from backend.app.services.core.repository_installation_projection_service import (
+    RepositoryInstallationProjectionService,
+)
+from backend.app.services.workflow_monitoring import WorkflowMonitoringService
 from backend.app.services.core.project_analysis_service import ProjectAnalysisService
 from backend.app.services.core.workflow_analysis_aggregation_service import (
     WorkflowAnalysisAggregationService,
@@ -78,6 +97,9 @@ from backend.app.services.core.project_service import ProjectService
 from backend.app.services.core.task_service import TaskService
 from backend.app.services.core.workflow_orchestration_service import (
     WorkflowOrchestrationService,
+)
+from backend.app.services.core.workflow_revision_service import (
+    WorkflowRevisionService,
 )
 from backend.app.services.core.workflow_replay_service import WorkflowReplayService
 from backend.app.services.core.workflow_trace_service import WorkflowTraceService
@@ -257,6 +279,92 @@ def update_project(
     return ProjectService.update_project(db, project, payload)
 
 
+# ─── Project settings (repository + credential status) ────────────────────────
+
+
+def _build_project_settings_response(db: Session, project) -> ProjectSettingsResponse:
+    """Aggregate repository fields + DECRYPT-FREE credential status.
+
+    The AWS block reads only the non-secret ``label`` metadata (region /
+    account / last-4) via ``get_aws_status`` — the secret access key is never
+    touched. GitHub is a bare existence probe.
+    """
+    default_branch = (project.project_metadata or {}).get("default_branch")
+    github_configured = CredentialsService.has_credential(
+        db, project_id=project.id, provider=GITHUB_PROVIDER,
+    )
+    aws_meta = CredentialsService.get_aws_status(db, project_id=project.id)
+    aws_status = (
+        AwsCredentialStatus(configured=False)
+        if aws_meta is None
+        else AwsCredentialStatus(
+            configured=True,
+            region=aws_meta.get("region"),
+            account_name=aws_meta.get("account_name"),
+            access_key_id_last4=aws_meta.get("access_key_id_last4"),
+        )
+    )
+    return ProjectSettingsResponse(
+        repository_url=project.repository_url,
+        repository_visibility=project.repository_visibility,
+        default_branch=default_branch,
+        credentials=ProjectCredentialStatus(
+            github=ProviderConfigured(configured=github_configured),
+            aws=aws_status,
+        ),
+    )
+
+
+@router.get("/{project_id}/settings", response_model=ProjectSettingsResponse)
+def get_project_settings(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Repository settings + per-provider connected/missing status.
+
+    Membership-gated via ``_load_or_404`` (404 to non-members). Returns NO
+    secret values — only ``configured`` flags + non-secret AWS metadata.
+    """
+    project = _load_or_404(db, project_id, current_user)
+    return _build_project_settings_response(db, project)
+
+
+@router.put("/{project_id}/settings", response_model=ProjectSettingsResponse)
+def update_project_settings(
+    project_id: str,
+    payload: ProjectSettingsUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_contributor),  # DEVELOPER+
+):
+    """Update repository URL / visibility / default branch.
+
+    Credentials are NOT touched here — they go through the stricter
+    ``/credentials/*`` endpoints. ``default_branch`` is stored in
+    ``project_metadata`` (no dedicated column).
+    """
+    project = _load_or_404(db, project_id, current_user)
+    data = payload.model_dump(exclude_unset=True)
+
+    if "default_branch" in data:
+        branch = (data.pop("default_branch") or "").strip()
+        meta = dict(project.project_metadata or {})
+        if branch:
+            meta["default_branch"] = branch
+        else:
+            meta.pop("default_branch", None)
+        project.project_metadata = meta
+
+    for field in ("repository_url", "repository_visibility"):
+        if field in data:
+            setattr(project, field, data[field])
+
+    db.commit()
+    db.refresh(project)
+    return _build_project_settings_response(db, project)
+
+
 @router.get("/{project_id}/artifacts", response_model=list[ArtifactResponse])
 def list_project_artifacts(
     project_id: str,
@@ -425,6 +533,71 @@ def run_workflow_phase(
         persisted_artifact_ids=persisted_ids,
         logs=state.get("logs", []),
     )
+
+
+# ─── Workflow revision (regenerate a phase + invalidate downstream) ──────────
+
+@router.post(
+    "/{project_id}/workflows/{workflow_id}/phases/{phase}/regenerate",
+    response_model=RegeneratePhaseResponse,
+)
+def regenerate_workflow_phase(
+    project_id: str,
+    workflow_id: str,
+    phase: PhaseName,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_contributor),  # DEVELOPER+
+):
+    """Regenerate a COMPLETED phase and invalidate everything downstream.
+
+    Iterative re-design: re-runs the targeted phase (creating the next
+    ``ArtifactVersion`` — the previous bytes are preserved, never deleted),
+    marks the transitive downstream phases ``invalidated`` so they are re-run
+    against the new artifacts, points ``current_phase`` back at the regenerated
+    phase, and records a revision-history entry. Does NOT restart the workflow.
+
+    Only the inline generation phases are regeneratable (DOCKER /
+    TERRAFORM_GENERATION / GITHUB_ACTIONS_GENERATION). A 400 is returned for a
+    non-regeneratable phase or one that has not completed yet.
+    """
+    project, workflow, task = _load_workflow_and_task(db, project_id, workflow_id, current_user)
+    try:
+        result = WorkflowRevisionService.regenerate_phase(
+            db,
+            project=project,
+            workflow=workflow,
+            task=task,
+            phase=phase,
+            user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Regenerate '{phase}' failed: {exc}")
+
+    return RegeneratePhaseResponse(**result)
+
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/revisions",
+    response_model=WorkflowRevisionHistoryResponse,
+)
+def get_workflow_revisions(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the workflow's revision history (newest first).
+
+    Read-only — assembled from the revision-history entries the regenerate
+    endpoint records in ``Workflow.logs`` (no extra table, no migration). Each
+    entry says which phase was regenerated, its new revision number, which
+    downstream phases it invalidated, and which artifact versions it superseded.
+    """
+    _, workflow, _ = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    return WorkflowRevisionService.build_history_payload(workflow)
 
 
 @router.get(
@@ -637,6 +810,60 @@ def get_github_actions_phase(
     _, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
     return GitHubActionsPhaseProjectionService.build(
         db, project_id=workflow.project_id, workflow=workflow, task=task,
+    )
+
+
+# ─── Repository Installation phase read (projection) ─────────────────────────
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/repository-installation",
+    response_model=RepositoryInstallationPhaseResponse,
+)
+def get_repository_installation_phase(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Aggregated Repository Installation payload (branch + commit + PR + logs).
+
+    READ-ONLY projection over data the REPOSITORY_INSTALLATION phase already
+    persisted — the installation analogue of ``/github-actions``. It NEVER clones,
+    commits, or pushes. Degrades gracefully: a workflow that has not reached the
+    phase projects to ``installed=False`` (200, not 404), with
+    ``prerequisites_met`` reflecting whether the generated pipelines exist yet.
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    return RepositoryInstallationProjectionService.build(
+        db, project_id=workflow.project_id, workflow=workflow, task=task, project=project,
+    )
+
+
+# ─── Workflow Monitoring phase read (live GitHub Actions observation) ─────────
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/monitoring",
+    response_model=WorkflowMonitoringPhaseResponse,
+)
+def get_workflow_monitoring(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Observe the installed pipelines' GitHub Actions runs (bootstrap + deploy).
+
+    READ-ONLY: this NEVER triggers, reruns, cancels, or modifies a workflow or
+    the repository. On each call it queries the GitHub Actions API for the latest
+    run of bootstrap.yml + deploy.yml and returns a monitoring snapshot; the
+    frontend polls it (~30s) or refreshes manually. Monitoring failures (no
+    token, missing permission, deleted repo/workflow, rate limit, API error)
+    degrade to a 200 with ``monitoring_available=false`` + a reason — they NEVER
+    fail the workflow.
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    return WorkflowMonitoringService.build(
+        db, project=project, workflow=workflow, task=task,
     )
 
 

@@ -43,10 +43,15 @@ from backend.app.core.security import get_current_user, get_db
 from backend.app.models.project import ProjectMember
 from backend.app.models.user import User
 from backend.app.schemas.credentials import (
+    AwsCredentialRequest,
+    AwsCredentialStatus,
     CredentialResponse,
     CredentialUpsertRequest,
+    GithubCredentialRequest,
 )
 from backend.app.services.core.credentials_service import (
+    AWS_PROVIDER,
+    GITHUB_PROVIDER,
     CredentialError,
     CredentialsService,
 )
@@ -138,6 +143,96 @@ def upsert_credential(
     # preview without re-decrypting (which would log a decrypt path
     # unnecessarily).
     return _to_response(row, masked_preview=mask_secret(payload.plaintext))
+
+
+def _raise_storage_unavailable(exc: MissingMasterKeyError) -> None:
+    """Translate a missing master key into a 503 without leaking key state."""
+    logger.error("[Credentials] master key missing — refusing write")
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "Credential storage is not configured on this deployment. "
+            "Operator must set APP_SECRET_KEY before credentials can be stored."
+        ),
+    ) from exc
+
+
+@router.post(
+    "/github",
+    response_model=CredentialResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create or rotate the project's GitHub PAT (CLOUD_ARCHITECT+)",
+)
+def set_github_credential(
+    project_id: str,
+    payload: GithubCredentialRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_approver),
+):
+    """Typed convenience over the generic upsert for the ``github_pat`` provider.
+
+    Encrypts ``payload.token`` and stores it as the project's GitHub credential
+    (used automatically by repository installation + workflow monitoring).
+    Returns a masked preview only — the token is never echoed back.
+    """
+    _ensure_project_or_404(db, project_id, current_user)
+    try:
+        row = CredentialsService.set_credential(
+            db,
+            project_id=project_id,
+            provider=GITHUB_PROVIDER,
+            plaintext=payload.token,
+            created_by=current_user.id,
+            label=payload.label,
+        )
+    except CredentialError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except MissingMasterKeyError as exc:
+        _raise_storage_unavailable(exc)
+    return _to_response(row, masked_preview=mask_secret(payload.token))
+
+
+@router.post(
+    "/aws",
+    response_model=AwsCredentialStatus,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create or rotate the project's AWS credentials (CLOUD_ARCHITECT+)",
+)
+def set_aws_credential(
+    project_id: str,
+    payload: AwsCredentialRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_approver),
+):
+    """Store the project's AWS key bundle under the ``aws_iam`` provider.
+
+    The secret access key is encrypted; region/account/last-4 are kept as
+    non-secret display metadata. The response is the masked status — it never
+    contains the access key id or secret access key.
+    """
+    _ensure_project_or_404(db, project_id, current_user)
+    try:
+        CredentialsService.set_aws_credential(
+            db,
+            project_id=project_id,
+            access_key_id=payload.access_key_id,
+            secret_access_key=payload.secret_access_key,
+            region=payload.region,
+            account_name=payload.account_name,
+            created_by=current_user.id,
+        )
+    except CredentialError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except MissingMasterKeyError as exc:
+        _raise_storage_unavailable(exc)
+    return AwsCredentialStatus(
+        configured=True,
+        region=payload.region,
+        account_name=payload.account_name,
+        access_key_id_last4=payload.access_key_id[-4:],
+    )
 
 
 @router.get(

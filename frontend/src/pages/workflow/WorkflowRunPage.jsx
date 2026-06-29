@@ -1,10 +1,12 @@
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import ContentContainer from '@/components/layout/ContentContainer';
 import Breadcrumbs from '@/components/layout/Breadcrumbs';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 import ErrorState from '@/components/common/ErrorState';
 import EmptyState from '@/components/common/EmptyState';
-import { useWorkflowRun } from '@/hooks/useWorkflowRun';
+import WorkflowPhaseNav from '@/components/workflow/WorkflowPhaseNav';
+import { useWorkflowRun, useWorkflowPhases } from '@/hooks/useWorkflowRun';
 import {
   resolveWorkflowView,
   IMPLEMENTED_WORKFLOW_VIEWS,
@@ -15,6 +17,8 @@ import ArchitecturePlanningPhase from './ArchitecturePlanningPhase';
 import WorkflowDockerPhase from './WorkflowDockerPhase';
 import WorkflowTerraformPhase from './WorkflowTerraformPhase';
 import WorkflowGithubActionsPhase from './WorkflowGithubActionsPhase';
+import WorkflowRepositoryInstallationPhase from './WorkflowRepositoryInstallationPhase';
+import WorkflowMonitoringPhase from './WorkflowMonitoringPhase';
 
 /**
  * WorkflowRunPage — opens a workflow and RESUMES it from its last saved phase.
@@ -30,8 +34,21 @@ import WorkflowGithubActionsPhase from './WorkflowGithubActionsPhase';
  * "not available yet" panel that still reports the real current phase.
  */
 export default function WorkflowRunPage() {
-  const { workflowId } = useParams();
+  const { workflowId, view: viewParam } = useParams();
   const { data: workflow, loading, error, refetch } = useWorkflowRun(workflowId);
+  // Authoritative phases_state + revision history (project-scoped row). Drives
+  // the revision-aware phase navigator. Loads once the summary yields projectId.
+  const projectId = workflow?.projectId;
+  const phasesQuery = useWorkflowPhases(projectId, workflowId);
+  // Bumped after a regeneration so the active phase surface remounts + refetches
+  // (its own projection changed even when the route/view did not).
+  const [refreshNonce, setRefreshNonce] = useState(0);
+
+  function handleRegenerated() {
+    refetch();
+    phasesQuery.refetch();
+    setRefreshNonce((n) => n + 1);
+  }
 
   if (loading && !workflow) {
     return (
@@ -73,42 +90,75 @@ export default function WorkflowRunPage() {
 
   if (!workflow) return null;
 
-  const view = resolveWorkflowView(workflow.currentPhase);
+  // An explicit, valid :view segment (from a "Proceed to …" button) wins so a
+  // phase can be opened directly; otherwise resume from the saved current_phase.
+  const view =
+    viewParam && IMPLEMENTED_WORKFLOW_VIEWS.has(viewParam)
+      ? viewParam
+      : resolveWorkflowView(workflow.currentPhase);
   const projectName = workflow.projectName || 'Project';
+  // Force the active phase surface to refetch its projection after a revision.
+  const phaseKey = `${view}:${refreshNonce}`;
+  const phasesData = phasesQuery.data;
 
   return (
     <ContentContainer>
       <Crumbs projectName={projectName} />
 
+      {phasesData && (
+        <WorkflowPhaseNav
+          projectId={projectId}
+          workflowId={workflowId}
+          phasesState={phasesData.phasesState}
+          currentPhase={phasesData.currentPhase || workflow.currentPhase}
+          activeView={view}
+          revisions={phasesData.revisions}
+          onRegenerated={handleRegenerated}
+        />
+      )}
+
       {view === 'analysis' ? (
-        <WorkflowAnalysisPhase workflowId={workflowId} workflow={workflow} />
+        <WorkflowAnalysisPhase key={phaseKey} workflowId={workflowId} workflow={workflow} />
       ) : view === 'planning' ? (
         <ArchitecturePlanningPhase
+          key={phaseKey}
           workflowId={workflowId}
           workflow={workflow}
           onAdvance={refetch}
         />
       ) : view === 'docker' ? (
         <WorkflowDockerPhase
+          key={phaseKey}
           workflowId={workflowId}
           workflow={workflow}
           onAdvance={refetch}
         />
       ) : view === 'terraform' ? (
         <WorkflowTerraformPhase
+          key={phaseKey}
           workflowId={workflowId}
           workflow={workflow}
           onAdvance={refetch}
         />
       ) : view === 'github_actions' ? (
         <WorkflowGithubActionsPhase
+          key={phaseKey}
           workflowId={workflowId}
           workflow={workflow}
           onAdvance={refetch}
         />
+      ) : view === 'repository_installation' ? (
+        <WorkflowRepositoryInstallationPhase
+          key={phaseKey}
+          workflowId={workflowId}
+          workflow={workflow}
+          onAdvance={refetch}
+        />
+      ) : view === 'monitoring' ? (
+        <WorkflowMonitoringPhase key={phaseKey} workflowId={workflowId} workflow={workflow} />
       ) : IMPLEMENTED_WORKFLOW_VIEWS.has(view) ? (
         // Reserved: future integrated phase surfaces render here.
-        <WorkflowAnalysisPhase workflowId={workflowId} workflow={workflow} />
+        <WorkflowAnalysisPhase key={phaseKey} workflowId={workflowId} workflow={workflow} />
       ) : (
         <PhaseNotAvailable phase={workflow.currentPhase} projectId={workflow.projectId} />
       )}

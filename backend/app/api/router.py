@@ -13,6 +13,7 @@ from backend.app.api.routes.invitations import router as invitations_router
 from backend.app.api.routes.jobs import router as jobs_router
 from backend.app.api.routes.releases import router as releases_router
 from backend.app.api.routes.projects import router as projects_router
+from backend.app.api.routes.settings import router as settings_router
 from backend.app.api.routes.tasks import router as tasks_router
 from backend.app.api.routes.workflows import router as workflows_router
 
@@ -31,6 +32,9 @@ api_router.include_router(auth_router)
 # Workspace invitations — admin create/list/resend/revoke (gated) + public
 # token landing/accept. Mounted near auth since it shares the identity layer.
 api_router.include_router(invitations_router)
+# User self-service settings (/api/settings/profile, /api/settings/password).
+# Identity-only — reuses auth_service; no project scope.
+api_router.include_router(settings_router)
 api_router.include_router(artifacts_router)
 api_router.include_router(tasks_router)
 api_router.include_router(evaluation_router)

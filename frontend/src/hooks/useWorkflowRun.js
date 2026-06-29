@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useAsync } from './useAsync';
 import {
   workflowApi,
@@ -20,6 +21,43 @@ export function useWorkflowRun(workflowId) {
     () => (workflowId ? workflowApi.get(workflowId) : Promise.resolve(null)),
     [workflowId],
     { immediate: !!workflowId }
+  );
+}
+
+/**
+ * useWorkflowPhases — fetch the authoritative `phases_state` (with per-phase
+ * revision/invalidation metadata) plus the revision history in ONE shot. Powers
+ * the workflow phase navigator + the Regenerate action + the dependency warning.
+ * Both ids are required (the project-scoped row carries phases_state; the resume
+ * summary from GET /workflows/:id does not). The revision history degrades to []
+ * if its fetch fails so a missing-history error never blanks the navigator.
+ * Returns { data: { phasesState, currentPhase, status, revisions }, ..., refetch }.
+ *
+ * @param {string} projectId
+ * @param {string} workflowId
+ */
+export function useWorkflowPhases(projectId, workflowId) {
+  const ready = !!projectId && !!workflowId;
+  return useAsync(
+    async () => {
+      if (!ready) return null;
+      const wf = await workflowApi.getProjectWorkflow(projectId, workflowId);
+      let revisions = [];
+      try {
+        const history = await workflowApi.getRevisionHistory(projectId, workflowId);
+        revisions = history?.revisions || [];
+      } catch {
+        revisions = [];
+      }
+      return {
+        phasesState: wf?.phasesState || {},
+        currentPhase: wf?.currentPhase || null,
+        status: wf?.status || null,
+        revisions,
+      };
+    },
+    [projectId, workflowId],
+    { immediate: ready }
   );
 }
 
@@ -103,6 +141,73 @@ export function useGithubActionsPhase(projectId, workflowId) {
     [projectId, workflowId],
     { immediate: ready }
   );
+}
+
+/**
+ * useRepositoryInstallationPhase — fetch the aggregated installation payload (GET
+ * project-scoped .../repository-installation). Both ids are required (the read +
+ * run endpoints are project-scoped). Returns { data, loading, error, refetch }.
+ * Read-only: the install already ran on the backend, so the surface polls via
+ * `refetch` only after it triggers the REPOSITORY_INSTALLATION phase itself.
+ *
+ * @param {string} projectId
+ * @param {string} workflowId
+ */
+export function useRepositoryInstallationPhase(projectId, workflowId) {
+  const ready = !!projectId && !!workflowId;
+  return useAsync(
+    () =>
+      ready
+        ? workflowApi.getRepositoryInstallationPhase(projectId, workflowId)
+        : Promise.resolve(null),
+    [projectId, workflowId],
+    { immediate: ready }
+  );
+}
+
+/**
+ * useWorkflowMonitoring — fetch the live GitHub Actions monitoring snapshot (GET
+ * project-scoped .../monitoring) for the two installed pipelines, and POLL it on
+ * an interval (default 30s) so the surface reflects run progress without a
+ * WebSocket. Read-only: the backend only observes — it never triggers, reruns,
+ * or cancels a workflow. `refetch` powers the manual refresh button.
+ *
+ * Polling auto-pauses once BOTH pipelines have reached a terminal conclusion
+ * (nothing left to watch); a manual refresh still works. Returns
+ * { data, loading, error, refetch }.
+ *
+ * @param {string} projectId
+ * @param {string} workflowId
+ * @param {number} pollMs   poll interval in ms (default 30000)
+ */
+export function useWorkflowMonitoring(projectId, workflowId, pollMs = 30000) {
+  const ready = !!projectId && !!workflowId;
+  const state = useAsync(
+    () =>
+      ready
+        ? workflowApi.getWorkflowMonitoring(projectId, workflowId)
+        : Promise.resolve(null),
+    [projectId, workflowId],
+    { immediate: ready }
+  );
+
+  const { data, refetch } = state;
+  // A run is "live" while it exists and has not concluded. We keep polling while
+  // EITHER pipeline is live (or while we have no data yet, e.g. first/degraded
+  // load), and stop once both are terminal to avoid pointless requests.
+  const isLive = (p) => p && p.found && !p.conclusion;
+  const keepPolling =
+    ready && (!data || isLive(data.infrastructure) || isLive(data.delivery));
+
+  useEffect(() => {
+    if (!keepPolling || !pollMs) return undefined;
+    const id = setInterval(() => {
+      refetch();
+    }, pollMs);
+    return () => clearInterval(id);
+  }, [keepPolling, pollMs, refetch]);
+
+  return state;
 }
 
 /**

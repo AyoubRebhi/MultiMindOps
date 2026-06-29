@@ -52,11 +52,26 @@ _TF_PIPELINE_PHASES = {PHASE_TF_GENERATION, PHASE_TF_VALIDATION, PHASE_TF_PLAN}
 # INLINE (template render, no external process), like TERRAFORM_GENERATION.
 PHASE_GH_ACTIONS = "GITHUB_ACTIONS_GENERATION"
 
+# Repository installation phase — commits the generated bootstrap.yml + deploy.yml
+# onto a DEDICATED branch of the user's repository and (best-effort) opens a PR.
+# Runs INLINE (clone → write → commit → push).
+PHASE_REPO_INSTALL = "REPOSITORY_INSTALLATION"
+
+# Workflow monitoring phase — READ-ONLY observation of the installed pipelines'
+# GitHub Actions runs (Generate → Install → Monitor). It does NOT run inline:
+# there is no orchestration work here. Installation success simply ADVANCES the
+# lifecycle into this phase so the run resumes onto the monitoring surface, which
+# queries GitHub live on demand (see WorkflowMonitoringService). The workflow
+# stays terminal (``completed``) — monitoring is post-completion observation.
+PHASE_WORKFLOW_MONITORING = "WORKFLOW_MONITORING"
+
 # Workflow statuses that are TERMINAL — a project may create a new workflow once
 # its current one reaches any of these. Everything else (pending, running,
 # awaiting_input) is "active", and a project may have at most ONE active workflow
 # at a time. Historical (terminal) workflows are never touched by this rule.
-TERMINAL_WORKFLOW_STATUSES = {"completed", "failed", "cancelled"}
+# ``blocked`` is terminal: a security-blocked repo cannot proceed, so the run is
+# done — but the user can fix the repo and start a FRESH workflow that re-analyses.
+TERMINAL_WORKFLOW_STATUSES = {"completed", "failed", "cancelled", "blocked"}
 
 # Phase → durable job phase string consumed by the worker handler registry.
 _TF_JOB_PHASE = {
@@ -214,24 +229,55 @@ class WorkflowOrchestrationService:
             repository_visibility="public",
             github_token=gh_token,
         )
-        TaskService.save_plan_awaiting_validation(db, task, state)
 
-        WorkflowOrchestrationService._record_phase(
-            workflow,
-            phase="ARCHITECTURE_DECISION",
-            status="awaiting_input",
-            extra={"task_id": task.id},
+        # A security-blocked repo never produces architecture strategies. It must
+        # NOT be advertised as ``ARCHITECTURE_DECISION / awaiting_input`` — the UI
+        # resolves that phase to the planning surface, fetches the (non-existent)
+        # architecture-decision, and 404s. Mark it BLOCKED at the ANALYSIS phase
+        # instead (terminal): the analysis surface is the right home for the
+        # security findings, and a fresh workflow can be started after a fix.
+        security_blocked = (
+            state.get("status") == "blocked"
+            or (state.get("repository_security") or {}).get("status") == "blocked"
         )
-        workflow.current_phase = "ARCHITECTURE_DECISION"
-        workflow.status = "awaiting_input"
 
-        # Capture analysis + architecture-decision digests into ProjectContext.
+        if security_blocked:
+            TaskService.save_workflow_state(db, task, state)
+            TaskService.update_task_status(db, task, "blocked")
+            blocked_reasons = (state.get("repository_security") or {}).get("blocked_reasons") or []
+            WorkflowOrchestrationService._record_phase(
+                workflow,
+                phase="ANALYSIS",
+                status="blocked",
+                extra={"task_id": task.id, "blocked_reasons": blocked_reasons},
+            )
+            workflow.current_phase = "ANALYSIS"
+            workflow.status = "blocked"
+            capture_phase = "ANALYSIS"
+            logger.info(
+                "[Workflow] workflow=%s project=%s BLOCKED by security gate — "
+                "marked terminal at ANALYSIS (reasons=%d)",
+                workflow.id, project.id, len(blocked_reasons),
+            )
+        else:
+            TaskService.save_plan_awaiting_validation(db, task, state)
+            WorkflowOrchestrationService._record_phase(
+                workflow,
+                phase="ARCHITECTURE_DECISION",
+                status="awaiting_input",
+                extra={"task_id": task.id},
+            )
+            workflow.current_phase = "ARCHITECTURE_DECISION"
+            workflow.status = "awaiting_input"
+            capture_phase = "ARCHITECTURE_DECISION"
+
+        # Capture analysis (+ architecture-decision) digests into ProjectContext.
         # Done before commit so it lands in the same transaction as the workflow row.
         ProjectContextService.capture_from_state(
             db,
             project_id=project.id,
             state=state,
-            phase="ARCHITECTURE_DECISION",
+            phase=capture_phase,
             generated_by="OrchestratorAgent",
         )
 
@@ -331,11 +377,18 @@ class WorkflowOrchestrationService:
                 db, project=project, workflow=workflow, task=task,
             )
 
+        # Repository installation — commits the generated workflows to the repo.
+        # Inline (clone → write → commit → push), like the deployment phase.
+        if phase_upper == PHASE_REPO_INSTALL:
+            return WorkflowOrchestrationService._run_repository_installation(
+                db, project=project, workflow=workflow, task=task,
+            )
+
         if phase_upper != PHASE_DOCKER:
             raise ValueError(
                 f"Phase '{phase}' is not supported. Valid phases: DOCKER, "
                 "TERRAFORM_GENERATION, TERRAFORM_VALIDATION, TERRAFORM_PLAN, "
-                "GITHUB_ACTIONS_GENERATION."
+                "GITHUB_ACTIONS_GENERATION, REPOSITORY_INSTALLATION."
             )
 
         prior_state = TaskService.load_workflow_state(db, task) or {}
@@ -447,6 +500,16 @@ class WorkflowOrchestrationService:
             if not _is_completed(PHASE_TF_GENERATION):
                 raise ValueError(
                     f"Cannot run {PHASE_GH_ACTIONS}: run TERRAFORM_GENERATION first."
+                )
+        elif phase_upper == PHASE_REPO_INSTALL:
+            # Installation needs the generated pipelines — the deployment phase
+            # must have completed (which guarantees bootstrap.yml + deploy.yml
+            # exist and validated). The service re-checks the artifacts + token
+            # before touching the repository.
+            if not _is_completed(PHASE_GH_ACTIONS):
+                raise ValueError(
+                    f"Cannot run {PHASE_REPO_INSTALL}: run "
+                    f"{PHASE_GH_ACTIONS} first to generate bootstrap.yml + deploy.yml."
                 )
 
     @staticmethod
@@ -592,6 +655,31 @@ class WorkflowOrchestrationService:
         persisted_ids: List[str] = []
         pipelines_meta: List[dict] = []
 
+        # FIX 3 — Architecture consistency guard. The deploy/bootstrap templates
+        # are keyed on the deployment target (compute.type) while Terraform is
+        # keyed on architecture_style; before persisting anything, verify the
+        # Terraform artifacts actually declare the compute resource this target
+        # assumes. A mismatch would install a pipeline that can only fail at run
+        # time, so fail GITHUB_ACTIONS_GENERATION and persist no artifacts.
+        from backend.app.services.github_actions_generation.architecture_consistency import (
+            verify_architecture_consistency,
+        )
+
+        terraform_files = _APS.get_terraform_files(db, project_id=project.id)
+        consistency = verify_architecture_consistency(
+            ctx.deployment_target, terraform_files
+        )
+        if not consistency.consistent:
+            return WorkflowOrchestrationService._fail_github_actions_inconsistent(
+                db,
+                project=project,
+                workflow=workflow,
+                task=task,
+                ctx=ctx,
+                consistency=consistency,
+                logs=result.logs,
+            )
+
         # Persist each file that individually validated (Phase 5 contract). The
         # artifact_type stays "github_actions"; the two files are distinguished by
         # artifact_subtype (their on-disk path) — no new artifact type, no migration.
@@ -694,6 +782,356 @@ class WorkflowOrchestrationService:
             "[GitHubActions] generation complete project=%s target=%s status=%s "
             "artifacts=%d",
             project.id, ctx.deployment_target, status, len(persisted_ids),
+        )
+        return state, persisted_ids
+
+    @staticmethod
+    def _fail_github_actions_inconsistent(
+        db: Session,
+        *,
+        project: Project,
+        workflow: Workflow,
+        task: Task,
+        ctx,
+        consistency,
+        logs: List[dict],
+    ) -> Tuple[dict, List[str]]:
+        """Record GITHUB_ACTIONS_GENERATION as failed on an architecture mismatch.
+
+        FIX 3 — persists NO workflow artifacts: the deploy/bootstrap pipelines
+        assume a compute resource the Terraform never provisions, so installing
+        them would only fail at run time. The run stays open (``running``) so the
+        phase can be re-run after Terraform is regenerated for the target.
+        """
+        errors = list(consistency.errors)
+        consistency_record = {
+            "consistent": False,
+            "deployment_target": consistency.deployment_target,
+            "required_resource": consistency.required_resource,
+            "errors": errors,
+        }
+
+        WorkflowOrchestrationService._record_phase(
+            workflow,
+            phase=PHASE_GH_ACTIONS,
+            status="failed",
+            extra={
+                "deployment_target": ctx.deployment_target,
+                "architecture_consistency": consistency_record,
+                "artifact_count": 0,
+                "validation_status": "failed",
+                "validation_errors": errors,
+            },
+        )
+        workflow.current_phase = PHASE_GH_ACTIONS
+        workflow.status = "running"  # keep open so it can be re-run after a fix
+
+        state = TaskService.load_workflow_state(db, task) or {}
+        gh_state = state.setdefault("github_actions", {})
+        gh_state.update({
+            "deployment_target": ctx.deployment_target,
+            "architecture_consistency": consistency_record,
+            "validation": {"status": "failed", "errors": errors, "warnings": []},
+        })
+        state["logs"] = list(state.get("logs", [])) + list(logs) + [
+            {"step": "github_actions", "message": m} for m in errors
+        ]
+        TaskService.stage_workflow_state(task, state)
+
+        db.commit()
+        db.refresh(workflow)
+
+        logger.warning(
+            "[GitHubActions] architecture inconsistency project=%s target=%s: %s",
+            project.id, ctx.deployment_target, "; ".join(errors),
+        )
+        return state, []
+
+    # ─── Repository installation (commit workflows to the repo) ──────────────
+
+    @staticmethod
+    def _resolve_default_branch(project: Project) -> str:
+        """Resolve the project's base (default) branch.
+
+        Persisted in ``Project.project_metadata['default_branch']`` (no schema
+        migration — JSONB free-form), defaulting to ``main`` when unset. The
+        installation phase writes the resolved value back after a successful run
+        so it is remembered for next time.
+        """
+        meta = project.project_metadata or {}
+        branch = str(meta.get("default_branch") or "").strip()
+        return branch or "main"
+
+    @staticmethod
+    def _dispatch_bootstrap(
+        *,
+        repo_url: str,
+        github_token: str,
+        ref: str,
+    ) -> dict:
+        """FIX 1 — trigger bootstrap.yml via workflow_dispatch. Never raises.
+
+        Returns a compact record ``{dispatched, run_id, ref, workflow_file,
+        status_code, error}`` for the installation phase + artifact. Any failure
+        (bad repo URL, permission, 404 because bootstrap.yml is not yet on the
+        default branch, network) degrades to ``dispatched=False`` with a reason —
+        the install itself already succeeded.
+        """
+        from pathlib import Path
+
+        from backend.app.services.repository.github_service import GitHubService
+        from backend.app.services.repository_installation.models import BOOTSTRAP_PATH
+        from backend.app.services.repository_installation.workflow_dispatch_client import (
+            dispatch_workflow,
+        )
+
+        workflow_file = Path(BOOTSTRAP_PATH).name  # "bootstrap.yml"
+
+        try:
+            owner, repo = GitHubService._extract_owner_and_repo(repo_url)
+        except ValueError as exc:
+            return {
+                "dispatched": False,
+                "run_id": None,
+                "ref": ref,
+                "workflow_file": workflow_file,
+                "status_code": None,
+                "error": str(exc),
+            }
+
+        outcome = dispatch_workflow(
+            owner=owner,
+            repo=repo,
+            token=github_token,
+            workflow_file=workflow_file,
+            ref=ref,
+        )
+        return outcome.to_record(ref=ref, workflow_file=workflow_file)
+
+    @staticmethod
+    def _run_repository_installation(
+        db: Session,
+        *,
+        project: Project,
+        workflow: Workflow,
+        task: Task,
+    ) -> Tuple[dict, List[str]]:
+        """Install the generated ``bootstrap.yml`` + ``deploy.yml`` into the repo.
+
+        Reads the DB-backed (validated) GitHub Actions artifacts, the project's
+        repository URL, and the encrypted ``github_pat`` credential, then delegates
+        to :class:`RepositoryInstallationService` (clone → dedicated branch →
+        write → commit → push → optional PR). The service NEVER pushes to a
+        protected branch and NEVER force-pushes.
+
+        Missing/unsafe preconditions raise ``ValueError`` (→ HTTP 400). An
+        operational git/PR failure is recorded as a ``failed`` phase WITHOUT
+        raising (the workflow stays open to retry), mirroring the non-raising
+        failure contract of the Terraform / Docker phases. On success the run is
+        the terminal artifact of the lifecycle, so the workflow is ``completed``.
+        """
+        import json as _json
+
+        from backend.app.services.core.artifact_persistence_service import (
+            ArtifactPersistenceService as _APS,
+        )
+        from backend.app.services.repository_installation.installation_service import (
+            RepositoryInstallationService,
+        )
+        from backend.app.services.repository_installation.installation_files import (
+            DOCKERFILE_PATH,
+            TERRAFORM_DIR,
+            build_installation_files,
+        )
+        from backend.app.services.repository_installation.models import (
+            BOOTSTRAP_PATH,
+            DEPLOY_PATH,
+            InstallationPrerequisiteError,
+        )
+
+        # 1. Gather the generated workflows from the DB (source of truth — the
+        #    exact validated bytes the deployment phase persisted).
+        gh_files = _APS.get_github_actions_files(db, project_id=project.id)
+        bootstrap = gh_files.get(BOOTSTRAP_PATH)
+        deploy = gh_files.get(DEPLOY_PATH)
+        if not bootstrap or not deploy:
+            raise ValueError(
+                f"Cannot run {PHASE_REPO_INSTALL}: both bootstrap.yml and "
+                "deploy.yml must be generated first (run "
+                f"{PHASE_GH_ACTIONS})."
+            )
+
+        # 1b. Gather the artifacts the pipelines CONSUME and assemble the runnable
+        #     file set: the two pipelines + terraform/*.tf(vars) + Dockerfile. The
+        #     allow-list is the ONLY place install paths are decided, so no
+        #     arbitrary file is ever written. Guard on the BUILT set so a missing
+        #     consumed artifact fails loudly here rather than installing a repo
+        #     whose pipelines break at run time (e.g. "No such file: terraform/").
+        terraform_files = _APS.get_terraform_files(db, project_id=project.id)
+        docker_files = _APS.get_docker_artifacts(db, project_id=project.id)
+        files = build_installation_files(
+            bootstrap=bootstrap,
+            deploy=deploy,
+            terraform_files=terraform_files,
+            docker_files=docker_files,
+        )
+        if not any(p.startswith(f"{TERRAFORM_DIR}/") for p in files):
+            raise ValueError(
+                f"Cannot run {PHASE_REPO_INSTALL}: no Terraform artifacts found "
+                "— bootstrap.yml needs terraform/ to run 'terraform init'. Run "
+                "Terraform Generation first."
+            )
+        if DOCKERFILE_PATH not in files:
+            raise ValueError(
+                f"Cannot run {PHASE_REPO_INSTALL}: no Dockerfile artifact found "
+                "— the pipelines build from Dockerfile. Run Docker Generation "
+                "first."
+            )
+
+        repo_url = project.repository_url
+        if not repo_url:
+            raise ValueError(
+                f"Cannot run {PHASE_REPO_INSTALL}: the project has no "
+                "repository URL."
+            )
+
+        # 2. Pull the GitHub PAT at the moment it is needed — never persisted to
+        #    state, decrypted in-memory for this request only.
+        github_token = CredentialsService.get_credential(
+            db, project_id=project.id, provider="github_pat",
+        )
+        if not github_token:
+            raise ValueError(
+                f"Cannot run {PHASE_REPO_INSTALL}: a GitHub token "
+                "(github_pat credential) is required to push to the repository."
+            )
+
+        base_branch = WorkflowOrchestrationService._resolve_default_branch(project)
+
+        try:
+            result = RepositoryInstallationService.install(
+                repo_url=repo_url,
+                github_token=github_token,
+                files=files,
+                base_branch=base_branch,
+                create_pr=True,
+            )
+        except InstallationPrerequisiteError as exc:
+            # Caller-fixable precondition → 400 (matches the GH-Actions phase).
+            raise ValueError(str(exc)) from exc
+
+        status = "completed" if result.success else "failed"
+        persisted_ids: List[str] = []
+
+        # FIX 1 — After a successful installation, automatically trigger the
+        # Infrastructure pipeline (bootstrap.yml) via the GitHub Actions
+        # workflow_dispatch API so infrastructure is provisioned (terraform
+        # apply) before the Delivery pipeline runs. Best-effort + non-fatal: a
+        # dispatch failure never fails the install. No new credential system
+        # (reuses the github_pat above), no polling, no waiting.
+        bootstrap_dispatch = (
+            WorkflowOrchestrationService._dispatch_bootstrap(
+                repo_url=repo_url,
+                github_token=github_token,
+                ref=result.install_branch,
+            )
+            if result.success
+            else None
+        )
+
+        WorkflowOrchestrationService._record_phase(
+            workflow,
+            phase=PHASE_REPO_INSTALL,
+            status=status,
+            extra={
+                "branch": result.install_branch,
+                "base_branch": result.base_branch,
+                "commit": result.commit_sha,
+                "pr_url": result.pr_url,
+                "pr_created": result.pr_created,
+                "pr_skipped_reason": result.pr_skipped_reason,
+                "pushed": result.pushed,
+                "committed": result.committed,
+                "no_changes": result.no_changes,
+                "files": result.files_written,
+                "repo_url": result.repo_url,
+                "error": result.error,
+                "bootstrap_dispatch": bootstrap_dispatch,
+            },
+        )
+        workflow.current_phase = PHASE_REPO_INSTALL
+        if result.success:
+            workflow.status = "completed"
+            workflow.finished_at = datetime.now(timezone.utc)
+            # Remember the resolved base branch for future runs.
+            meta = dict(project.project_metadata or {})
+            if meta.get("default_branch") != result.base_branch:
+                meta["default_branch"] = result.base_branch
+                project.project_metadata = meta
+            # Durable installation record (survives scratch loss). Carries the
+            # FIX 1 bootstrap dispatch outcome alongside the install result.
+            installation_record = result.to_artifact_dict()
+            installation_record["bootstrap_dispatch"] = bootstrap_dispatch
+            artifact = _APS.upsert_artifact(
+                db,
+                project_id=project.id,
+                workflow_id=workflow.id,
+                artifact_type="repository_installation",
+                artifact_subtype="installation.json",
+                content=_json.dumps(installation_record, indent=2, default=str),
+                generated_by_agent="RepositoryInstallationService",
+                validation_status="passed",
+            )
+            persisted_ids.append(artifact.id)
+
+            # Advance the lifecycle into observation: Generate → Install →
+            # Monitor. The REPOSITORY_INSTALLATION entry stays ``completed`` (its
+            # status is unchanged), and the workflow stays terminal
+            # (``completed``) — this only points ``current_phase`` at the
+            # monitoring surface so a resumed run lands there. No GitHub call
+            # happens here; monitoring queries live on demand.
+            WorkflowOrchestrationService._record_phase(
+                workflow,
+                phase=PHASE_WORKFLOW_MONITORING,
+                status="monitoring",
+                extra={"note": "GitHub Actions runs can now be monitored."},
+            )
+            workflow.current_phase = PHASE_WORKFLOW_MONITORING
+        else:
+            # Keep the run open so the phase can be re-run after a fix.
+            workflow.status = "running"
+
+        # Mirror the outcome into scratch state for the read projection.
+        state = TaskService.load_workflow_state(db, task) or {}
+        ri_state = state.setdefault("repository_installation", {})
+        ri_state.update({
+            "success": result.success,
+            "branch": result.install_branch,
+            "base_branch": result.base_branch,
+            "commit": result.commit_sha,
+            "pr_url": result.pr_url,
+            "pr_created": result.pr_created,
+            "pr_skipped_reason": result.pr_skipped_reason,
+            "pushed": result.pushed,
+            "committed": result.committed,
+            "no_changes": result.no_changes,
+            "files": result.files_written,
+            "repo_url": result.repo_url,
+            "error": result.error,
+            "bootstrap_dispatch": bootstrap_dispatch,
+        })
+        state["logs"] = list(state.get("logs", [])) + [
+            {"step": "repository_installation", "message": m} for m in result.logs
+        ]
+        TaskService.stage_workflow_state(task, state)
+
+        db.commit()
+        db.refresh(workflow)
+
+        logger.info(
+            "[RepoInstall] project=%s status=%s branch=%s commit=%s pr=%s",
+            project.id, status, result.install_branch, result.commit_sha,
+            result.pr_url or result.pr_skipped_reason,
         )
         return state, persisted_ids
 

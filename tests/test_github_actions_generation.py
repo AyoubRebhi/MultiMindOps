@@ -63,6 +63,15 @@ def _blueprint(compute_type: str) -> dict:
 
 _COMPUTE_TO_TARGET = {"ECS": "ecs", "EKS": "eks", "Lambda": "lambda", "EC2": "ec2"}
 
+# Compute type → the Terraform resource the FIX 3 consistency guard requires the
+# seeded artifacts to declare so the deploy workflow targets real infrastructure.
+_COMPUTE_TO_TF_RESOURCE = {
+    "ECS": "aws_ecs_cluster",
+    "EC2": "aws_instance",
+    "EKS": "aws_eks_cluster",
+    "Lambda": "aws_lambda_function",
+}
+
 
 # ── DB harness (mirrors tests/test_terraform_generation_status.py) ───────────
 
@@ -116,7 +125,11 @@ def _seed(db, compute_type: str, *, docker=True, tf=True, plan_selected=True,
                         content="FROM python:3.12-slim\nEXPOSE 8000\nCMD [\"x\"]\n",
                         content_hash="h1", version=1))
     if tf:
-        for sub, body in (("terraform_main", 'resource "null_resource" "x" {}\n'),
+        # Declare the compute resource the FIX 3 consistency guard requires for
+        # this target so the deploy/bootstrap workflows are allowed to persist.
+        resource = _COMPUTE_TO_TF_RESOURCE[compute_type]
+        main_tf = f'resource "{resource}" "app" {{}}\n'
+        for sub, body in (("terraform_main", main_tf),
                           ("terraform_providers", "terraform {}\n")):
             db.add(Artifact(project_id="proj-1", workflow_id="wf-1",
                             artifact_type="terraform", artifact_subtype=sub,
@@ -380,6 +393,37 @@ def test_deploy_has_test_detection_and_concurrency():
         assert marker in deploy
     assert "continue-on-error: true" in deploy
     assert "concurrency:" in deploy and "cancel-in-progress: true" in deploy
+
+
+def test_architecture_inconsistency_fails_phase_and_persists_nothing(db):
+    """FIX 3 — an eks target over Terraform that declares no aws_eks_cluster
+    fails GITHUB_ACTIONS_GENERATION and persists no workflow artifacts."""
+    proj, wf, task = _seed(db, "EKS")
+    # Replace the seeded Terraform so it no longer declares aws_eks_cluster
+    # (simulating Terraform generated for the wrong target).
+    main = (db.query(Artifact)
+              .filter(Artifact.project_id == "proj-1",
+                      Artifact.artifact_type == "terraform",
+                      Artifact.artifact_subtype == "terraform_main").one())
+    main.content = 'resource "aws_ecs_cluster" "main" {}\n'
+    db.commit()
+
+    state, ids = WOS.run_phase(
+        db, project=proj, workflow=wf, task=task, phase=PHASE_GH_ACTIONS,
+    )
+
+    entry = wf.phases_state[PHASE_GH_ACTIONS]
+    assert entry["status"] == "failed"
+    assert entry["architecture_consistency"]["consistent"] is False
+    assert entry["architecture_consistency"]["required_resource"] == "aws_eks_cluster"
+    assert ids == []
+    # Nothing was persisted — no half-installed pipeline pointing at missing infra.
+    rows = (db.query(Artifact)
+              .filter(Artifact.project_id == "proj-1",
+                      Artifact.artifact_type == "github_actions").all())
+    assert rows == []
+    # The run stays open so it can be re-run after Terraform is regenerated.
+    assert wf.status == "running"
 
 
 def test_rerun_is_idempotent(db):

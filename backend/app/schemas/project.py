@@ -157,6 +157,53 @@ class ProjectDetailResponse(ProjectResponse):
     artifact_count: int = 0
 
 
+# ─── Project settings (repository + credential status) ───────────────────────
+#
+# The settings aggregator pairs the repository fields a user edits with a
+# DECRYPT-FREE view of which DevOps credentials are configured. No secret value
+# is ever included — only ``configured`` flags + non-secret AWS display
+# metadata (region / account / access-key-id last-4).
+
+
+class ProviderConfigured(BaseModel):
+    """Minimal connected/missing flag for a provider with no extra metadata."""
+
+    configured: bool
+
+
+class ProjectCredentialStatus(BaseModel):
+    github: ProviderConfigured
+    aws: "AwsCredentialStatus"
+
+
+class ProjectSettingsResponse(BaseModel):
+    repository_url: Optional[str] = None
+    repository_visibility: Optional[str] = None
+    default_branch: Optional[str] = None
+    credentials: ProjectCredentialStatus
+
+
+class ProjectSettingsUpdateRequest(BaseModel):
+    """Partial update of the project's repository settings.
+
+    Only repository fields are here — credentials are written through the
+    dedicated ``/credentials/github`` and ``/credentials/aws`` endpoints
+    (stricter authz). ``default_branch`` is persisted into ``project_metadata``.
+    """
+
+    repository_url: Optional[str] = Field(default=None, max_length=2048)
+    repository_visibility: Optional[RepositoryVisibility] = None
+    default_branch: Optional[str] = Field(default=None, max_length=255)
+
+
+# Imported at the bottom to avoid a circular import at module load: the
+# credentials schema is independent and only referenced by the settings models
+# above. ``model_rebuild`` resolves the forward reference once it is in scope.
+from backend.app.schemas.credentials import AwsCredentialStatus  # noqa: E402
+
+ProjectCredentialStatus.model_rebuild()
+
+
 # ─── Workflow execution requests ─────────────────────────────────────────────
 
 class StartWorkflowRequest(BaseModel):
@@ -180,6 +227,7 @@ PhaseName = Literal[
     "TERRAFORM_PLAN",
     "DOCKER",
     "GITHUB_ACTIONS_GENERATION",
+    "REPOSITORY_INSTALLATION",
 ]
 
 
@@ -202,6 +250,52 @@ class WorkflowPhaseRunResponse(BaseModel):
     phases_state: Dict[str, Any] = {}
     persisted_artifact_ids: List[str] = []
     logs: List[Any] = []
+
+
+# ─── Workflow revision (regenerate a phase + invalidate downstream) ──────────
+#
+# Regenerating a completed phase re-runs it (creating the next ArtifactVersion —
+# the previous bytes are preserved, never deleted), marks every phase that
+# DEPENDS on its output ``invalidated`` so it is re-run against the new
+# artifacts, and records a revision-history entry. No DB migration: per-phase
+# revision/invalidation metadata lives in ``Workflow.phases_state`` and the
+# revision log lives in ``Workflow.logs`` (both free-form JSONB).
+
+
+class RegeneratePhaseResponse(BaseModel):
+    workflow_id: str
+    task_id: str
+    phase: str
+    # ``revised`` is False when the re-run did not produce a fresh, usable output
+    # (e.g. a validation failure) — in that case nothing downstream is touched.
+    revised: bool
+    revision: int
+    current_phase: str
+    status: str
+    phases_state: Dict[str, Any] = {}
+    # Downstream phases marked stale by this regeneration (canonical order).
+    invalidated_phases: List[str] = []
+    # ``"{type}/{subtype}": {"from": v, "to": v+1}`` for each superseded artifact.
+    superseded_artifacts: Dict[str, Any] = {}
+    persisted_artifact_ids: List[str] = []
+    logs: List[Any] = []
+
+
+class WorkflowRevisionEntry(BaseModel):
+    phase: str
+    revision: int
+    invalidated_phases: List[str] = []
+    superseded_artifacts: Dict[str, Any] = {}
+    revised_by: Optional[str] = None
+    revised_at: Optional[str] = None
+
+
+class WorkflowRevisionHistoryResponse(BaseModel):
+    workflow_id: str
+    current_phase: Optional[str] = None
+    status: str
+    # Newest revision first.
+    revisions: List[WorkflowRevisionEntry] = []
 
 
 # ─── Artifact + version detail payloads ──────────────────────────────────────

@@ -123,6 +123,8 @@ export const BACKEND_WORKFLOW_PHASE_META = {
   TERRAFORM_VALIDATION: { label: 'Terraform Validation', icon: 'fa-clipboard-check' },
   TERRAFORM_PLAN: { label: 'Terraform Plan', icon: 'fa-diagram-project' },
   GITHUB_ACTIONS_GENERATION: { label: 'GitHub Actions Generation', icon: 'fa-github', brand: true },
+  REPOSITORY_INSTALLATION: { label: 'Repository Installation', icon: 'fa-code-branch' },
+  WORKFLOW_MONITORING: { label: 'Workflow Monitoring', icon: 'fa-satellite-dish' },
 };
 
 /**
@@ -157,16 +159,105 @@ export const WORKFLOW_PHASE_VIEW = {
   TERRAFORM_GENERATION: 'terraform',
   TERRAFORM_VALIDATION: 'terraform',
   TERRAFORM_PLAN: 'terraform',
-  // Deployment orchestration — the final phase (Analysis → Architecture →
-  // Docker → Terraform → GitHub Actions). A resumed run that has reached (or
-  // completed) this phase lands on the GitHub Actions surface.
+  // Deployment orchestration — the final generation phase (Analysis →
+  // Architecture → Docker → Terraform → GitHub Actions). A resumed run that has
+  // reached (or completed) this phase lands on the GitHub Actions surface.
   GITHUB_ACTIONS_GENERATION: 'github_actions',
+  // Repository installation — commit the generated pipelines onto a dedicated
+  // branch of the user's repo (+ optional PR).
+  REPOSITORY_INSTALLATION: 'repository_installation',
+  // Workflow monitoring — the terminal phase: READ-ONLY observation of the
+  // installed pipelines' GitHub Actions runs (Generate → Install → Monitor).
+  WORKFLOW_MONITORING: 'monitoring',
 };
 
 /** Views that are fully integrated with live backend data today. */
 export const IMPLEMENTED_WORKFLOW_VIEWS = new Set([
   'analysis', 'planning', 'docker', 'terraform', 'github_actions',
+  'repository_installation', 'monitoring',
 ]);
+
+/* ===========================================================================
+   Workflow revision (regenerate a phase + invalidate downstream)
+
+   Mirrors the backend WorkflowRevisionService (PHASE_DEPENDENTS,
+   REGENERATABLE_PHASES, CANONICAL_PHASE_ORDER) so the UI can render the phase
+   navigator, the Regenerate button, and the dependency warning WITHOUT an extra
+   round-trip. The backend remains the authoritative source of truth on execute.
+   Keep these in lock-step with
+   backend/app/services/core/workflow_revision_service.py.
+   ========================================================================= */
+
+/** Canonical left-to-right lifecycle order for the phase navigator. */
+export const CANONICAL_PHASE_ORDER = [
+  'ANALYSIS',
+  'ARCHITECTURE_DECISION',
+  'PLAN_SELECTED',
+  'DOCKER',
+  'DOCKER_BUILD',
+  'TERRAFORM_GENERATION',
+  'TERRAFORM_VALIDATION',
+  'TERRAFORM_PLAN',
+  'GITHUB_ACTIONS_GENERATION',
+  'REPOSITORY_INSTALLATION',
+  'WORKFLOW_MONITORING',
+];
+
+/** Direct dependency edges: phase → phases that CONSUME its output. */
+export const PHASE_DEPENDENTS = {
+  PLAN_SELECTED: ['DOCKER', 'TERRAFORM_GENERATION'],
+  DOCKER: ['DOCKER_BUILD', 'GITHUB_ACTIONS_GENERATION'],
+  TERRAFORM_GENERATION: ['TERRAFORM_VALIDATION', 'TERRAFORM_PLAN', 'GITHUB_ACTIONS_GENERATION'],
+  TERRAFORM_VALIDATION: ['TERRAFORM_PLAN'],
+  GITHUB_ACTIONS_GENERATION: ['REPOSITORY_INSTALLATION'],
+  REPOSITORY_INSTALLATION: ['WORKFLOW_MONITORING'],
+};
+
+/** Phases a user may regenerate (the inline generation phases only). */
+export const REGENERATABLE_PHASES = new Set([
+  'DOCKER',
+  'TERRAFORM_GENERATION',
+  'GITHUB_ACTIONS_GENERATION',
+]);
+
+/** phases_state statuses that count as "done" (mirrors the backend set). */
+export const DONE_PHASE_STATUSES = new Set([
+  'completed',
+  'completed_with_fallback',
+  'completed_no_files',
+]);
+
+/** Status stamped on a phase whose upstream input was regenerated. */
+export const INVALIDATED_STATUS = 'invalidated';
+
+/**
+ * Transitive closure of phases that depend on `phase`'s output, in canonical
+ * order. Breadth-first over PHASE_DEPENDENTS; excludes `phase` itself.
+ */
+export function downstreamPhases(phase) {
+  const seen = new Set();
+  const queue = [...(PHASE_DEPENDENTS[phase] || [])];
+  while (queue.length) {
+    const next = queue.shift();
+    if (seen.has(next)) continue;
+    seen.add(next);
+    queue.push(...(PHASE_DEPENDENTS[next] || []));
+  }
+  return CANONICAL_PHASE_ORDER.filter((p) => seen.has(p));
+}
+
+/** True when a phase entry's status means it produced output. */
+export function isPhaseDone(status) {
+  return DONE_PHASE_STATUSES.has(status);
+}
+
+/** A completed (or invalidated) regeneratable phase can be regenerated. */
+export function canRegeneratePhase(phase, status) {
+  return (
+    REGENERATABLE_PHASES.has(phase) &&
+    (DONE_PHASE_STATUSES.has(status) || status === INVALIDATED_STATUS)
+  );
+}
 
 /**
  * Resolve a workflow's saved phase to its view id. A null/unknown phase means
@@ -219,6 +310,13 @@ export const STATUS_META = {
     label: 'Needs Review',
     variant: 'warning',
     icon: 'fa-user-check',
+  },
+  // A phase whose upstream input was regenerated — its output is stale and it
+  // must be re-run before anything downstream of it can proceed.
+  invalidated: {
+    label: 'Stale · re-run',
+    variant: 'warning',
+    icon: 'fa-rotate',
   },
   awaiting_approval: {
     label: 'Awaiting Approval',

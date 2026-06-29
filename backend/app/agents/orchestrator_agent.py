@@ -53,6 +53,24 @@ from backend.app.services.security.security_score_transformer import SecuritySco
 logger = logging.getLogger(__name__)
 
 
+# ─── Analysis resilience contract ───────────────────────────────────────────
+# The analysis phase must NEVER crash the whole bootstrap because a single
+# optional section (e.g. ``application_profile``) is absent. These defaults let
+# the orchestrator degrade gracefully: a missing/partial profile is backfilled
+# with safe values and recorded in ``analysis_validation_errors`` instead of
+# raising. Only genuinely unrecoverable states (security block, no repo) stop
+# the pipeline — and those are handled by the post-analysis router, not by an
+# exception.
+_SAFE_PROFILE_STR_DEFAULTS: dict[str, str] = {
+    "application_type": "monolith",
+    "architecture_pattern": "layered",
+    "statefulness": "stateless",
+    "workload_profile": "io_bound",
+    "scalability_level": "medium",
+}
+_SAFE_PROFILE_LIST_FIELDS: tuple[str, ...] = ("detected_services", "entrypoints")
+
+
 class OrchestratorAgent(BaseAgent):
     """
     Adaptive multi-agent orchestrator.
@@ -143,6 +161,78 @@ class OrchestratorAgent(BaseAgent):
         logs.append({"step": "orchestrator", "message": "Workflow started"})
         return {**state, "status": "in_progress", "logs": logs}
 
+    @staticmethod
+    def _normalize_application_profile(
+        application_profile: object,
+        *,
+        cache_status: str,
+    ) -> tuple[dict, list[dict]]:
+        """Coerce the analysis ``application_profile`` into a complete dict.
+
+        Returns ``(profile, errors)`` where ``profile`` is guaranteed to carry
+        every field downstream agents rely on, and ``errors`` is a structured
+        list describing what had to be defaulted (persisted as
+        ``analysis_validation_errors`` for debugging).
+
+        This NEVER raises: a missing / empty / wrong-typed / partial profile is
+        repaired with safe defaults so the workflow degrades gracefully instead
+        of crashing the bootstrap. The caller decides whether the degradation
+        is benign (security block → routed to finalize anyway) or worth a
+        warning (a profile we genuinely expected but didn't get).
+        """
+        errors: list[dict] = []
+        top_level_problem = False
+
+        if application_profile is None:
+            errors.append({
+                "field": "application_profile",
+                "issue": "missing",
+                "detail": f"key absent from analysis output (cache_status={cache_status})",
+            })
+            profile: dict = {}
+            top_level_problem = True
+        elif not isinstance(application_profile, dict):
+            errors.append({
+                "field": "application_profile",
+                "issue": "wrong_type",
+                "detail": (
+                    f"expected dict, got {type(application_profile).__name__} "
+                    f"(cache_status={cache_status})"
+                ),
+            })
+            profile = {}
+            top_level_problem = True
+        else:
+            profile = dict(application_profile)
+            if not profile:
+                errors.append({
+                    "field": "application_profile",
+                    "issue": "empty",
+                    "detail": f"empty dict (cache_status={cache_status})",
+                })
+                top_level_problem = True
+
+        # Backfill the required scalar classification fields.
+        for field, default in _SAFE_PROFILE_STR_DEFAULTS.items():
+            value = profile.get(field)
+            if not isinstance(value, str) or not value.strip():
+                # When the whole section was absent we already recorded one
+                # top-level error — don't spam a per-field error for each.
+                if not top_level_problem:
+                    errors.append({
+                        "field": field,
+                        "issue": "defaulted",
+                        "detail": f"missing or blank → defaulted to '{default}'",
+                    })
+                profile[field] = default
+
+        # List fields: an empty list is legitimate; only repair wrong types.
+        for field in _SAFE_PROFILE_LIST_FIELDS:
+            if not isinstance(profile.get(field), list):
+                profile[field] = []
+
+        return profile, errors
+
     def _analyze_repository_node(self, state: OrchestratorState) -> OrchestratorState:
         analysis = self.codebase_agent.run(
             repo_url=state["repo_url"],  # type: ignore[index]
@@ -176,25 +266,52 @@ class OrchestratorAgent(BaseAgent):
             logs.append({"step": "repository_security", "message": sec_msg})
             logs.append({"step": "codebase_analysis", "message": "Repository analyzed successfully"})
 
-        application_profile = analysis.get("application_profile")
         cache_status = (analysis.get("repository_analysis") or {}).get("cache_status", "fresh")
+        security_blocked = (security_result or {}).get("status") == "blocked"
 
-        if application_profile is None:
-            logger.error(
-                "[OrchestratorAgent] application_profile key absent from analysis output (cache_status=%s)",
+        # Log the SHAPE of the analysis output up front — previously we were
+        # flying blind when a key went missing. (Keys only, never values, to
+        # avoid leaking secrets into logs.)
+        logger.info(
+            "[OrchestratorAgent] analysis output keys=%s cache_status=%s security_status=%s",
+            sorted(analysis.keys()),
+            cache_status,
+            (security_result or {}).get("status"),
+        )
+
+        # Resilient profile resolution: NEVER raise on a missing/partial
+        # ``application_profile``. A security-blocked repo legitimately has no
+        # profile (the router below sends it straight to finalize); any other
+        # gap is backfilled with safe defaults so the bootstrap can continue.
+        application_profile, profile_errors = self._normalize_application_profile(
+            analysis.get("application_profile"),
+            cache_status=cache_status,
+        )
+
+        if profile_errors and not security_blocked:
+            logger.warning(
+                "[OrchestratorAgent] application_profile incomplete — safe defaults applied "
+                "(cache_status=%s) errors=%s",
+                cache_status,
+                profile_errors,
+            )
+            logs.append({
+                "step": "application_profiling",
+                "message": (
+                    f"Application profile incomplete in analysis output — safe defaults "
+                    f"applied to {len(profile_errors)} field(s); workflow continues with a "
+                    f"degraded profile."
+                ),
+            })
+        elif security_blocked:
+            logger.info(
+                "[OrchestratorAgent] application_profile absent due to security block — "
+                "skipping profile (cache_status=%s)",
                 cache_status,
             )
-            raise Exception("Application profiling failed: key missing from analysis output")
-
-        if not application_profile:
-            logger.error(
-                "[OrchestratorAgent] application_profile is an empty dict (cache_status=%s)",
-                cache_status,
-            )
-            raise Exception("Application profiling failed: empty profile returned")
 
         logger.info(
-            "[OrchestratorAgent] application_profile extracted — type=%s scalability=%s source=%s",
+            "[OrchestratorAgent] application_profile resolved — type=%s scalability=%s source=%s",
             application_profile.get("application_type"),
             application_profile.get("scalability_level"),
             cache_status,
@@ -228,6 +345,7 @@ class OrchestratorAgent(BaseAgent):
             "chunks": analysis.get("chunks"),
             "agent_context": agent_context,
             "application_profile": application_profile,
+            "analysis_validation_errors": profile_errors,
             "env_security_runtime": analysis.get("env_security_runtime"),
             "logs": logs,
         }
@@ -245,20 +363,31 @@ class OrchestratorAgent(BaseAgent):
             state.get("application_profile")
             or agent_context.get("application_profile")
         )
-        planner_context = planner_context or {}
-        planner_context["application_profile"] = application_profile
 
-        if application_profile:
+        # Defensive backstop: ``_analyze_repository_node`` already guarantees a
+        # complete profile, but state is sanitized/persisted between phases and
+        # planning can be resumed independently. Rather than crash when the key
+        # didn't survive (or analysis was skipped), repair it with safe defaults
+        # so the planner always gets a usable profile.
+        if not isinstance(application_profile, dict) or not application_profile:
+            application_profile, _ = self._normalize_application_profile(
+                application_profile, cache_status="planning_resume"
+            )
+            if state.get("repo_url"):
+                logger.warning(
+                    "[OrchestratorAgent] application_profile absent at planning_phase — "
+                    "applied safe defaults (type=%s)",
+                    application_profile.get("application_type"),
+                )
+        else:
             logger.info(
                 "[OrchestratorAgent] application_profile injected — type=%s scalability=%s",
                 application_profile.get("application_type"),
                 application_profile.get("scalability_level"),
             )
-        else:
-            logger.warning("[OrchestratorAgent] application_profile not found in agent_context or state")
 
-        if state.get("repo_url") and not application_profile:
-            raise Exception("Application profile missing in orchestrator state")
+        planner_context = planner_context or {}
+        planner_context["application_profile"] = application_profile
 
         base_prompt = state["prompt"]
         human_feedback = (state.get("human_feedback") or "").strip()
@@ -1022,6 +1151,7 @@ class OrchestratorAgent(BaseAgent):
             "cicd": cicd,
             "cost_estimation": state.get("cost_estimation"),
             "validation": final_validation,
+            "analysis_validation_errors": state.get("analysis_validation_errors") or [],
             "artifact_contract": final_contract,
         }
 
@@ -1265,6 +1395,7 @@ class OrchestratorAgent(BaseAgent):
             "architecture_decision": None,
             "selected_plan_id": None,
             "application_profile": None,
+            "analysis_validation_errors": [],
             "validation": None,
             "result": None,
             "error_message": None,

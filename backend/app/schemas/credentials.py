@@ -55,6 +55,51 @@ class CredentialUpsertRequest(BaseModel):
         return v.strip()
 
 
+class GithubCredentialRequest(BaseModel):
+    """Body for ``POST /api/projects/{project_id}/credentials/github``.
+
+    ``token`` is the GitHub PAT — write-only, encrypted immediately, never
+    echoed back. The required scopes (``repo``, ``workflow``, ``actions:read``)
+    are documented for operators but not enforced server-side here (they are
+    validated implicitly when the token is used for clone/install).
+    """
+
+    token: str = Field(
+        ...,
+        min_length=1,
+        description="GitHub Personal Access Token. Write-only; never returned.",
+    )
+    label: Optional[str] = Field(default=None, max_length=200)
+
+
+class AwsCredentialRequest(BaseModel):
+    """Body for ``POST /api/projects/{project_id}/credentials/aws``.
+
+    The secret access key is encrypted; region + account name are non-secret
+    display metadata. None of these values are echoed back — the response is
+    the masked :class:`AwsCredentialStatus`.
+    """
+
+    access_key_id: str = Field(..., min_length=8, max_length=128)
+    secret_access_key: str = Field(..., min_length=1, max_length=256, repr=False)
+    region: str = Field(..., min_length=1, max_length=64)
+    account_name: Optional[str] = Field(default=None, max_length=120)
+
+
+class AwsCredentialStatus(BaseModel):
+    """Masked status for the project's AWS credential.
+
+    NEVER carries the secret access key. ``access_key_id_last4`` is an
+    identifier hint (not a secret) so operators can recognise the account.
+    """
+
+    provider: str = "aws_iam"
+    configured: bool
+    region: Optional[str] = None
+    account_name: Optional[str] = None
+    access_key_id_last4: Optional[str] = None
+
+
 class CredentialResponse(BaseModel):
     """Masked metadata for a stored credential.
 

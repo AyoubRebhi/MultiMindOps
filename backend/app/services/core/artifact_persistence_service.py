@@ -302,6 +302,41 @@ class ArtifactPersistenceService:
         return files
 
     @staticmethod
+    def get_github_actions_files(
+        db: Session,
+        *,
+        project_id: str,
+        workflow_id: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Return ``{path: content}`` for the project's GitHub Actions artifacts.
+
+        Symmetric to :meth:`get_docker_artifacts` / :meth:`get_terraform_files`.
+        The GITHUB_ACTIONS_GENERATION phase persists each generated workflow file
+        as a ``github_actions`` ``Artifact`` whose ``artifact_subtype`` IS its
+        on-disk path (``.github/workflows/bootstrap.yml`` /
+        ``.github/workflows/deploy.yml``). The DB is the source of truth, so the
+        REPOSITORY_INSTALLATION phase reads the exact validated bytes from here —
+        never from transient scratch state — before committing them to the repo.
+
+        ``workflow_id`` is accepted for symmetry but NOT used to filter: the
+        upsert key is ``(project_id, artifact_type, artifact_subtype)``, so there
+        is exactly one canonical file per path per project.
+        """
+        rows = (
+            db.query(Artifact)
+            .filter(
+                Artifact.project_id == project_id,
+                Artifact.artifact_type == "github_actions",
+            )
+            .all()
+        )
+        files: Dict[str, str] = {}
+        for row in rows:
+            if isinstance(row.content, str) and row.artifact_subtype:
+                files[row.artifact_subtype] = row.content
+        return files
+
+    @staticmethod
     def upsert_artifact(
         db: Session,
         *,
