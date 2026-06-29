@@ -29,6 +29,10 @@ from backend.app.services.github_actions_generation.models import (
     DeploymentContext,
     DeploymentTarget,
 )
+from backend.app.services.github_actions_generation.terraform_identifiers import (
+    TerraformIdentifiers,
+    extract_terraform_identifiers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,12 +98,19 @@ class DeploymentContextBuilder:
                 "No Terraform artifacts found — run the Terraform Generation phase first."
             )
 
+        # Terraform is the SOURCE OF TRUTH for every infrastructure name. Read the
+        # identifiers it actually declares so the pipelines reference the real
+        # ECR repo / cluster / service / function — never a name re-derived here
+        # (which is exactly how the ECR repo and ECR_REPOSITORY diverged).
+        tf_identifiers = extract_terraform_identifiers(terraform_files)
+
         names = DeploymentContextBuilder._resolve_resource_names(
             blueprint,
             project_name=project.name,
             container_port=DeploymentContextBuilder._extract_port(
                 docker_files.get("dockerfile")
             ),
+            tf_identifiers=tf_identifiers,
         )
 
         ctx = DeploymentContext(
@@ -185,13 +196,16 @@ class DeploymentContextBuilder:
         *,
         project_name: Optional[str],
         container_port: int,
+        tf_identifiers: TerraformIdentifiers,
     ) -> Dict[str, Any]:
-        """Resolve names to the SAME values the Terraform templates emit.
+        """Resolve names, with the generated Terraform as the SOURCE OF TRUTH.
 
-        Reuses ``build_variable_context`` so the deploy workflow targets the
-        exact ECR repo / ECS cluster+service / EKS cluster / Lambda function that
-        Terraform provisions. When the blueprint did not parse, fall back to a
-        sanitized project name for every identifier.
+        The blueprint-derived names (via ``build_variable_context``) are only a
+        FALLBACK/seed — for ``project_name`` (no Terraform resource carries it
+        verbatim) and for any identifier a degraded module did not emit. Every
+        identifier Terraform actually declares (ECR repo / ECS cluster+service /
+        EKS cluster / Lambda function / region) OVERRIDES the derived value, so
+        the deploy workflow can only ever reference real, provisioned resources.
         """
         from backend.app.services.terraform_generation.utils.variable_context import (
             sanitize_terraform_name,
@@ -207,7 +221,7 @@ class DeploymentContextBuilder:
                 project_name=project_name,
                 container_port=container_port,
             )
-            return {
+            names: Dict[str, Any] = {
                 "aws_region": vctx["aws_region"],
                 "project_name": vctx["project_name"],
                 "repository_name": vctx["ecr_repository_name"],
@@ -218,17 +232,42 @@ class DeploymentContextBuilder:
                 "function_name": vctx.get("lambda_function_name") or "",
                 "container_port": container_port,
             }
+        else:
+            safe = sanitize_terraform_name(project_name, fallback="devsecops-app")
+            names = {
+                "aws_region": "us-east-1",
+                "project_name": safe,
+                "repository_name": safe,
+                "cluster_name": safe,
+                "service_name": safe,
+                "function_name": safe,
+                "container_port": container_port,
+            }
 
-        safe = sanitize_terraform_name(project_name, fallback="devsecops-app")
-        return {
-            "aws_region": "us-east-1",
-            "project_name": safe,
-            "repository_name": safe,
-            "cluster_name": safe,
-            "service_name": safe,
-            "function_name": safe,
-            "container_port": container_port,
-        }
+        # Terraform overrides — these are the names that actually exist in AWS.
+        DeploymentContextBuilder._apply_terraform_identifiers(names, tf_identifiers)
+        return names
+
+    @staticmethod
+    def _apply_terraform_identifiers(
+        names: Dict[str, Any], tf: TerraformIdentifiers,
+    ) -> None:
+        """Overlay the Terraform-declared identifiers onto ``names`` in place.
+
+        Only non-empty Terraform values win; a missing identifier leaves the
+        blueprint-derived fallback untouched so a partially-degraded Terraform
+        module still yields a renderable context.
+        """
+        if tf.aws_region:
+            names["aws_region"] = tf.aws_region
+        if tf.ecr_repository:
+            names["repository_name"] = tf.ecr_repository
+        if tf.cluster:
+            names["cluster_name"] = tf.cluster
+        if tf.ecs_service:
+            names["service_name"] = tf.ecs_service
+        if tf.lambda_function:
+            names["function_name"] = tf.lambda_function
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

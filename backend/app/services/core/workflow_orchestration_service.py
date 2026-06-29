@@ -663,6 +663,7 @@ class WorkflowOrchestrationService:
         # time, so fail GITHUB_ACTIONS_GENERATION and persist no artifacts.
         from backend.app.services.github_actions_generation.architecture_consistency import (
             verify_architecture_consistency,
+            verify_resource_name_consistency,
         )
 
         terraform_files = _APS.get_terraform_files(db, project_id=project.id)
@@ -677,6 +678,29 @@ class WorkflowOrchestrationService:
                 task=task,
                 ctx=ctx,
                 consistency=consistency,
+                logs=result.logs,
+            )
+
+        # FIX 3b — resource-NAME consistency. The presence guard above proves the
+        # compute resource exists; this proves the rendered pipelines reference the
+        # SAME literal identifiers Terraform declares (the ECR repo / cluster /
+        # service / function / region). A divergence — e.g. a deploy.yml using
+        # ECR_REPOSITORY=tp-devops while Terraform created a differently-named
+        # repository — would install a pipeline that can only fail at run time, so
+        # fail GITHUB_ACTIONS_GENERATION and persist no artifacts.
+        name_consistency = verify_resource_name_consistency(
+            deployment_target=ctx.deployment_target,
+            terraform_files=terraform_files,
+            pipeline_files=[(f.name, f.content) for f in result.files],
+        )
+        if not name_consistency.consistent:
+            return WorkflowOrchestrationService._fail_github_actions_inconsistent(
+                db,
+                project=project,
+                workflow=workflow,
+                task=task,
+                ctx=ctx,
+                consistency=name_consistency,
                 logs=result.logs,
             )
 
