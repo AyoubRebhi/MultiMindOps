@@ -91,6 +91,31 @@ export const projectApi = {
     const data = await apiClient.post(`/projects/${encodeURIComponent(id)}/bootstrap/retry`);
     return mapProject(data);
   },
+
+  /**
+   * GET /projects/:id/deletion-state — the destruction deletion guard. A project
+   * is deletable only when it has no live infrastructure OR its infrastructure
+   * was successfully destroyed. The UI uses this to gate the delete action.
+   */
+  async deletionState(id) {
+    const data = await apiClient.get(`/projects/${encodeURIComponent(id)}/deletion-state`);
+    return {
+      deletable: !!data?.deletable,
+      hasInfrastructure: !!data?.has_infrastructure,
+      destroySucceeded: !!data?.destroy_succeeded,
+      reason: data?.reason || null,
+    };
+  },
+
+  /**
+   * DELETE /projects/:id — permanently delete a project. The BACKEND enforces
+   * the deletion guard (409 when infrastructure is still live), so a rejected
+   * delete surfaces the guard reason. Resolves on 204.
+   */
+  async remove(id) {
+    await apiClient.delete(`/projects/${encodeURIComponent(id)}`);
+    return true;
+  },
 };
 
 export default projectApi;

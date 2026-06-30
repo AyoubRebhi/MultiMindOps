@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 ValidationSeverity = Literal["info", "warning", "error", "critical"]
 ValidationStatus = Literal["passed", "warnings", "failed", "skipped"]
 ValidatorName = Literal[
+    "backend_config",
     "hcl2_parse",
     "terraform_fmt",
     "terraform_init",

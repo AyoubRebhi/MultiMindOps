@@ -110,7 +110,7 @@ def stub_agents(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         OrchestratorAgent, "run_terraform_phase_only",
-        lambda self, prior_state, task_id=None: {**prior_state, **_TF_STATE},
+        lambda self, prior_state, task_id=None, project_id=None: {**prior_state, **_TF_STATE},
     )
 
     monkeypatch.setattr(CredentialsService, "get_credential", lambda *a, **k: None)

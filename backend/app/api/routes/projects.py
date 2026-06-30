@@ -51,6 +51,7 @@ from backend.app.schemas.project import (
     RegeneratePhaseResponse,
     SelectPlanRequest,
     StartWorkflowRequest,
+    WorkflowCancelResponse,
     WorkflowPhaseRunResponse,
     WorkflowResponse,
     WorkflowRevisionHistoryResponse,
@@ -73,6 +74,10 @@ from backend.app.schemas.repository_installation_phase import (
 from backend.app.schemas.workflow_monitoring_phase import (
     WorkflowMonitoringPhaseResponse,
 )
+from backend.app.schemas.infrastructure_destroy_phase import (
+    InfrastructureDestroyPhaseResponse,
+    ProjectDeletionState,
+)
 from backend.app.schemas.workflow_analysis import WorkflowAnalysisResponse
 from backend.app.services.core.docker_phase_projection_service import (
     DockerPhaseProjectionService,
@@ -84,6 +89,7 @@ from backend.app.services.core.repository_installation_projection_service import
     RepositoryInstallationProjectionService,
 )
 from backend.app.services.workflow_monitoring import WorkflowMonitoringService
+from backend.app.services.infrastructure_destroy import InfrastructureDestroyService
 from backend.app.services.core.project_analysis_service import ProjectAnalysisService
 from backend.app.services.core.workflow_analysis_aggregation_service import (
     WorkflowAnalysisAggregationService,
@@ -95,6 +101,9 @@ from backend.app.services.core.project_bootstrap_service import (
 from backend.app.services.core.project_context_service import ProjectContextService
 from backend.app.services.core.project_service import ProjectService
 from backend.app.services.core.task_service import TaskService
+from backend.app.services.core.workflow_cancellation_service import (
+    WorkflowCancellationService,
+)
 from backend.app.services.core.workflow_orchestration_service import (
     WorkflowOrchestrationService,
 )
@@ -277,6 +286,48 @@ def update_project(
 ):
     project = _load_or_404(db, project_id, current_user)
     return ProjectService.update_project(db, project, payload)
+
+
+@router.get(
+    "/{project_id}/deletion-state",
+    response_model=ProjectDeletionState,
+)
+def get_project_deletion_state(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Whether the project may be deleted (the destruction deletion guard).
+
+    Read-only: a project is deletable iff it has no live infrastructure OR its
+    infrastructure was successfully destroyed. The UI uses this to enable/disable
+    the delete action and explain why.
+    """
+    project = _load_or_404(db, project_id, current_user)
+    return ProjectDeletionState(**InfrastructureDestroyService.infrastructure_state(db, project))
+
+
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_role()),  # OWNER/ADMIN only
+):
+    """Delete a project — BLOCKED while it has live infrastructure.
+
+    Deletion guard: a project may only be deleted when it has no provisioned
+    infrastructure, or that infrastructure has been successfully destroyed
+    (INFRASTRUCTURE_DESTROY → destroy_succeeded). Otherwise returns 409 so the
+    engineer destroys first. On success the project + all its cascade-owned rows
+    are removed.
+    """
+    project = _load_or_404(db, project_id, current_user)
+    guard = InfrastructureDestroyService.infrastructure_state(db, project)
+    if not guard["deletable"]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=guard["reason"])
+    ProjectService.delete_project(db, project)
+    return None
 
 
 # ─── Project settings (repository + credential status) ────────────────────────
@@ -600,6 +651,39 @@ def get_workflow_revisions(
     return WorkflowRevisionService.build_history_payload(workflow)
 
 
+# ─── Workflow cancellation ───────────────────────────────────────────────────
+
+@router.post(
+    "/{project_id}/workflows/{workflow_id}/cancel",
+    response_model=WorkflowCancelResponse,
+)
+def cancel_workflow(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_contributor),  # DEVELOPER+
+):
+    """Cancel a workflow at a deployment/observation phase.
+
+    Cancellable at GITHUB_ACTIONS_GENERATION / REPOSITORY_INSTALLATION /
+    WORKFLOW_MONITORING. Stops any in-flight GitHub Actions run (cancel API),
+    marks ``status = cancelled``, and PRESERVES every artifact + phase record so
+    the run can later be resumed from a previous phase. 400 if the workflow is
+    not at a cancellable phase.
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    try:
+        result = WorkflowCancellationService.cancel(
+            db, project=project, workflow=workflow, task=task, user_id=current_user.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Cancel failed: {exc}")
+    return WorkflowCancelResponse(**result)
+
+
 @router.get(
     "/{project_id}/workflows/{workflow_id}",
     response_model=WorkflowResponse,
@@ -863,6 +947,34 @@ def get_workflow_monitoring(
     """
     project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
     return WorkflowMonitoringService.build(
+        db, project=project, workflow=workflow, task=task,
+    )
+
+
+# ─── Infrastructure Destroy phase read (projection + live observation) ────────
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/destroy",
+    response_model=InfrastructureDestroyPhaseResponse,
+)
+def get_infrastructure_destroy(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Aggregated Infrastructure Destroy payload (lifecycle + live destroy.yml run).
+
+    READ-ONLY: it never runs Terraform, never installs, never dispatches. It
+    reports the persisted lifecycle state (requested / running / succeeded /
+    failed) and, when the phase has run, observes the latest ``destroy.yml`` run
+    EXACTLY like bootstrap.yml — reconciling the terminal state (succeeded /
+    failed) from the run conclusion so the deletion guard sees it. Degrades
+    gracefully: a workflow that has not destroyed yet projects with
+    ``prerequisites_met`` reflecting whether a destroy can be triggered.
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    return InfrastructureDestroyService.get_status(
         db, project=project, workflow=workflow, task=task,
     )
 

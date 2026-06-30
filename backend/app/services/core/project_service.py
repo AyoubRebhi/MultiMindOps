@@ -149,6 +149,24 @@ class ProjectService:
         return project
 
     @staticmethod
+    def delete_project(db: Session, project: Project) -> None:
+        """Permanently delete a project and every row that references it.
+
+        Every ``projects.id`` foreign key is declared ``ON DELETE CASCADE`` (see
+        the models), so a single delete of the project row removes its workflows,
+        artifacts, credentials, members, tasks, jobs, releases and context — the
+        database enforces the cascade. The destruction deletion guard
+        (infrastructure must not be live) is enforced by the caller BEFORE this
+        runs; this method does not re-check it.
+        """
+        from sqlalchemy import text
+
+        project_id = project.id
+        db.execute(text("DELETE FROM projects WHERE id = :id"), {"id": project_id})
+        db.commit()
+        logger.info("[PROJECT] deleted project=%s (cascade)", project_id)
+
+    @staticmethod
     def list_workflows(db: Session, project_id: str) -> List[Workflow]:
         return (
             db.query(Workflow)

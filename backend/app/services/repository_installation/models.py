@@ -6,17 +6,27 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 
-# Canonical on-disk paths for the two generated pipelines. These mirror the
+# Canonical on-disk paths for the generated pipelines. These mirror the
 # GITHUB_ACTIONS_GENERATION artifact subtypes (the deployment service writes the
 # files under exactly these paths), so installation reads + writes the same keys.
 BOOTSTRAP_PATH = ".github/workflows/bootstrap.yml"
 DEPLOY_PATH = ".github/workflows/deploy.yml"
+# The Infrastructure Destroy phase commits this single workflow (reusing the same
+# installation machinery as bootstrap/deploy).
+DESTROY_PATH = ".github/workflows/destroy.yml"
 
 # Defaults — overridable per call / per project.
 DEFAULT_INSTALL_BRANCH = "multiminds/devops-pipelines"
 DEFAULT_BASE_BRANCH = "main"
 DEFAULT_COMMIT_MESSAGE = "feat: add MultiMinds DevOps pipelines"
 DEFAULT_PR_TITLE = "Add MultiMinds DevOps pipelines"
+
+# Dedicated branch + messages for the destroy workflow installation. A separate
+# branch keeps the (destructive) destroy.yml change reviewable on its own and
+# never collides with an open pipelines-install PR.
+DEFAULT_DESTROY_BRANCH = "multiminds/infrastructure-destroy"
+DEFAULT_DESTROY_COMMIT_MESSAGE = "chore: add MultiMinds infrastructure destroy workflow"
+DEFAULT_DESTROY_PR_TITLE = "Add MultiMinds infrastructure destroy workflow"
 
 # Bot identity used for the installation commit. A fresh clone in CI has no
 # global git identity, so the commit sets these locally.

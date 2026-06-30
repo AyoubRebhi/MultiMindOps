@@ -5,6 +5,7 @@ import { useToast } from '@/hooks/useToast';
 import { workflowApi } from '@/services/api/workflowApi';
 import {
   CANONICAL_PHASE_ORDER,
+  CANCELLABLE_PHASES,
   WORKFLOW_PHASE_VIEW,
   getWorkflowPhaseMeta,
   getStatusMeta,
@@ -35,6 +36,7 @@ import {
  *   phasesState: Record<string, any>,
  *   currentPhase: string|null,
  *   activeView: string,
+ *   status?: string,
  *   revisions?: Array<object>,
  *   onRegenerated?: () => void,
  * }} props
@@ -45,6 +47,7 @@ export default function WorkflowPhaseNav({
   phasesState = {},
   currentPhase,
   activeView,
+  status,
   revisions = [],
   onRegenerated,
 }) {
@@ -53,6 +56,13 @@ export default function WorkflowPhaseNav({
   const [pendingPhase, setPendingPhase] = useState(null); // phase awaiting confirm
   const [busyPhase, setBusyPhase] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
+  // Cancellation is offered while the run is at a deployment/observation phase
+  // and has not already been cancelled.
+  const canCancel =
+    CANCELLABLE_PHASES.has((currentPhase || '').toUpperCase()) && status !== 'cancelled';
 
   // Recorded phases in canonical lifecycle order (unknown phases appended).
   const phases = useMemo(() => {
@@ -108,6 +118,21 @@ export default function WorkflowPhaseNav({
     }
   }
 
+  async function confirmCancel() {
+    if (cancelling) return;
+    setCancelling(true);
+    try {
+      const res = await workflowApi.cancelWorkflow(projectId, workflowId);
+      toast.success(res.message || 'Workflow cancelled.');
+      setCancelOpen(false);
+      onRegenerated?.(); // reuse the parent's refetch to refresh status + phases
+    } catch (e) {
+      toast.error(e?.message || 'Could not cancel the workflow.');
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   return (
     <div className="surface mb-3" style={{ padding: '12px 14px' }}>
       <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
@@ -115,17 +140,36 @@ export default function WorkflowPhaseNav({
           <i className="fa-solid fa-diagram-project" />
           <span>Workflow phases — click to revisit, regenerate to revise</span>
         </div>
-        {revisions.length > 0 && (
-          <button
-            type="button"
-            className="boc btn px-2 py-1"
-            style={{ fontSize: '.72rem' }}
-            onClick={() => setShowHistory((v) => !v)}
-          >
-            <i className="fa-solid fa-clock-rotate-left me-1" />
-            Revision history ({revisions.length})
-          </button>
-        )}
+        <div className="d-flex align-items-center gap-2">
+          {revisions.length > 0 && (
+            <button
+              type="button"
+              className="boc btn px-2 py-1"
+              style={{ fontSize: '.72rem' }}
+              onClick={() => setShowHistory((v) => !v)}
+            >
+              <i className="fa-solid fa-clock-rotate-left me-1" />
+              Revision history ({revisions.length})
+            </button>
+          )}
+          {canCancel && (
+            <button
+              type="button"
+              className="btn px-2 py-1"
+              style={{ fontSize: '.72rem', border: '1px solid #ef4444', color: '#ef4444' }}
+              onClick={() => setCancelOpen(true)}
+              title="Cancel this workflow"
+            >
+              <i className="fa-solid fa-ban me-1" />
+              Cancel Workflow
+            </button>
+          )}
+          {status === 'cancelled' && (
+            <span className="badge-pill badge-pending" style={{ fontSize: '.72rem' }}>
+              <i className="fa-solid fa-ban" /> Cancelled · re-run a phase to resume
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Phase chips */}
@@ -191,6 +235,44 @@ export default function WorkflowPhaseNav({
             No downstream phases have run yet, so nothing else is affected.
           </div>
         )}
+      </Modal>
+
+      {/* Cancel-workflow confirmation */}
+      <Modal
+        open={cancelOpen}
+        onClose={() => setCancelOpen(false)}
+        title="Cancel this workflow?"
+        icon="fa-ban"
+        footer={
+          <>
+            <button type="button" className="boc btn px-3 py-2" style={{ fontSize: '.82rem' }} onClick={() => setCancelOpen(false)}>
+              Keep running
+            </button>
+            <button
+              type="button"
+              className="btn px-3 py-2"
+              style={{ fontSize: '.82rem', background: '#ef4444', color: '#fff', opacity: cancelling ? 0.6 : 1 }}
+              disabled={cancelling}
+              onClick={confirmCancel}
+            >
+              {cancelling ? <span className="spinner me-2" /> : <i className="fa-solid fa-ban me-2" />}
+              Cancel workflow
+            </button>
+          </>
+        }
+      >
+        <p style={{ fontSize: '.86rem' }}>
+          Cancelling stops this workflow and any GitHub Actions run still in progress
+          (the cancel is sent to GitHub Actions). The workflow is marked{' '}
+          <strong>cancelled</strong>.
+        </p>
+        <div className="surface" style={{ borderLeft: '3px solid #22c55e' }}>
+          <div style={{ fontSize: '.82rem' }}>
+            <i className="fa-solid fa-box-archive me-2" style={{ color: '#22c55e' }} />
+            All generated artifacts are <strong>preserved</strong>. You can resume later by
+            re-running any previous phase from this navigator.
+          </div>
+        </div>
       </Modal>
     </div>
   );

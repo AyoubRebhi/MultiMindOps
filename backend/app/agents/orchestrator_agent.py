@@ -563,6 +563,10 @@ class OrchestratorAgent(BaseAgent):
 
         infrastructure_context = (state.get("agent_context") or {}).get("infrastructure_context")
 
+        # project_id keys the per-project S3 remote state. Fall back to task_id
+        # for legacy callers that never populated project_id in the state.
+        backend_project_id = state.get("project_id") or state.get("task_id")
+
         try:
             tf_result = self.terraform_agent.run(
                 prompt=state["prompt"],
@@ -570,6 +574,7 @@ class OrchestratorAgent(BaseAgent):
                 infrastructure_context=infrastructure_context,
                 approved_artifacts=state.get("approved_artifacts"),
                 task_id=state.get("task_id"),
+                project_id=backend_project_id,
             )
         except Exception as exc:
             # Surface validation failures distinctly from generation failures
@@ -2037,18 +2042,28 @@ class OrchestratorAgent(BaseAgent):
         state["logs"] = logs
         return state
 
-    def run_terraform_phase_only(self, prior_state: dict, task_id: Optional[str] = None) -> dict:
+    def run_terraform_phase_only(
+        self,
+        prior_state: dict,
+        task_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> dict:
         """Run ONLY the TerraformAgent phase and return updated state.
 
-        ``task_id`` is forwarded so the deterministic backend.tf injector
-        can key state objects per-task.
+        ``project_id`` is forwarded so the deterministic backend.tf injector
+        keys the S3 remote state per-project (persistent + isolated). ``task_id``
+        is still forwarded for streaming/log correlation and as a backend-key
+        fallback for callers that predate per-project state.
         """
         state: OrchestratorState = dict(prior_state)  # type: ignore[assignment]
         if task_id and "task_id" not in state:
             state["task_id"] = task_id  # type: ignore[typeddict-unknown-key]
+        if project_id and "project_id" not in state:
+            state["project_id"] = project_id  # type: ignore[typeddict-unknown-key]
         logger.info(
-            "[OrchestratorAgent] run_terraform_phase_only — starting (task_id=%s)",
-            state.get("task_id"),
+            "[OrchestratorAgent] run_terraform_phase_only — starting "
+            "(task_id=%s, project_id=%s)",
+            state.get("task_id"), state.get("project_id"),
         )
         state = self._terraform_phase_node(state)
 

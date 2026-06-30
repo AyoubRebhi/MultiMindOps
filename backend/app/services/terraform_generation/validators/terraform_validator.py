@@ -3,6 +3,8 @@ TerraformValidator — runs the deterministic pre-apply pipeline.
 
 Stages (in order, fail-fast):
 
+    0. backend_config    — pure-Python check that a real S3 remote-state backend
+                           is configured. Required (no binary needed).
     1. hcl2_parse        — pure-Python python-hcl2 syntactic check. Required.
     2. terraform fmt     — formatting drift check.       (skipped if no `terraform` binary)
     3. terraform init    — local providers; -backend=false. (skipped if no binary)
@@ -30,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -116,6 +119,14 @@ class TerraformValidator:
         validators_run: Dict[ValidatorName, ValidationStatus] = {}
         skipped: List[ValidatorName] = []
 
+        # 0. Remote-state backend — pure-Python, always runs ──────────────
+        # Rejects an empty/placeholder backend or one missing the state bucket,
+        # region, or DynamoDB lock table. A missing backend means Terraform would
+        # use empty local state on the runner, so this is a blocking error.
+        backend_issues, backend_status = self._run_backend_config_check(artifacts)
+        validators_run["backend_config"] = backend_status
+        issues.extend(backend_issues)
+
         # 1. HCL syntax — pure-Python, always runs ────────────────────────
         hcl_issues, hcl_status = self._run_hcl2_parse(artifacts)
         validators_run["hcl2_parse"] = hcl_status
@@ -188,6 +199,81 @@ class TerraformValidator:
                 skipped.append("checkov")
 
         return self._finalize(issues, security_issues, validators_run, skipped, start)
+
+    # ── Stage 0: remote-state backend config (pure Python, always runs) ──
+
+    def _run_backend_config_check(
+        self,
+        artifacts: Mapping[str, str],
+    ) -> Tuple[List[TerraformValidationIssue], ValidationStatus]:
+        """Reject an absent, empty, placeholder, or incomplete S3 backend.
+
+        Deterministic and binary-free, so it runs in every environment — CI,
+        developer workstations, and ``skip_subprocess_validators`` mode. The
+        rendered backend.tf must declare an ``s3`` backend with a non-empty
+        bucket, region, dynamodb_table (lock table) and key, or generation is
+        blocked with a meaningful error.
+        """
+        content = (artifacts.get("terraform_backend") or "").strip()
+        issues: List[TerraformValidationIssue] = []
+
+        def _err(message: str, remediation: str) -> None:
+            issues.append(
+                TerraformValidationIssue(
+                    severity="error",
+                    source="backend_config",
+                    file="backend.tf",
+                    message=message,
+                    remediation=remediation,
+                )
+            )
+
+        provision_hint = (
+            "Provision the management S3 bucket + DynamoDB lock table and set "
+            "TF_STATE_BUCKET / TF_STATE_REGION / TF_STATE_LOCK_TABLE so a real "
+            "S3 backend is generated."
+        )
+
+        # Empty or placeholder backend → empty backend configuration.
+        if not content or "placeholder" in content.lower():
+            _err(
+                "Terraform remote-state backend is not configured "
+                "(empty or placeholder backend.tf).",
+                provision_hint,
+            )
+            return issues, "failed"
+
+        # Must declare an S3 backend block (no local state allowed).
+        if not re.search(r'backend\s+"s3"\s*\{', content):
+            _err(
+                'No `backend "s3"` block found in backend.tf — local state is '
+                "not allowed for deploys.",
+                provision_hint,
+            )
+            return issues, "failed"
+
+        # Required, non-empty fields.
+        required = (
+            ("bucket", "state bucket", "TF_STATE_BUCKET"),
+            ("region", "state region", "TF_STATE_REGION"),
+            ("dynamodb_table", "DynamoDB lock table", "TF_STATE_LOCK_TABLE"),
+            ("key", "state key", None),
+        )
+        for field_name, label, env_var in required:
+            if not re.search(rf'{field_name}\s*=\s*"[^"]+"', content):
+                hint = (
+                    f"Set {env_var} so the backend declares a non-empty "
+                    f"`{field_name}`."
+                    if env_var
+                    else "The backend `key` must include the project id "
+                    "(projects/<project-id>/terraform.tfstate)."
+                )
+                _err(
+                    f"Terraform backend is missing the {label} ({field_name}).",
+                    hint,
+                )
+
+        return issues, ("failed" if issues else "passed")
 
     # ── Stage 1: HCL syntax (pure Python, always available if hcl2 is) ───
 

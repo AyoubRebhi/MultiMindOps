@@ -146,6 +146,7 @@ class TerraformAgent(EnhancedBaseAgent):
         infrastructure_context: Optional[Dict[str, Any]] = None,
         approved_artifacts: Optional[List[str]] = None,
         task_id: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generate a complete Terraform project for the given prompt and plan.
@@ -179,6 +180,7 @@ class TerraformAgent(EnhancedBaseAgent):
                 blueprint=blueprint,
                 strategy_tier=strategy_tier,
                 task_id=task_id,
+                project_id=project_id,
                 infrastructure_context=infrastructure_context,
             )
 
@@ -259,28 +261,40 @@ class TerraformAgent(EnhancedBaseAgent):
 
         # ── Deterministic backend.tf — overwrite any LLM-produced version ────
         # The LLM is forbidden from emitting backend.tf because state-bucket
-        # hallucination is unrecoverable. If TF_STATE_* env vars are not
-        # configured yet we log and skip rather than crash — the LLM's
-        # version stays in place for development. In production the env
-        # vars MUST be present.
-        if task_id:
-            try:
-                from backend.app.services.terraform_generation.backend_injector import (
-                    backend_config_from_env, render_backend_tf,
-                )
-                cfg = backend_config_from_env(task_id)
-                artifacts["terraform_backend"] = render_backend_tf(cfg)
-                logger.info(
-                    "[TerraformAgent] backend.tf overwritten deterministically "
-                    "(bucket=%s, key=%s)", cfg.bucket, cfg.state_key,
-                )
-            except RuntimeError as exc:
-                logger.warning(
-                    "[TerraformAgent] Deterministic backend.tf skipped — %s. "
-                    "Keeping LLM-generated backend.tf (DEVELOPMENT ONLY).", exc,
-                )
-            except Exception:
-                logger.exception("[TerraformAgent] backend.tf injection failed unexpectedly")
+        # hallucination is unrecoverable. State is keyed by project_id (falling
+        # back to task_id) so it persists across runs and is isolated per
+        # project. If the backend cannot be configured we RAISE rather than keep
+        # an LLM-hallucinated or placeholder backend — a missing remote backend
+        # silently breaks destroy and re-deploy.
+        from backend.app.services.terraform_generation.backend_injector import (
+            BackendConfigurationError, backend_config_from_env, render_backend_tf,
+        )
+        from backend.app.services.terraform_generation.renderers.template_renderer import (
+            TerraformBackendConfigError,
+        )
+
+        backend_project_id = project_id or task_id
+        if not backend_project_id:
+            raise TerraformBackendConfigError(
+                "Cannot generate backend.tf: a project_id (or task_id) is required "
+                "for per-project remote state isolation.",
+                metadata={"reason": "missing_project_id"},
+            )
+        try:
+            cfg = backend_config_from_env(backend_project_id)
+        except BackendConfigurationError as exc:
+            raise TerraformBackendConfigError(
+                f"Cannot generate backend.tf: {exc}",
+                metadata={
+                    "reason": "backend_config_unavailable",
+                    "project_id": backend_project_id,
+                },
+            ) from exc
+        artifacts["terraform_backend"] = render_backend_tf(cfg)
+        logger.info(
+            "[TerraformAgent] backend.tf overwritten deterministically "
+            "(bucket=%s, key=%s)", cfg.bucket, cfg.state_key,
+        )
 
         terraform_outputs_contract = self._extract_outputs_contract(
             outputs_hcl=str(artifacts.get("terraform_outputs") or ""),
@@ -330,13 +344,18 @@ class TerraformAgent(EnhancedBaseAgent):
         strategy_tier: str,
         task_id: Optional[str],
         infrastructure_context: Optional[Dict[str, Any]],
+        project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Render Terraform via the template engine, validate, and return the
         same artifact shape the orchestrator already consumes.
 
         No LLM is invoked. Every byte of HCL is reproducible from
-        {blueprint, strategy_tier, task_id, container_port}.
+        {blueprint, strategy_tier, task_id, project_id, container_port}.
+
+        ``project_id`` keys the S3 remote-state backend (per-project isolation).
+        Rendering raises ``TerraformBackendConfigError`` if it is missing or the
+        TF_STATE_* env vars are unset — generation never emits a placeholder.
         """
         container_port = self._first_container_port(infrastructure_context)
         project_name = (
@@ -348,6 +367,7 @@ class TerraformAgent(EnhancedBaseAgent):
         result = self._renderer.render(
             blueprint=blueprint,
             task_id=task_id,
+            project_id=project_id,
             project_name=project_name,
             container_port=container_port,
         )

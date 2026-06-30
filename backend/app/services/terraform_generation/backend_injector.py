@@ -13,6 +13,24 @@ will race.
 This module emits backend.tf from a typed, machine-controlled config. The
 LLM is no longer involved.
 
+Per-project state isolation (the destroy fix)
+---------------------------------------------
+The state object is keyed by ``project_id``::
+
+    projects/<project-id>/terraform.tfstate
+
+This is the single most important property of this module:
+
+* It is **stable across runs**. Every GitHub Actions run for a project — the
+  bootstrap that creates infrastructure and the destroy that tears it down —
+  points at the SAME remote state object. ``terraform destroy`` therefore sees
+  exactly what ``terraform apply`` created, instead of starting from empty
+  local state on a throwaway runner (which is why destroy used to remove 0
+  resources and bootstrap re-runs hit "AlreadyExists").
+* It is **isolated per project**. Two projects can never share or corrupt each
+  other's state, and DynamoDB locking on the shared table serialises concurrent
+  operations on the same key.
+
 Pre-launch setup (operator responsibility, outside the platform repo)
 ---------------------------------------------------------------------
 1. Create a single management AWS account.
@@ -21,8 +39,10 @@ Pre-launch setup (operator responsibility, outside the platform repo)
 4. Block public access on the bucket.
 5. Set ``TF_STATE_BUCKET``, ``TF_STATE_REGION``, ``TF_STATE_LOCK_TABLE`` env vars.
 
-Until those env vars are present, ``render_backend_tf`` raises so we never
-silently fall back to "use the LLM's guess".
+Until those env vars are present, ``backend_config_from_env`` raises
+``BackendConfigurationError`` so we NEVER silently fall back to a placeholder
+backend (which would make Terraform use empty local state on the runner) or to
+"use the LLM's guess".
 """
 
 from __future__ import annotations
@@ -36,7 +56,18 @@ from typing import Optional
 _BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$")
 _AWS_REGION_RE = re.compile(r"^[a-z]{2}-[a-z]+-\d+$")
 _DYNAMO_TABLE_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,255}$")
-_TASK_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+_PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
+
+
+class BackendConfigurationError(RuntimeError):
+    """Raised when the remote-state backend cannot be configured.
+
+    Subclasses ``RuntimeError`` so existing ``except RuntimeError`` sites keep
+    working, while giving callers a precise type to catch. This is raised
+    *instead of* ever emitting a placeholder backend — a missing or invalid
+    backend is a hard, unrecoverable generation failure, not a development
+    convenience.
+    """
 
 
 @dataclass(frozen=True)
@@ -46,35 +77,38 @@ class BackendConfig:
     bucket: str
     region: str
     lock_table: str
-    task_id: str
+    project_id: str
     kms_key_id: Optional[str] = None  # optional SSE-KMS override
 
     def __post_init__(self) -> None:
         if not _BUCKET_NAME_RE.match(self.bucket):
-            raise ValueError(f"Invalid S3 bucket name: {self.bucket!r}")
+            raise BackendConfigurationError(f"Invalid S3 state bucket name: {self.bucket!r}")
         if not _AWS_REGION_RE.match(self.region):
-            raise ValueError(f"Invalid AWS region: {self.region!r}")
+            raise BackendConfigurationError(f"Invalid AWS region: {self.region!r}")
         if not _DYNAMO_TABLE_RE.match(self.lock_table):
-            raise ValueError(f"Invalid DynamoDB table name: {self.lock_table!r}")
-        if not _TASK_ID_RE.match(self.task_id):
-            raise ValueError(
-                f"Invalid task_id (must match {_TASK_ID_RE.pattern}): {self.task_id!r}"
+            raise BackendConfigurationError(
+                f"Invalid DynamoDB lock table name: {self.lock_table!r}"
+            )
+        if not _PROJECT_ID_RE.match(self.project_id):
+            raise BackendConfigurationError(
+                f"Invalid project_id (must match {_PROJECT_ID_RE.pattern}): {self.project_id!r}"
             )
 
     @property
     def state_key(self) -> str:
-        """Per-task state key. Two concurrent workflows can never collide."""
-        return f"tasks/{self.task_id}/terraform.tfstate"
+        """Per-project state key. Stable across runs (bootstrap + destroy share
+        it) and isolated so two projects can never collide."""
+        return f"projects/{self.project_id}/terraform.tfstate"
 
 
-def backend_config_from_env(task_id: str) -> BackendConfig:
+def backend_config_from_env(project_id: str) -> BackendConfig:
     """
-    Build a BackendConfig from environment variables.
+    Build a BackendConfig from environment variables for ``project_id``.
 
-    Raises ``RuntimeError`` if the operator has not provisioned the management
-    bucket/table yet — we deliberately refuse to fall back to LLM-generated
-    backend.tf, which is the unrecoverable failure mode this module exists
-    to prevent.
+    Raises ``BackendConfigurationError`` if the operator has not provisioned the
+    management bucket/table yet — we deliberately refuse to fall back to a
+    placeholder or LLM-generated backend, the unrecoverable failure modes this
+    module exists to prevent.
     """
     bucket = os.getenv("TF_STATE_BUCKET")
     region = os.getenv("TF_STATE_REGION")
@@ -90,17 +124,23 @@ def backend_config_from_env(task_id: str) -> BackendConfig:
         if not value
     ]
     if missing:
-        raise RuntimeError(
+        raise BackendConfigurationError(
             "Cannot emit backend.tf: missing environment variable(s): "
             + ", ".join(missing)
             + ". Provision the management S3 bucket + DynamoDB lock table "
             "(see backend_injector module docstring) and set TF_STATE_* env vars."
         )
+    if not project_id:
+        raise BackendConfigurationError(
+            "Cannot emit backend.tf: project_id is required for per-project state "
+            "isolation (state key = projects/<project-id>/terraform.tfstate)."
+        )
+    # Field-format validation (incl. project_id) happens in BackendConfig.__post_init__.
     return BackendConfig(
         bucket=bucket,  # type: ignore[arg-type]
         region=region,  # type: ignore[arg-type]
         lock_table=table,  # type: ignore[arg-type]
-        task_id=task_id,
+        project_id=project_id,
         kms_key_id=kms,
     )
 
@@ -113,7 +153,9 @@ def render_backend_tf(config: BackendConfig) -> str:
     kms_line = f'\n    kms_key_id     = "{config.kms_key_id}"' if config.kms_key_id else ""
     return f"""# AUTO-GENERATED — DO NOT EDIT.
 # Emitted by backend_injector.py. The LLM is forbidden from touching this file.
-# State key is keyed by task_id so concurrent workflows never share state.
+# State is keyed by project_id so every project has an isolated, PERSISTENT
+# remote state. Re-running bootstrap or destroy reuses the SAME state object,
+# which is what makes `terraform destroy` actually tear down what was created.
 
 terraform {{
   backend "s3" {{

@@ -17,10 +17,13 @@ from typing import Dict, List, Optional
 # Canonical installed paths (mirror RepositoryInstallation + GH-Actions phases).
 BOOTSTRAP_PATH = ".github/workflows/bootstrap.yml"
 DEPLOY_PATH = ".github/workflows/deploy.yml"
+DESTROY_PATH = ".github/workflows/destroy.yml"
 
 # Pipeline registry keyed by the stable ``kind``. ``file`` is the workflow file
 # basename used to query runs; ``name`` is the human pipeline label shown in the
-# UI (the SAME split the GitHub Actions projection uses).
+# UI (the SAME split the GitHub Actions projection uses). ``destroy`` is observed
+# read-only EXACTLY like ``bootstrap`` — the Infrastructure Destroy phase reuses
+# ``WorkflowMonitoringService._observe(..., "destroy")`` to read its latest run.
 PIPELINES: Dict[str, Dict[str, str]] = {
     "bootstrap": {
         "file": "bootstrap.yml",
@@ -31,6 +34,11 @@ PIPELINES: Dict[str, Dict[str, str]] = {
         "file": "deploy.yml",
         "path": DEPLOY_PATH,
         "name": "Delivery Pipeline",
+    },
+    "destroy": {
+        "file": "destroy.yml",
+        "path": DESTROY_PATH,
+        "name": "Destroy Pipeline",
     },
 }
 

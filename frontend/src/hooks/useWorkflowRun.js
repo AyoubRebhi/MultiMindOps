@@ -211,6 +211,47 @@ export function useWorkflowMonitoring(projectId, workflowId, pollMs = 30000) {
 }
 
 /**
+ * useDestroyPhase — fetch the Infrastructure Destroy payload (GET .../destroy)
+ * and POLL it while the destroy is in flight, so the surface reflects the live
+ * destroy.yml run (observed exactly like bootstrap.yml) without a WebSocket.
+ * Read-only: the backend never runs Terraform; `refetch` powers the manual
+ * refresh and is called after the surface triggers the destroy itself.
+ *
+ * Polling auto-stops once the run reaches a terminal state (succeeded/failed) or
+ * was never triggered. Returns { data, loading, error, refetch }.
+ *
+ * @param {string} projectId
+ * @param {string} workflowId
+ * @param {number} pollMs   poll interval in ms (default 15000)
+ */
+export function useDestroyPhase(projectId, workflowId, pollMs = 15000) {
+  const ready = !!projectId && !!workflowId;
+  const state = useAsync(
+    () =>
+      ready
+        ? workflowApi.getDestroyPhase(projectId, workflowId)
+        : Promise.resolve(null),
+    [projectId, workflowId],
+    { immediate: ready }
+  );
+
+  const { data, refetch } = state;
+  // Keep polling while a destroy is requested/running (it advances on the
+  // backend as the GitHub Actions run progresses); stop once terminal.
+  const keepPolling = ready && (data?.requested || data?.running);
+
+  useEffect(() => {
+    if (!keepPolling || !pollMs) return undefined;
+    const id = setInterval(() => {
+      refetch();
+    }, pollMs);
+    return () => clearInterval(id);
+  }, [keepPolling, pollMs, refetch]);
+
+  return state;
+}
+
+/**
  * useTerraformPhase — fetch everything the Terraform surface needs (Generation
  * AND Validation) in ONE shot, from existing endpoints: the workflow's
  * authoritative `phases_state` (GET project-scoped workflow) and the project

@@ -374,7 +374,9 @@ async def run_terraform(
 
     try:
         orchestrator = OrchestratorAgent()
-        state = orchestrator.run_terraform_phase_only(state, task_id=task_id)
+        state = orchestrator.run_terraform_phase_only(
+            state, task_id=task_id, project_id=task.project_id,
+        )
         TaskService.save_workflow_state(db, task, state)
 
         logger.info("[Workflow] Terraform phase complete for task %s, new phase: %s", task_id, state.get("current_phase"))

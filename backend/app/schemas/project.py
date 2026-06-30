@@ -228,6 +228,7 @@ PhaseName = Literal[
     "DOCKER",
     "GITHUB_ACTIONS_GENERATION",
     "REPOSITORY_INSTALLATION",
+    "INFRASTRUCTURE_DESTROY",
 ]
 
 
@@ -296,6 +297,37 @@ class WorkflowRevisionHistoryResponse(BaseModel):
     status: str
     # Newest revision first.
     revisions: List[WorkflowRevisionEntry] = []
+
+
+# ─── Workflow cancellation ───────────────────────────────────────────────────
+#
+# An engineer may cancel a workflow at one of the deployment/observation phases
+# (GITHUB_ACTIONS_GENERATION / REPOSITORY_INSTALLATION / WORKFLOW_MONITORING).
+# Cancelling stops any in-flight GitHub Actions run (via the cancel API), marks
+# ``Workflow.status = cancelled``, and PRESERVES every artifact + phase record so
+# the run can later be resumed from a previous phase.
+
+
+class CancelledRunView(BaseModel):
+    pipeline: str                       # "bootstrap" | "deploy"
+    run_id: Optional[int] = None
+    requested: bool = False             # GitHub accepted the cancel (202)
+    already_finished: bool = False      # the run had already completed (409)
+    status_code: Optional[int] = None
+    error: Optional[str] = None
+
+
+class WorkflowCancelResponse(BaseModel):
+    workflow_id: str
+    project_id: str
+    status: str                         # "cancelled"
+    current_phase: Optional[str] = None
+    cancelled_at: Optional[str] = None
+    cancelled_runs: List[CancelledRunView] = []
+    # Cancelled workflows keep their artifacts + phase records, so they can be
+    # resumed by re-running a previous phase.
+    resumable: bool = True
+    message: str = ""
 
 
 # ─── Artifact + version detail payloads ──────────────────────────────────────

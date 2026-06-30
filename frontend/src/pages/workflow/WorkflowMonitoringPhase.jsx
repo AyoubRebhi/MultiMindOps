@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import WorkflowTimeline from '@/components/workflow/WorkflowTimeline';
 import WorkflowPhaseHeader from '@/components/workflow/WorkflowPhaseHeader';
 import ErrorState from '@/components/common/ErrorState';
@@ -25,7 +26,7 @@ export default function WorkflowMonitoringPhase({ workflowId, workflow }) {
   /* ── Hard transport failure (no data at all) ─────────────────────────────── */
   if (error && !data) {
     return (
-      <Shell status="failed" onRefresh={refetch} refreshing={loading}>
+      <Shell status="failed" onRefresh={refetch} refreshing={loading} workflowId={workflowId}>
         <ErrorState
           title="Couldn't load Workflow Monitoring"
           message={error.message}
@@ -38,7 +39,7 @@ export default function WorkflowMonitoringPhase({ workflowId, workflow }) {
   /* ── First load ──────────────────────────────────────────────────────────── */
   if (loading && !data) {
     return (
-      <Shell status={workflow?.status} onRefresh={refetch} refreshing>
+      <Shell status={workflow?.status} onRefresh={refetch} refreshing workflowId={workflowId}>
         <PhaseSkeletons />
       </Shell>
     );
@@ -47,7 +48,7 @@ export default function WorkflowMonitoringPhase({ workflowId, workflow }) {
   if (!data) return null;
 
   return (
-    <Shell status={workflow?.status} onRefresh={refetch} refreshing={loading}>
+    <Shell status={workflow?.status} onRefresh={refetch} refreshing={loading} workflowId={workflowId}>
       {data.error && <MonitoringNotice message={data.error} stale={data.stale} />}
 
       <div className="row g-3 mt-1">
@@ -66,7 +67,7 @@ export default function WorkflowMonitoringPhase({ workflowId, workflow }) {
 
 /* ── Layout shell ──────────────────────────────────────────────────────────── */
 
-function Shell({ status, onRefresh, refreshing, children }) {
+function Shell({ status, onRefresh, refreshing, workflowId, children }) {
   return (
     <>
       <WorkflowTimeline
@@ -89,16 +90,29 @@ function Shell({ status, onRefresh, refreshing, children }) {
         subtitle="Observe the installed GitHub Actions pipelines as they run. This view is read-only — it never triggers, reruns, or cancels a workflow. The Infrastructure pipeline (bootstrap.yml) provisions and first-deploys; the Delivery pipeline (deploy.yml) ships on every push. Status refreshes automatically every 30 seconds."
         status={status}
         actions={
-          <button
-            type="button"
-            className="boc btn px-3 py-2"
-            style={{ fontSize: '.82rem' }}
-            disabled={refreshing}
-            onClick={onRefresh}
-          >
-            {refreshing ? <span className="spinner me-2" /> : <i className="fa-solid fa-rotate-right me-2" />}
-            Refresh
-          </button>
+          <div className="d-flex gap-2">
+            <button
+              type="button"
+              className="boc btn px-3 py-2"
+              style={{ fontSize: '.82rem' }}
+              disabled={refreshing}
+              onClick={onRefresh}
+            >
+              {refreshing ? <span className="spinner me-2" /> : <i className="fa-solid fa-rotate-right me-2" />}
+              Refresh
+            </button>
+            {workflowId && (
+              <Link
+                to={`/workflows/run/${workflowId}/destroy`}
+                className="btn px-3 py-2"
+                style={{ fontSize: '.82rem', border: '1px solid #ef4444', color: '#ef4444' }}
+                title="Tear down the provisioned AWS resources"
+              >
+                <i className="fa-solid fa-trash-can me-2" />
+                Destroy Infrastructure
+              </Link>
+            )}
+          </div>
         }
       />
       {children}

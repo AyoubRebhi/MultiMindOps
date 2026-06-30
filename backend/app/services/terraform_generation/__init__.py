@@ -31,10 +31,12 @@ Design invariants
 
 from backend.app.services.terraform_generation.backend_injector import (
     BackendConfig,
+    BackendConfigurationError,
     backend_config_from_env,
     render_backend_tf,
 )
 from backend.app.services.terraform_generation.renderers.template_renderer import (
+    TerraformBackendConfigError,
     TerraformTemplateRenderer,
     RenderResult,
 )
@@ -51,8 +53,10 @@ from backend.app.services.terraform_generation.validators.models import (
 
 __all__ = [
     "BackendConfig",
+    "BackendConfigurationError",
     "backend_config_from_env",
     "render_backend_tf",
+    "TerraformBackendConfigError",
     "TerraformTemplateRenderer",
     "RenderResult",
     "TerraformValidator",

@@ -23,7 +23,7 @@ from backend.app.services.github_actions_generation.models import DeploymentTarg
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
-PipelineKind = Literal["bootstrap", "deploy"]
+PipelineKind = Literal["bootstrap", "deploy", "destroy"]
 
 # deployment_target → {kind → template filename}. One target, one template per kind.
 _TEMPLATES_BY_TARGET: dict[DeploymentTarget, dict[PipelineKind, str]] = {
@@ -32,6 +32,11 @@ _TEMPLATES_BY_TARGET: dict[DeploymentTarget, dict[PipelineKind, str]] = {
     "lambda": {"bootstrap": "lambda_bootstrap.yml.j2", "deploy": "lambda_deploy.yml.j2"},
     "ec2": {"bootstrap": "ec2_bootstrap.yml.j2", "deploy": "ec2_deploy.yml.j2"},
 }
+
+# The destroy pipeline is TARGET-AGNOSTIC: tearing down the Terraform state
+# removes whatever was provisioned (ECS/EKS/Lambda/EC2), so a single template
+# (``terraform init`` + ``terraform destroy``) serves every target.
+DESTROY_TEMPLATE = "destroy.yml.j2"
 
 
 class TemplateSelectionError(Exception):
@@ -46,6 +51,15 @@ def select_template(
     Raises :class:`TemplateSelectionError` for an unknown target/kind (a packaging
     or enum-drift bug) rather than silently falling back to a wrong deployment.
     """
+    # The destroy template is shared across every target (it only runs
+    # ``terraform destroy``), so it is selected independently of the target.
+    if kind == "destroy":
+        if not (TEMPLATES_DIR / DESTROY_TEMPLATE).exists():
+            raise TemplateSelectionError(
+                f"Destroy template '{DESTROY_TEMPLATE}' is missing from {TEMPLATES_DIR}."
+            )
+        return DESTROY_TEMPLATE
+
     by_kind = _TEMPLATES_BY_TARGET.get(deployment_target)
     if not by_kind:
         raise TemplateSelectionError(

@@ -27,6 +27,7 @@ from backend.app.services.terraform_generation.renderers.template_renderer impor
     MissingTemplateVariableError,
     TemplateCompatibilityError,
     TemplateSelectionError,
+    TerraformBackendConfigError,
 )
 
 
@@ -381,6 +382,55 @@ def test_validator_blocks_on_broken_hcl() -> None:
     assert result.is_blocking
 
 
+# ── Backend-config validation stage (deterministic, binary-free) ─────────────
+
+
+def _valid_artifacts() -> dict:
+    return TerraformTemplateRenderer().render(
+        _monolith_balanced(), project_id="proj-1"
+    ).artifacts
+
+
+def test_validator_passes_with_real_backend() -> None:
+    validator = TerraformValidator(skip_subprocess_validators=True)
+    result = validator.validate(_valid_artifacts())
+    assert result.validators_run.get("backend_config") == "passed"
+    assert not any(i.source == "backend_config" for i in result.issues)
+
+
+def test_validator_rejects_missing_backend() -> None:
+    artifacts = _valid_artifacts()
+    artifacts.pop("terraform_backend", None)
+    result = TerraformValidator(skip_subprocess_validators=True).validate(artifacts)
+    assert result.validators_run.get("backend_config") == "failed"
+    assert result.is_blocking
+    assert any(i.source == "backend_config" for i in result.issues)
+
+
+def test_validator_rejects_placeholder_backend() -> None:
+    artifacts = _valid_artifacts()
+    artifacts["terraform_backend"] = "# backend.tf placeholder — not configured\n"
+    result = TerraformValidator(skip_subprocess_validators=True).validate(artifacts)
+    assert result.validators_run.get("backend_config") == "failed"
+    assert result.is_blocking
+
+
+@pytest.mark.parametrize("field", ["bucket", "region", "dynamodb_table"])
+def test_validator_rejects_backend_missing_required_field(field: str) -> None:
+    artifacts = _valid_artifacts()
+    backend = artifacts["terraform_backend"]
+    # Blank out exactly one required field's value.
+    import re as _re
+    artifacts["terraform_backend"] = _re.sub(
+        rf'{field}(\s*)=(\s*)"[^"]+"', f'{field} = ""', backend
+    )
+    result = TerraformValidator(skip_subprocess_validators=True).validate(artifacts)
+    assert result.validators_run.get("backend_config") == "failed"
+    assert any(
+        i.source == "backend_config" and field in i.message for i in result.issues
+    )
+
+
 # ── Three strategies produce three different outputs ─────────────────────────
 
 
@@ -404,16 +454,55 @@ def test_serverless_outputs_provide_empty_ecr_for_contract_compatibility() -> No
     assert 'value       = ""' in outputs
 
 
-# ── Backend.tf is always deterministic ───────────────────────────────────────
+# ── Backend.tf is a real, project-keyed S3 backend (never a placeholder) ──────
 
 
-def test_backend_tf_is_always_machine_emitted() -> None:
+def test_backend_tf_is_real_s3_backend_never_placeholder() -> None:
     renderer = TerraformTemplateRenderer()
-    result = renderer.render(_monolith_balanced(), task_id="task-xyz-7")
+    result = renderer.render(_monolith_balanced(), project_id="proj-xyz-7")
     backend = result.artifacts["terraform_backend"]
-    # Either a real backend (when env vars set) or the explicit placeholder —
-    # never an LLM-produced HCL block.
-    assert "AUTO-GENERATED" in backend or "placeholder" in backend
+    assert "AUTO-GENERATED" in backend
+    assert "placeholder" not in backend.lower()
+    assert 'backend "s3"' in backend
+    assert "dynamodb_table" in backend
+    assert "encrypt        = true" in backend
+
+
+def test_backend_state_key_is_isolated_per_project() -> None:
+    """The state key MUST embed the project id so projects never share state."""
+    renderer = TerraformTemplateRenderer()
+    backend = renderer.render(
+        _monolith_balanced(), project_id="acme-shop-42"
+    ).artifacts["terraform_backend"]
+    assert 'key            = "projects/acme-shop-42/terraform.tfstate"' in backend
+
+
+def test_backend_falls_back_to_task_id_when_no_project_id() -> None:
+    """Standalone renderer / legacy callers may pass only task_id."""
+    renderer = TerraformTemplateRenderer()
+    backend = renderer.render(
+        _monolith_balanced(), task_id="task-only-1"
+    ).artifacts["terraform_backend"]
+    assert 'key            = "projects/task-only-1/terraform.tfstate"' in backend
+
+
+def test_render_raises_when_backend_env_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No placeholder backend: missing TF_STATE_* env vars fail generation."""
+    monkeypatch.delenv("TF_STATE_BUCKET", raising=False)
+    monkeypatch.delenv("TF_STATE_REGION", raising=False)
+    monkeypatch.delenv("TF_STATE_LOCK_TABLE", raising=False)
+    renderer = TerraformTemplateRenderer()
+    with pytest.raises(TerraformBackendConfigError):
+        renderer.render(_monolith_balanced(), project_id="proj-1")
+
+
+def test_render_raises_when_no_project_or_task_id() -> None:
+    """A stable id is required to key the per-project state."""
+    renderer = TerraformTemplateRenderer()
+    with pytest.raises(TerraformBackendConfigError):
+        renderer.render(_monolith_balanced())
 
 
 # ── Missing template variable detection ──────────────────────────────────────

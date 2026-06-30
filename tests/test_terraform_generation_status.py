@@ -106,7 +106,7 @@ def tf_env(monkeypatch, tmp_path):
     def _set_tf_state(state: dict) -> None:
         monkeypatch.setattr(
             OrchestratorAgent, "run_terraform_phase_only",
-            lambda self, prior_state, task_id=None: {**prior_state, **state},
+            lambda self, prior_state, task_id=None, project_id=None: {**prior_state, **state},
         )
 
     return _set_tf_state

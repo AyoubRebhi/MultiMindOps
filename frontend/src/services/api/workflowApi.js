@@ -522,6 +522,47 @@ export function mapWorkflowDetail(api) {
   };
 }
 
+/* ── Infrastructure Destroy phase mapper ────────────────────────────────────── */
+
+/**
+ * Map the GET .../destroy projection into the destroy-phase view model. The
+ * backend never runs Terraform — this reflects the persisted lifecycle
+ * (requested/running/succeeded/failed) plus the live destroy.yml run observed
+ * exactly like bootstrap.yml. Tolerant of partials so a not-yet-triggered run
+ * renders the pre-flight (prerequisites) state.
+ */
+export function mapDestroyPhase(api = {}) {
+  return {
+    workflowId: api.workflow_id || null,
+    projectId: api.project_id || null,
+    taskId: api.task_id || null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    phaseStatus: api.phase_status || null,
+    requested: !!api.requested,
+    running: !!api.running,
+    succeeded: !!api.succeeded,
+    failed: !!api.failed,
+    prerequisitesMet: !!api.prerequisites_met,
+    hasRepoUrl: !!api.has_repo_url,
+    hasGithubToken: !!api.has_github_token,
+    hasTerraform: !!api.has_terraform,
+    missingRequirements: arr(api.missing_requirements),
+    repoUrl: api.repo_url || null,
+    branch: api.branch || null,
+    baseBranch: api.base_branch || null,
+    commitSha: api.commit_sha || null,
+    prUrl: api.pr_url || null,
+    prCreated: !!api.pr_created,
+    prSkippedReason: api.pr_skipped_reason || null,
+    dispatched: !!api.dispatched,
+    dispatchError: api.dispatch_error || null,
+    error: api.error || null,
+    monitoringAvailable: !!api.monitoring_available,
+    run: api.run ? mapPipelineRun(api.run) : null,
+  };
+}
+
 /* ── Workflow revision mappers (regenerate + revision history) ─────────────── */
 
 /** Map the POST .../regenerate reply (RegeneratePhaseResponse) to camelCase. */
@@ -1084,6 +1125,72 @@ export const workflowApi = {
       )}/revisions`
     );
     return mapRevisionHistory(data);
+  },
+
+  /**
+   * GET /projects/:projectId/workflows/:workflowId/destroy — the aggregated
+   * Infrastructure Destroy payload (lifecycle + live destroy.yml run). READ-ONLY:
+   * the backend never runs Terraform; it reports the persisted state and observes
+   * the run exactly like bootstrap.yml. Polled while the destroy is in flight.
+   */
+  async getDestroyPhase(projectId, workflowId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/destroy`
+    );
+    return mapDestroyPhase(data);
+  },
+
+  /**
+   * POST /projects/:projectId/workflows/:workflowId/phases/INFRASTRUCTURE_DESTROY —
+   * generate destroy.yml, commit it (reusing the installation flow) and auto-trigger
+   * it via workflow_dispatch. The BACKEND owns the whole flow + persistence; GitHub
+   * Actions runs `terraform destroy` (never the backend). Prerequisite (server-side):
+   * REPOSITORY_INSTALLATION completed + a github_pat credential. Returns the mapped
+   * phase-run response ({ taskId, currentPhase, status, phasesState }).
+   */
+  async runDestroyPhase(projectId, workflowId) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/phases/INFRASTRUCTURE_DESTROY`,
+      {}
+    );
+    return mapPhaseRun(data);
+  },
+
+  /**
+   * POST /projects/:projectId/workflows/:workflowId/cancel — cancel a workflow at
+   * a deployment/observation phase (GitHub Actions Generation / Repository
+   * Installation / Workflow Monitoring). The BACKEND stops any in-flight GitHub
+   * Actions run via the cancel API, marks status=cancelled, and preserves every
+   * artifact + phase record (so the run can later be resumed from a previous
+   * phase). Returns { status, currentPhase, cancelledRuns, resumable, message }.
+   */
+  async cancelWorkflow(projectId, workflowId) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/cancel`,
+      {}
+    );
+    return {
+      workflowId: data?.workflow_id || null,
+      projectId: data?.project_id || null,
+      status: data?.status || null,
+      currentPhase: data?.current_phase || null,
+      cancelledAt: data?.cancelled_at || null,
+      cancelledRuns: arr(data?.cancelled_runs).map((r) => ({
+        pipeline: r.pipeline || '',
+        runId: r.run_id ?? null,
+        requested: !!r.requested,
+        alreadyFinished: !!r.already_finished,
+        error: r.error || null,
+      })),
+      resumable: data?.resumable !== false,
+      message: data?.message || '',
+    };
   },
 };
 

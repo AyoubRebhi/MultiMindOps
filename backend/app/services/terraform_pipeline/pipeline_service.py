@@ -314,10 +314,16 @@ class TerraformPipelineService:
         architecture: str,
         tier: str = "balanced",
         project_name: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> GenerationResult:
         """
         Render the template set for ``(architecture, tier)`` and persist it
         as a new artifact on disk.
+
+        ``project_id`` keys the S3 remote-state backend. The standalone path has
+        no real project, so it defaults to the generated ``artifact_id`` — each
+        ad-hoc generation gets its own isolated state. Rendering raises if the
+        TF_STATE_* env vars are unset (no placeholder backend is ever emitted).
         """
         architecture = architecture.lower().strip()
         tier = tier.lower().strip()
@@ -329,6 +335,7 @@ class TerraformPipelineService:
         render = self._renderer.render(
             blueprint=blueprint,
             task_id=artifact_id,
+            project_id=project_id or artifact_id,
             project_name=project_name or f"app-{artifact_id}",
         )
 

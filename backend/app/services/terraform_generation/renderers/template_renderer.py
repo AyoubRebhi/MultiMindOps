@@ -10,7 +10,9 @@ Flow
     4. Load every *.tf.j2 file in the chosen directory.
     5. Render each with Jinja2 in StrictUndefined mode (any undeclared
        variable raises).
-    6. Overwrite ``backend.tf`` deterministically (LLM-free, task-keyed).
+    6. Emit ``backend.tf`` deterministically (LLM-free, project-keyed S3 remote
+       state). If the backend cannot be configured this RAISES — a placeholder
+       backend is never generated.
     7. Return a ``RenderResult`` with artifact dict + metadata.
 
 The LLM is not called from this module. The template choice is mechanical:
@@ -35,6 +37,7 @@ from jinja2 import (
 from backend.app.agents.errors import AgentError, BlueprintContractError
 from backend.app.schemas.blueprint import InfrastructureBlueprint
 from backend.app.services.terraform_generation.backend_injector import (
+    BackendConfigurationError,
     backend_config_from_env,
     render_backend_tf,
 )
@@ -68,6 +71,21 @@ class TemplateCompatibilityError(AgentError):
     """Raised when the blueprint violates a template invariant (e.g. high_performance ∧ ¬multi_az)."""
 
     code = "terraform_template_incompatible_blueprint"
+    recoverable = False
+    default_phase = "terraform_generation"
+
+
+class TerraformBackendConfigError(AgentError):
+    """Raised when backend.tf cannot be configured (no project_id, or the
+    TF_STATE_* env vars are unset).
+
+    This replaces the old behaviour of silently emitting a placeholder backend.
+    A missing remote-state backend is unrecoverable: Terraform would fall back
+    to empty local state on the ephemeral GitHub runner, so destroy would tear
+    down nothing and re-running bootstrap would hit ``AlreadyExists`` errors.
+    """
+
+    code = "terraform_backend_config_missing"
     recoverable = False
     default_phase = "terraform_generation"
 
@@ -176,6 +194,7 @@ class TerraformTemplateRenderer:
         blueprint: InfrastructureBlueprint,
         *,
         task_id: Optional[str] = None,
+        project_id: Optional[str] = None,
         project_name: Optional[str] = None,
         environment: str = "dev",
         container_port: Optional[int] = None,
@@ -184,6 +203,13 @@ class TerraformTemplateRenderer:
         Render the full template set for ``blueprint``. Returns a RenderResult
         whose ``artifacts`` dict is keyed by the orchestrator's artifact keys
         (terraform_main, terraform_outputs, …).
+
+        ``project_id`` keys the S3 remote-state backend so every project gets an
+        isolated, persistent state object. The production workflow always passes
+        the real ``project.id``; ``task_id`` is accepted as a fallback scope for
+        the standalone renderer and unit tests. If neither is available — or the
+        TF_STATE_* env vars are unset — backend generation raises
+        ``TerraformBackendConfigError`` rather than emitting a placeholder.
         """
         arch = blueprint.architecture_style
         tier = blueprint.strategy_tier
@@ -240,9 +266,11 @@ class TerraformTemplateRenderer:
             artifacts[_FILENAME_TO_ARTIFACT_KEY[filename]] = rendered
             files_rendered.append(filename)
 
-        # Deterministic backend.tf — always machine-emitted. Falls back to a
-        # placeholder when TF_STATE_* env vars are missing (development mode).
-        artifacts["terraform_backend"] = self._render_backend(task_id)
+        # Deterministic backend.tf — always machine-emitted, never a placeholder.
+        # Keyed by project_id (falling back to task_id for the standalone
+        # renderer / tests). Raises TerraformBackendConfigError when the backend
+        # cannot be configured.
+        artifacts["terraform_backend"] = self._render_backend(project_id or task_id)
         files_rendered.append("backend.tf")
 
         metadata = {
@@ -454,23 +482,34 @@ class TerraformTemplateRenderer:
                 },
             )
 
-    def _render_backend(self, task_id: Optional[str]) -> str:
-        """Deterministic backend.tf via backend_injector — never LLM."""
-        if not task_id:
-            return (
-                "# backend.tf placeholder — task_id not available at render time.\n"
-                "# A real S3 backend will be injected by the orchestrator before apply.\n"
+    def _render_backend(self, project_id: Optional[str]) -> str:
+        """Deterministic backend.tf via backend_injector — never LLM, never a
+        placeholder.
+
+        Raises ``TerraformBackendConfigError`` when the S3 remote-state backend
+        cannot be configured (no project_id, or the TF_STATE_* env vars are
+        unset). We refuse to emit a placeholder: that would make Terraform use
+        empty local state on the GitHub runner, breaking destroy and re-deploy.
+        """
+        if not project_id:
+            raise TerraformBackendConfigError(
+                "Cannot generate backend.tf: a project_id is required so the S3 "
+                "remote state is isolated per project "
+                "(key = projects/<project-id>/terraform.tfstate).",
+                metadata={"reason": "missing_project_id"},
             )
         try:
-            cfg = backend_config_from_env(task_id)
-            return render_backend_tf(cfg)
-        except RuntimeError as exc:
-            logger.warning(
-                "[TerraformTemplateRenderer] Backend env vars missing (%s) — "
-                "emitting placeholder backend.tf (development mode only).", exc,
-            )
-            return (
-                f"# backend.tf placeholder — TF_STATE_* env vars not configured.\n"
-                f"# task_id={task_id}\n"
-                "# In production, set TF_STATE_BUCKET / TF_STATE_REGION / TF_STATE_LOCK_TABLE.\n"
-            )
+            cfg = backend_config_from_env(project_id)
+        except BackendConfigurationError as exc:
+            raise TerraformBackendConfigError(
+                f"Cannot generate backend.tf: {exc}",
+                metadata={
+                    "reason": "backend_config_unavailable",
+                    "project_id": project_id,
+                },
+            ) from exc
+        logger.info(
+            "[TerraformTemplateRenderer] backend.tf emitted (bucket=%s, key=%s)",
+            cfg.bucket, cfg.state_key,
+        )
+        return render_backend_tf(cfg)

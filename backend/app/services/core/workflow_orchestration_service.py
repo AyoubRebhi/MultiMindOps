@@ -65,6 +65,12 @@ PHASE_REPO_INSTALL = "REPOSITORY_INSTALLATION"
 # stays terminal (``completed``) — monitoring is post-completion observation.
 PHASE_WORKFLOW_MONITORING = "WORKFLOW_MONITORING"
 
+# Infrastructure Destroy phase — generates + installs + dispatches a destroy.yml
+# GitHub Actions workflow that runs ``terraform destroy``. The backend NEVER runs
+# Terraform: GitHub Actions is the execution engine. Inline (render → commit →
+# dispatch), reusing the repository-installation + workflow-dispatch machinery.
+PHASE_INFRA_DESTROY = "INFRASTRUCTURE_DESTROY"
+
 # Workflow statuses that are TERMINAL — a project may create a new workflow once
 # its current one reaches any of these. Everything else (pending, running,
 # awaiting_input) is "active", and a project may have at most ONE active workflow
@@ -384,11 +390,23 @@ class WorkflowOrchestrationService:
                 db, project=project, workflow=workflow, task=task,
             )
 
+        # Infrastructure destroy — generate destroy.yml → install → dispatch.
+        # Inline + GitHub-Actions-executed (no terraform runs in the backend).
+        if phase_upper == PHASE_INFRA_DESTROY:
+            from backend.app.services.infrastructure_destroy import (
+                InfrastructureDestroyService,
+            )
+
+            return InfrastructureDestroyService.run(
+                db, project=project, workflow=workflow, task=task,
+            )
+
         if phase_upper != PHASE_DOCKER:
             raise ValueError(
                 f"Phase '{phase}' is not supported. Valid phases: DOCKER, "
                 "TERRAFORM_GENERATION, TERRAFORM_VALIDATION, TERRAFORM_PLAN, "
-                "GITHUB_ACTIONS_GENERATION, REPOSITORY_INSTALLATION."
+                "GITHUB_ACTIONS_GENERATION, REPOSITORY_INSTALLATION, "
+                "INFRASTRUCTURE_DESTROY."
             )
 
         prior_state = TaskService.load_workflow_state(db, task) or {}
@@ -510,6 +528,18 @@ class WorkflowOrchestrationService:
                 raise ValueError(
                     f"Cannot run {PHASE_REPO_INSTALL}: run "
                     f"{PHASE_GH_ACTIONS} first to generate bootstrap.yml + deploy.yml."
+                )
+        elif phase_upper == PHASE_INFRA_DESTROY:
+            # Destroy targets the infrastructure the installed pipelines created,
+            # so the pipelines must have been installed (REPOSITORY_INSTALLATION
+            # completed — which also guarantees terraform/ + repo + token exist).
+            # The service re-checks repo + token + terraform before touching the
+            # repository, mirroring the installation phase.
+            if not _is_completed(PHASE_REPO_INSTALL):
+                raise ValueError(
+                    f"Cannot run {PHASE_INFRA_DESTROY}: install the pipelines first "
+                    f"({PHASE_REPO_INSTALL}). There is no provisioned infrastructure "
+                    "to destroy yet."
                 )
 
     @staticmethod
@@ -1213,7 +1243,11 @@ class WorkflowOrchestrationService:
         )
 
         orchestrator = OrchestratorAgent()
-        state = orchestrator.run_terraform_phase_only(prior_state, task_id=task.id)
+        # project.id keys the per-project S3 remote state so bootstrap + destroy
+        # share one persistent, isolated state object.
+        state = orchestrator.run_terraform_phase_only(
+            prior_state, task_id=task.id, project_id=project.id,
+        )
 
         current = str(state.get("current_phase") or "")
         # ``current_phase`` is a WEAK signal here: the orchestrator's success /

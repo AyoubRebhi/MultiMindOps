@@ -125,6 +125,7 @@ export const BACKEND_WORKFLOW_PHASE_META = {
   GITHUB_ACTIONS_GENERATION: { label: 'GitHub Actions Generation', icon: 'fa-github', brand: true },
   REPOSITORY_INSTALLATION: { label: 'Repository Installation', icon: 'fa-code-branch' },
   WORKFLOW_MONITORING: { label: 'Workflow Monitoring', icon: 'fa-satellite-dish' },
+  INFRASTRUCTURE_DESTROY: { label: 'Infrastructure Destroy', icon: 'fa-trash-can' },
 };
 
 /**
@@ -169,12 +170,15 @@ export const WORKFLOW_PHASE_VIEW = {
   // Workflow monitoring — the terminal phase: READ-ONLY observation of the
   // installed pipelines' GitHub Actions runs (Generate → Install → Monitor).
   WORKFLOW_MONITORING: 'monitoring',
+  // Infrastructure destroy — tear down the provisioned AWS resources via a
+  // GitHub Actions destroy.yml (the backend never runs Terraform).
+  INFRASTRUCTURE_DESTROY: 'destroy',
 };
 
 /** Views that are fully integrated with live backend data today. */
 export const IMPLEMENTED_WORKFLOW_VIEWS = new Set([
   'analysis', 'planning', 'docker', 'terraform', 'github_actions',
-  'repository_installation', 'monitoring',
+  'repository_installation', 'monitoring', 'destroy',
 ]);
 
 /* ===========================================================================
@@ -201,6 +205,7 @@ export const CANONICAL_PHASE_ORDER = [
   'GITHUB_ACTIONS_GENERATION',
   'REPOSITORY_INSTALLATION',
   'WORKFLOW_MONITORING',
+  'INFRASTRUCTURE_DESTROY',
 ];
 
 /** Direct dependency edges: phase → phases that CONSUME its output. */
@@ -218,6 +223,18 @@ export const REGENERATABLE_PHASES = new Set([
   'DOCKER',
   'TERRAFORM_GENERATION',
   'GITHUB_ACTIONS_GENERATION',
+]);
+
+/**
+ * Phases at which a workflow may be CANCELLED (the deployment/observation tail).
+ * Mirrors the backend WorkflowCancellationService.CANCELLABLE_PHASES. Cancelling
+ * stops any in-flight GitHub Actions run and marks the workflow cancelled while
+ * preserving artifacts, so it can later resume from a previous phase.
+ */
+export const CANCELLABLE_PHASES = new Set([
+  'GITHUB_ACTIONS_GENERATION',
+  'REPOSITORY_INSTALLATION',
+  'WORKFLOW_MONITORING',
 ]);
 
 /** phases_state statuses that count as "done" (mirrors the backend set). */
@@ -333,6 +350,12 @@ export const STATUS_META = {
   failed: { label: 'Failed', variant: 'danger', icon: 'fa-circle-xmark' },
   error: { label: 'Error', variant: 'danger', icon: 'fa-circle-xmark' },
   blocked: { label: 'Blocked', variant: 'danger', icon: 'fa-ban' },
+
+  // Infrastructure-destroy lifecycle (phases_state[INFRASTRUCTURE_DESTROY].status).
+  destroy_requested: { label: 'Destroy requested', variant: 'warning', icon: 'fa-hourglass-half' },
+  destroy_running: { label: 'Destroying', variant: 'running', icon: 'fa-spinner' },
+  destroy_succeeded: { label: 'Destroyed', variant: 'success', icon: 'fa-circle-check' },
+  destroy_failed: { label: 'Destroy failed', variant: 'danger', icon: 'fa-circle-xmark' },
   suspended: { label: 'Suspended', variant: 'danger', icon: 'fa-user-slash' },
   // Backend terminal Workflow.status for an abandoned run.
   cancelled: { label: 'Cancelled', variant: 'pending', icon: 'fa-ban' },
