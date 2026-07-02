@@ -178,8 +178,8 @@ async def _run_terraform_phase(job: ExecutionJob, *, steps_name: str) -> Optiona
     from backend.app.services.execution.docker_streamer import log_stream_manager
     from backend.app.services.terraform_pipeline import TerraformPipelineService
     from backend.app.services.terraform_pipeline.pipeline_service import (
-        PLAN_STEPS,
-        VALIDATE_STEPS,
+        build_plan_steps,
+        build_validate_steps,
     )
     from backend.app.services.terraform_pipeline.streaming import stream_terraform_steps
 
@@ -193,8 +193,6 @@ async def _run_terraform_phase(job: ExecutionJob, *, steps_name: str) -> Optiona
         raise ValueError(
             f"{steps_name} job missing artifact_id/phase in execution_context"
         )
-
-    steps = VALIDATE_STEPS if steps_name == "terraform_validate" else PLAN_STEPS
 
     svc = TerraformPipelineService()
     artifact_dir = svc.artifact_path(artifact_id)
@@ -240,6 +238,14 @@ async def _run_terraform_phase(job: ExecutionJob, *, steps_name: str) -> Optiona
                 "WARN: no terraform artifacts in DB and no on-disk HCL to "
                 "rehydrate — terraform will likely fail"
             )
+        # Select the init flavour AFTER rehydrate so backend detection reads the
+        # authoritative on-disk HCL: a declared backend (local or s3) drives a
+        # real ``terraform init``; no backend keeps the ``-backend=false`` init.
+        steps = (
+            build_validate_steps(artifact_dir)
+            if steps_name == "terraform_validate"
+            else build_plan_steps(artifact_dir)
+        )
         ok, results = await stream_terraform_steps(artifact_dir, steps, _publish)
         if not ok:
             error = "terraform reported a non-zero exit — see logs"
@@ -350,11 +356,19 @@ async def _build_plan_summary(artifact_dir, publish) -> tuple[Optional[str], Opt
 
 @register("terraform_validate")
 async def _handle_terraform_validate(job: ExecutionJob) -> Optional[dict]:
-    """Run ``terraform init -backend=false`` + ``terraform validate``, streamed."""
+    """Run ``terraform init`` + ``terraform validate``, streamed.
+
+    Init flavour is selected automatically: ``-backend=false`` when the config
+    declares no backend, a real (re-configuring) init when it declares one.
+    """
     return await _run_terraform_phase(job, steps_name="terraform_validate")
 
 
 @register("terraform_plan")
 async def _handle_terraform_plan(job: ExecutionJob) -> Optional[dict]:
-    """Run ``terraform init -backend=false`` + ``terraform plan -out=tfplan``, streamed."""
+    """Run ``terraform init`` + ``terraform plan -out=tfplan``, streamed.
+
+    Init flavour is selected automatically: ``-backend=false`` when the config
+    declares no backend, a real (re-configuring) init when it declares one.
+    """
     return await _run_terraform_phase(job, steps_name="terraform_plan")

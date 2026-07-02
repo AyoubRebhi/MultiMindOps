@@ -117,6 +117,7 @@ class ProjectBootstrapService:
         project_id: str,
         user_id: str,
         prompt: Optional[str] = None,
+        force: bool = False,
     ) -> None:
         """Long-running bootstrap step — call from a BackgroundTask.
 
@@ -126,6 +127,12 @@ class ProjectBootstrapService:
         request scope, so an uncaught exception would only end up in the
         server log without informing the client. Exceptions are caught,
         logged, and persisted.
+
+        ``force`` selects a real re-analysis (``WorkflowOrchestrationService.
+        reanalyze`` — re-invokes the codebase-analysis LLM, bypasses the
+        repository-analysis cache, overwrites ProjectContext) instead of the
+        default ``get_or_create_workflow`` (which reuses an active workflow and
+        never re-runs analysis). Used by the "Re-analyze" action.
         """
         if prompt is None or not prompt.strip():
             prompt = _DEFAULT_BOOTSTRAP_PROMPT
@@ -167,17 +174,28 @@ class ProjectBootstrapService:
             logger.info("[BOOTSTRAP] project=%s status=%s", project.id, STATUS_ANALYZING)
 
             try:
-                # get_or_create enforces one active workflow per project: if the
-                # user already kicked off a workflow via the API before this
-                # background bootstrap ran, we reuse it instead of creating a
-                # duplicate (and vice-versa).
-                workflow, task, state = WorkflowOrchestrationService.get_or_create_workflow(
-                    db,
-                    project=project,
-                    user=user,
-                    prompt=prompt,
-                    execution_mode="full",
-                )
+                if force:
+                    # Explicit "Re-analyze": always re-run the codebase-analysis
+                    # LLM (cache bypassed) and overwrite ProjectContext, even on a
+                    # project that already analyzed successfully.
+                    workflow, task, state = WorkflowOrchestrationService.reanalyze(
+                        db,
+                        project=project,
+                        user=user,
+                        prompt=prompt,
+                    )
+                else:
+                    # get_or_create enforces one active workflow per project: if the
+                    # user already kicked off a workflow via the API before this
+                    # background bootstrap ran, we reuse it instead of creating a
+                    # duplicate (and vice-versa).
+                    workflow, task, state = WorkflowOrchestrationService.get_or_create_workflow(
+                        db,
+                        project=project,
+                        user=user,
+                        prompt=prompt,
+                        execution_mode="full",
+                    )
             except Exception as exc:
                 ProjectBootstrapService._fail(
                     db, project,
@@ -278,12 +296,14 @@ def schedule_bootstrap(
     project_id: str,
     user_id: str,
     prompt: Optional[str] = None,
+    force: bool = False,
 ) -> None:
     """Push the bootstrap task onto FastAPI's BackgroundTasks.
 
     Thin wrapper so route handlers don't have to know about the session
     factory plumbing. Importing ``BackgroundTasks`` here would create a
-    runtime dep; we type it as ``Any`` instead.
+    runtime dep; we type it as ``Any`` instead. ``force`` selects a real
+    re-analysis (see ``run_bootstrap_analysis``).
     """
     factory = get_session_factory()
     background_tasks.add_task(
@@ -292,6 +312,7 @@ def schedule_bootstrap(
         project_id=project_id,
         user_id=user_id,
         prompt=prompt,
+        force=force,
     )
 
 

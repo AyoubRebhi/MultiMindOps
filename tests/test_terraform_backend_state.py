@@ -1,12 +1,13 @@
 """
 Backend remote-state contract (backend_injector).
 
-These tests lock down the production-readiness guarantees of the Terraform
-remote state:
+Remote S3 state is OPTIONAL. These tests lock down both modes:
 
-* state is keyed by ``project_id`` (isolated + persistent across runs);
-* the emitted HCL is a real S3 backend with DynamoDB locking + encryption;
-* missing TF_STATE_* env vars are a HARD failure — never a placeholder.
+* ENTERPRISE (TF_STATE_* set) — state keyed by ``project_id``; the emitted HCL is
+  a real S3 backend with DynamoDB locking + encryption. ``backend_config_from_env``
+  raises if the S3 backend is requested but mis-configured (logic unchanged).
+* DEFAULT/MVP (TF_STATE_* unset) — ``remote_backend_configured()`` is False and
+  ``render_local_backend_tf()`` emits a functional local backend.
 
 The autouse ``_terraform_backend_env`` fixture (tests/conftest.py) supplies the
 management-account env vars; individual tests override via ``monkeypatch``.
@@ -20,7 +21,9 @@ from backend.app.services.terraform_generation.backend_injector import (
     BackendConfig,
     BackendConfigurationError,
     backend_config_from_env,
+    remote_backend_configured,
     render_backend_tf,
+    render_local_backend_tf,
 )
 
 
@@ -79,3 +82,30 @@ def test_invalid_bucket_name_rejected() -> None:
             lock_table="locks",
             project_id="proj-1",
         )
+
+
+# ── Optional remote state: mode detection + local backend (default/MVP) ──────
+
+
+def test_remote_backend_configured_true_when_all_env_present() -> None:
+    # The autouse fixture sets all three TF_STATE_* vars.
+    assert remote_backend_configured() is True
+
+
+@pytest.mark.parametrize(
+    "missing", ["TF_STATE_BUCKET", "TF_STATE_REGION", "TF_STATE_LOCK_TABLE"]
+)
+def test_remote_backend_not_configured_when_any_env_missing(
+    monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    monkeypatch.delenv(missing, raising=False)
+    assert remote_backend_configured() is False
+
+
+def test_local_backend_is_functional_not_placeholder() -> None:
+    hcl = render_local_backend_tf()
+    assert 'backend "local"' in hcl
+    assert 'backend "s3"' not in hcl
+    assert "placeholder" not in hcl.lower()
+    # No required_version here (providers.tf already declares it) → no conflict.
+    assert "required_version" not in hcl

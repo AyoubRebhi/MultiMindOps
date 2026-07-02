@@ -8,6 +8,7 @@ SQLAlchemy will not create its table on a fresh database.
 from backend.app.models.credentials import ProjectCredential
 from backend.app.models.execution_job import ExecutionJob
 from backend.app.models.invitation import Invitation
+from backend.app.models.lifecycle_event import InfrastructureLifecycleEvent
 from backend.app.models.release import ReleaseArtifactSnapshot, ReleaseCandidate
 from backend.app.models.repository_analysis import RepositoryAnalysis
 from backend.app.models.session import UserSession
@@ -19,6 +20,7 @@ from backend.app.models.workspace import Workspace
 
 __all__ = [
     "ExecutionJob",
+    "InfrastructureLifecycleEvent",
     "Invitation",
     "ProjectCredential",
     "ReleaseArtifactSnapshot",

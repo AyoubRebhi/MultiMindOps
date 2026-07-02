@@ -10,9 +10,10 @@ Flow
     4. Load every *.tf.j2 file in the chosen directory.
     5. Render each with Jinja2 in StrictUndefined mode (any undeclared
        variable raises).
-    6. Emit ``backend.tf`` deterministically (LLM-free, project-keyed S3 remote
-       state). If the backend cannot be configured this RAISES — a placeholder
-       backend is never generated.
+    6. Emit ``backend.tf`` deterministically (LLM-free). Remote S3 state is
+       OPTIONAL: when ``TF_STATE_*`` env vars are set it emits the per-project S3
+       backend; otherwise it emits a local backend and generation continues
+       (never a placeholder, never an exception).
     7. Return a ``RenderResult`` with artifact dict + metadata.
 
 The LLM is not called from this module. The template choice is mechanical:
@@ -39,7 +40,9 @@ from backend.app.schemas.blueprint import InfrastructureBlueprint
 from backend.app.services.terraform_generation.backend_injector import (
     BackendConfigurationError,
     backend_config_from_env,
+    remote_backend_configured,
     render_backend_tf,
+    render_local_backend_tf,
 )
 from backend.app.services.terraform_generation.utils.variable_context import (
     build_variable_context,
@@ -207,9 +210,9 @@ class TerraformTemplateRenderer:
         ``project_id`` keys the S3 remote-state backend so every project gets an
         isolated, persistent state object. The production workflow always passes
         the real ``project.id``; ``task_id`` is accepted as a fallback scope for
-        the standalone renderer and unit tests. If neither is available — or the
-        TF_STATE_* env vars are unset — backend generation raises
-        ``TerraformBackendConfigError`` rather than emitting a placeholder.
+        the standalone renderer and unit tests. Remote S3 state is OPTIONAL: when
+        the TF_STATE_* env vars are unset (or no id is available) a local backend
+        is emitted and generation continues — never a placeholder, never raised.
         """
         arch = blueprint.architecture_style
         tier = blueprint.strategy_tier
@@ -267,10 +270,11 @@ class TerraformTemplateRenderer:
             files_rendered.append(filename)
 
         # Deterministic backend.tf — always machine-emitted, never a placeholder.
-        # Keyed by project_id (falling back to task_id for the standalone
-        # renderer / tests). Raises TerraformBackendConfigError when the backend
-        # cannot be configured.
-        artifacts["terraform_backend"] = self._render_backend(project_id or task_id)
+        # Remote S3 state is OPTIONAL: enterprise mode (TF_STATE_* set) emits the
+        # per-project S3 backend keyed by project_id (falling back to task_id);
+        # otherwise a local backend is emitted and generation continues.
+        backend_tf, backend_mode = self._render_backend(project_id or task_id)
+        artifacts["terraform_backend"] = backend_tf
         files_rendered.append("backend.tf")
 
         metadata = {
@@ -283,6 +287,12 @@ class TerraformTemplateRenderer:
             "template_dir": str(template_dir.relative_to(self._templates_root)),
             "generated_by": "TerraformTemplateRenderer",
             "variables_used": sorted(variables.keys()),
+            # Backend mode: "remote" (S3) in enterprise, "local" in default/MVP.
+            "backend_mode": backend_mode,
+            "backend_warning": (
+                None if backend_mode == "remote"
+                else "Remote Terraform backend not configured — using local Terraform state."
+            ),
         }
 
         logger.info(
@@ -482,34 +492,39 @@ class TerraformTemplateRenderer:
                 },
             )
 
-    def _render_backend(self, project_id: Optional[str]) -> str:
+    def _render_backend(self, project_id: Optional[str]) -> tuple[str, str]:
         """Deterministic backend.tf via backend_injector — never LLM, never a
-        placeholder.
+        placeholder, never an exception. Returns ``(content, mode)`` where mode is
+        ``"remote"`` or ``"local"``.
 
-        Raises ``TerraformBackendConfigError`` when the S3 remote-state backend
-        cannot be configured (no project_id, or the TF_STATE_* env vars are
-        unset). We refuse to emit a placeholder: that would make Terraform use
-        empty local state on the GitHub runner, breaking destroy and re-deploy.
+        Remote S3 state is OPTIONAL:
+
+        * **enterprise** — ``TF_STATE_*`` env vars set AND a project_id is
+          available → per-project S3 backend (the existing injector, unchanged);
+        * **default / MVP** — env vars unset (or no id to key state by) → a local
+          backend, so generation always succeeds and the project runs with plain
+          ``terraform init`` / ``terraform apply`` and no platform-managed infra.
+
+        If enterprise env vars are present but malformed, it logs a warning and
+        falls back to local rather than failing generation.
         """
-        if not project_id:
-            raise TerraformBackendConfigError(
-                "Cannot generate backend.tf: a project_id is required so the S3 "
-                "remote state is isolated per project "
-                "(key = projects/<project-id>/terraform.tfstate).",
-                metadata={"reason": "missing_project_id"},
-            )
-        try:
-            cfg = backend_config_from_env(project_id)
-        except BackendConfigurationError as exc:
-            raise TerraformBackendConfigError(
-                f"Cannot generate backend.tf: {exc}",
-                metadata={
-                    "reason": "backend_config_unavailable",
-                    "project_id": project_id,
-                },
-            ) from exc
-        logger.info(
-            "[TerraformTemplateRenderer] backend.tf emitted (bucket=%s, key=%s)",
-            cfg.bucket, cfg.state_key,
+        if remote_backend_configured() and project_id:
+            try:
+                cfg = backend_config_from_env(project_id)
+                logger.info(
+                    "[TerraformTemplateRenderer] S3 backend.tf emitted "
+                    "(bucket=%s, key=%s)", cfg.bucket, cfg.state_key,
+                )
+                return render_backend_tf(cfg), "remote"
+            except BackendConfigurationError as exc:
+                logger.warning(
+                    "[TerraformTemplateRenderer] Remote backend requested but "
+                    "invalid (%s) — falling back to local Terraform state.", exc,
+                )
+                return render_local_backend_tf(), "local"
+
+        logger.warning(
+            "[TerraformTemplateRenderer] No remote Terraform backend configured "
+            "(TF_STATE_* unset) — using local Terraform state.",
         )
-        return render_backend_tf(cfg)
+        return render_local_backend_tf(), "local"

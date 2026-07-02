@@ -78,6 +78,14 @@ from backend.app.schemas.infrastructure_destroy_phase import (
     InfrastructureDestroyPhaseResponse,
     ProjectDeletionState,
 )
+from backend.app.schemas.infrastructure_recovery_phase import (
+    InfrastructureRecoveryPhaseResponse,
+)
+from backend.app.schemas.infrastructure_lifecycle_phase import (
+    DestroyRequest,
+    InfrastructureLifecyclePhaseResponse,
+    LifecycleActionResult,
+)
 from backend.app.schemas.workflow_analysis import WorkflowAnalysisResponse
 from backend.app.services.core.docker_phase_projection_service import (
     DockerPhaseProjectionService,
@@ -90,6 +98,8 @@ from backend.app.services.core.repository_installation_projection_service import
 )
 from backend.app.services.workflow_monitoring import WorkflowMonitoringService
 from backend.app.services.infrastructure_destroy import InfrastructureDestroyService
+from backend.app.services.infrastructure_recovery import InfrastructureRecoveryService
+from backend.app.services.infrastructure_lifecycle import InfrastructureLifecycleService
 from backend.app.services.core.project_analysis_service import ProjectAnalysisService
 from backend.app.services.core.workflow_analysis_aggregation_service import (
     WorkflowAnalysisAggregationService,
@@ -192,12 +202,16 @@ def retry_bootstrap(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Reset bootstrap_status to pending and re-schedule analysis.
+    """Reset bootstrap_status to pending and re-run a REAL analysis.
 
-    Used by the ProjectDetail "Analysis failed → Retry" UI. Only the owner
-    or members with write access (DEVELOPER+) should be able to call this;
-    the membership check inside ``_load_or_404`` enforces the membership
-    requirement, role gating can be tightened later.
+    Backs the ProjectDetail "Retry"/"Re-analyze" UI. Forces a fresh codebase
+    analysis: it re-invokes the codebase-analysis LLM, bypasses the
+    repository-analysis cache, and overwrites the persisted ProjectContext —
+    so it works both for a FAILED bootstrap and for one that completed but
+    produced a thin/empty result. Only the owner or members with write access
+    (DEVELOPER+) should be able to call this; the membership check inside
+    ``_load_or_404`` enforces the membership requirement, role gating can be
+    tightened later.
     """
     project = _load_or_404(db, project_id, current_user)
     ProjectBootstrapService.reset_for_retry(db, project)
@@ -205,6 +219,7 @@ def retry_bootstrap(
         background_tasks,
         project_id=project.id,
         user_id=current_user.id,
+        force=True,
     )
     return project
 
@@ -977,6 +992,143 @@ def get_infrastructure_destroy(
     return InfrastructureDestroyService.get_status(
         db, project=project, workflow=workflow, task=task,
     )
+
+
+# ─── Infrastructure Recovery phase read (diagnostic — read-only) ──────────────
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/recovery",
+    response_model=InfrastructureRecoveryPhaseResponse,
+)
+def get_infrastructure_recovery(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Structured, READ-ONLY recovery diagnosis for a failed provisioning.
+
+    After ``bootstrap.yml`` fails during ``terraform apply``, this observes the
+    failed run (read-only, like monitoring), inspects the generated Terraform +
+    remote state backend, classifies the failure, and returns a ``RecoveryReport``
+    with recommendations. It NEVER runs Terraform (no apply / destroy / import),
+    never touches AWS, and never modifies the workflow lifecycle — it only
+    persists a recovery artifact + a diagnostic marker. The engineer decides what
+    to do; the recovery actions are disabled placeholders. Degrades gracefully
+    (``recovery_available=false``) when there is no failure to diagnose.
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    return InfrastructureRecoveryService.get_status(
+        db, project=project, workflow=workflow, task=task,
+    )
+
+
+# ─── Infrastructure Lifecycle phase (operational dashboard + actions) ─────────
+
+# Roles allowed to manage infrastructure (retry/destroy). VIEWER is read-only.
+_LIFECYCLE_MANAGE_ROLES = {"DEVELOPER", "CLOUD_ARCHITECT", "OWNER", "ADMIN"}
+
+
+def _can_manage_infrastructure(db: Session, project, current_user: User) -> bool:
+    """True when the caller may retry/destroy (engineer/admin/owner), else False.
+
+    Read-only members (VIEWER) get False, so the dashboard renders the actions
+    disabled. The action endpoints additionally enforce this server-side via
+    ``require_project_contributor``.
+    """
+    if getattr(project, "owner_id", None) == current_user.id:
+        return True
+    if (getattr(current_user, "role", "") or "").upper() == "ADMIN":
+        return True
+    member = (
+        db.query(ProjectMember)
+        .filter(
+            ProjectMember.project_id == project.id,
+            ProjectMember.user_id == current_user.id,
+        )
+        .first()
+    )
+    role = (getattr(member, "role", "") or "").upper()
+    return role in _LIFECYCLE_MANAGE_ROLES
+
+
+@router.get(
+    "/{project_id}/workflows/{workflow_id}/lifecycle",
+    response_model=InfrastructureLifecyclePhaseResponse,
+)
+def get_infrastructure_lifecycle(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The Infrastructure Lifecycle dashboard (status + state + inventory +
+    recovery + history + actions). READ-ONLY: it aggregates the existing destroy
+    / monitoring / recovery / import surfaces and the immutable lifecycle history;
+    it never runs Terraform or mutates the generation lifecycle. ``can_manage``
+    reflects whether the caller may retry/destroy (read-only users get False).
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    can_manage = _can_manage_infrastructure(db, project, current_user)
+    return InfrastructureLifecycleService.get_status(
+        db, project=project, workflow=workflow, task=task, can_manage=can_manage,
+    )
+
+
+@router.post(
+    "/{project_id}/workflows/{workflow_id}/lifecycle/retry-bootstrap",
+    response_model=LifecycleActionResult,
+)
+def retry_bootstrap(
+    project_id: str,
+    workflow_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_contributor),  # DEVELOPER+ (no VIEWER)
+):
+    """Re-dispatch bootstrap.yml — ONLY when the last bootstrap failed.
+
+    GitHub Actions runs the bootstrap (the backend never runs Terraform). Records
+    an immutable ``BOOTSTRAP_RETRY`` lifecycle event. Returns 409 when bootstrap
+    is not in a failed state.
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    result = InfrastructureLifecycleService.retry_bootstrap(
+        db, project=project, workflow=workflow, task=task, actor_id=current_user.id,
+    )
+    if result.status == "blocked":
+        raise HTTPException(status_code=409, detail=result.message)
+    return result
+
+
+@router.post(
+    "/{project_id}/workflows/{workflow_id}/lifecycle/destroy",
+    response_model=LifecycleActionResult,
+)
+def lifecycle_destroy(
+    project_id: str,
+    workflow_id: str,
+    body: DestroyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    _member: ProjectMember = Depends(require_project_contributor),  # DEVELOPER+ (no VIEWER)
+):
+    """Dispatch destroy.yml after a TWO-step confirmation + lifecycle guards.
+
+    Requires ``confirm`` AND ``acknowledge_data_loss``. Never destroys after a
+    bootstrap failure, while a run is in progress, or when already destroyed.
+    GitHub Actions runs ``terraform destroy`` (never the backend); monitoring
+    observes it exactly like bootstrap/deploy. Records ``DESTROY_REQUESTED``.
+    """
+    project, workflow, task = _load_workflow_lenient(db, project_id, workflow_id, current_user)
+    result = InfrastructureLifecycleService.request_destroy(
+        db, project=project, workflow=workflow, task=task,
+        confirm=body.confirm, acknowledge_data_loss=body.acknowledge_data_loss,
+        actor_id=current_user.id,
+    )
+    if result.status == "blocked":
+        raise HTTPException(status_code=409, detail=result.message)
+    return result
 
 
 # ─── Project context (intelligence layer) ───────────────────────────────────

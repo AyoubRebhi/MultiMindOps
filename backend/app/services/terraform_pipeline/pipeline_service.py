@@ -28,13 +28,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.app.schemas.blueprint import parse_blueprint
 from backend.app.services.terraform_generation.renderers.template_renderer import (
@@ -144,10 +145,18 @@ class PlanResult:
 # between the synchronous ``/terraform/*`` path and the streamed workflow
 # phases.
 #
-# ``plan`` reuses ``-backend=false`` so it never tries to configure the S3
-# remote backend declared in backend.tf (which would need credentials). The
-# AWS provider may still demand credentials/region at plan time; that failure
-# is surfaced through the result rather than swallowed.
+# Backend initialisation is selected automatically (see ``build_validate_steps``
+# / ``build_plan_steps``): when the generated config declares NO backend block we
+# keep the historical ``-backend=false`` init (never touch a real backend, need
+# no credentials); when it declares ANY backend block (``local`` or ``s3``) we
+# run a real, re-configuring ``terraform init`` so the declared backend is
+# actually initialised. The AWS provider may still demand credentials/region at
+# plan time; that failure is surfaced through the result rather than swallowed.
+#
+# ``VALIDATE_STEPS`` / ``PLAN_STEPS`` remain the NO-BACKEND baseline sequences
+# (the ``directory_declares_backend`` → False branch of the builders). They are
+# kept as importable constants for back-compat and as the default the builders
+# fall back to.
 
 VALIDATE_STEPS: List[tuple] = [
     ("init",     ["init", "-backend=false", "-input=false", "-no-color"]),
@@ -160,6 +169,89 @@ PLAN_STEPS: List[tuple] = [
 ]
 
 PLAN_OUTPUT_FILE = "tfplan"
+
+
+# ── Backend detection + init-flavour selection ───────────────────────────────
+#
+# A backend is declared as ``backend "<type>" { ... }`` inside the top-level
+# ``terraform {}`` block — any type counts (``local``, ``s3``, ``gcs``, …). HCL
+# comments are stripped first so a commented-out backend never triggers a real
+# init.
+
+_BACKEND_BLOCK_RE = re.compile(r'\bbackend\s+"[^"]+"\s*\{')
+_HCL_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_HCL_LINE_COMMENT_RE = re.compile(r"(#|//).*?$", re.MULTILINE)
+
+
+def _strip_hcl_comments(hcl: str) -> str:
+    """Remove ``/* */`` block comments and ``#`` / ``//`` line comments.
+
+    Deliberately simple (it does not track string literals): it only ever
+    *removes* text, and the backend-block pattern it feeds never legitimately
+    appears inside a string, so the worst case is a false negative on a
+    pathological literal — never a false positive on a commented-out backend.
+    """
+    without_block = _HCL_BLOCK_COMMENT_RE.sub("", hcl)
+    return _HCL_LINE_COMMENT_RE.sub("", without_block)
+
+
+def config_declares_backend(hcl: str) -> bool:
+    """True when ``hcl`` declares a ``backend "<type>" {`` block.
+
+    Any backend type counts — including ``local`` and ``s3``. Comments are
+    ignored so a commented-out backend does not register.
+    """
+    if not hcl:
+        return False
+    return bool(_BACKEND_BLOCK_RE.search(_strip_hcl_comments(hcl)))
+
+
+def directory_declares_backend(artifact_dir: Path) -> bool:
+    """True when any ``*.tf`` file in ``artifact_dir`` declares a backend block.
+
+    Missing directories / unreadable files are treated as "no backend" so the
+    caller falls back to the safe ``-backend=false`` init.
+    """
+    directory = Path(artifact_dir)
+    if not directory.is_dir():
+        return False
+    for tf_file in sorted(directory.glob("*.tf")):
+        try:
+            if config_declares_backend(tf_file.read_text(encoding="utf-8")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def terraform_init_args(*, declares_backend: bool) -> List[str]:
+    """Select the ``terraform init`` argument list.
+
+    * No backend block → ``-backend=false`` (historical behaviour: never touches
+      a real/remote backend, requires no credentials).
+    * Backend declared → a real, re-configuring init so the declared backend
+      (``local`` or ``s3``) is actually initialised. ``-reconfigure`` keeps it
+      idempotent across re-runs against a possibly-stale ``.terraform/`` dir
+      (the artifact directory is reused/rehydrated between phases).
+    """
+    if declares_backend:
+        return ["init", "-reconfigure", "-input=false", "-no-color"]
+    return ["init", "-backend=false", "-input=false", "-no-color"]
+
+
+def build_validate_steps(artifact_dir: Path) -> List[Tuple[str, List[str]]]:
+    """VALIDATE_STEPS with the ``init`` flavour chosen from the artifact's backend."""
+    init = terraform_init_args(declares_backend=directory_declares_backend(artifact_dir))
+    return [("init", init), ("validate", ["validate", "-no-color"])]
+
+
+def build_plan_steps(artifact_dir: Path) -> List[Tuple[str, List[str]]]:
+    """PLAN_STEPS with the ``init`` flavour chosen from the artifact's backend."""
+    init = terraform_init_args(declares_backend=directory_declares_backend(artifact_dir))
+    return [
+        ("init", init),
+        ("plan", ["plan", "-out=tfplan", "-input=false", "-no-color"]),
+    ]
 
 
 # ── Terraform subprocess environment ─────────────────────────────────────────
@@ -396,8 +488,7 @@ class TerraformPipelineService:
             )
 
         start = time.perf_counter()
-        _, init_args = VALIDATE_STEPS[0]
-        _, validate_args = VALIDATE_STEPS[1]
+        (_, init_args), (_, validate_args) = build_validate_steps(artifact_dir)
         init = self._run_terraform(binary, init_args, cwd=artifact_dir)
         validate = (
             self._run_terraform(binary, validate_args, cwd=artifact_dir)
@@ -422,7 +513,7 @@ class TerraformPipelineService:
         """
         Run ``terraform init`` + ``terraform plan -out=tfplan`` against the
         persisted artifact directory. Mirrors :meth:`validate` (same subprocess
-        machinery, same ``-backend=false`` init) and writes the binary
+        machinery, same backend-aware init selection) and writes the binary
         ``tfplan`` into the artifact directory.
 
         A plan that fails because cloud credentials are absent is reported
@@ -441,8 +532,7 @@ class TerraformPipelineService:
             )
 
         start = time.perf_counter()
-        _, init_args = PLAN_STEPS[0]
-        _, plan_args = PLAN_STEPS[1]
+        (_, init_args), (_, plan_args) = build_plan_steps(artifact_dir)
         init = self._run_terraform(binary, init_args, cwd=artifact_dir)
         plan = (
             self._run_terraform(binary, plan_args, cwd=artifact_dir)

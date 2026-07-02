@@ -33,7 +33,9 @@ from backend.app.services.terraform_generation.backend_injector import (
     BackendConfig,
     BackendConfigurationError,
     backend_config_from_env,
+    remote_backend_configured,
     render_backend_tf,
+    render_local_backend_tf,
 )
 from backend.app.services.terraform_generation.renderers.template_renderer import (
     TerraformBackendConfigError,
@@ -55,7 +57,9 @@ __all__ = [
     "BackendConfig",
     "BackendConfigurationError",
     "backend_config_from_env",
+    "remote_backend_configured",
     "render_backend_tf",
+    "render_local_backend_tf",
     "TerraformBackendConfigError",
     "TerraformTemplateRenderer",
     "RenderResult",

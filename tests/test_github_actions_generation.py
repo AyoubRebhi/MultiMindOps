@@ -426,10 +426,17 @@ def test_architecture_inconsistency_fails_phase_and_persists_nothing(db):
     assert wf.status == "running"
 
 
-def test_rerun_is_idempotent(db):
+def test_rerun_cuts_a_new_version_preserving_history(db):
+    """An explicit rerun ("Regenerate GitHub Actions") must cut a NEW artifact
+    version even though the deterministic renderer re-emits identical bytes —
+    versioning, not a silent no-op that reuses the stale row. The logical
+    artifacts stay deduped by (project, type, subtype), so the ROW count is
+    unchanged; only the version + history grow.
+    """
     proj, wf, task = _seed(db, "ECS")
-    WOS.run_phase(db, project=proj, workflow=wf, task=task, phase=PHASE_GH_ACTIONS)
-    WOS.run_phase(db, project=proj, workflow=wf, task=task, phase=PHASE_GH_ACTIONS)
+    _, ids1 = WOS.run_phase(db, project=proj, workflow=wf, task=task, phase=PHASE_GH_ACTIONS)
+    _, ids2 = WOS.run_phase(db, project=proj, workflow=wf, task=task, phase=PHASE_GH_ACTIONS)
+
     rows = (db.query(Artifact)
               .filter(Artifact.project_id == "proj-1",
                       Artifact.artifact_type == "github_actions").all())
@@ -440,4 +447,13 @@ def test_rerun_is_idempotent(db):
         ".github/workflows/bootstrap.yml",
         ".github/workflows/deploy.yml",
     }
-    assert all(r.version == 1 for r in rows)  # identical content → no version bump
+    # Rerun cut a new version on BOTH files (never overwriting the old one).
+    assert all(r.version == 2 for r in rows)
+    # The phase points at the (same-id) regenerated artifacts each run.
+    assert set(ids1) == set(ids2) == {r.id for r in rows}
+    # History is preserved: v1 + v2 for each file.
+    for r in rows:
+        versions = (db.query(ArtifactVersion)
+                      .filter_by(artifact_id=r.id)
+                      .order_by(ArtifactVersion.version.asc()).all())
+        assert [v.version for v in versions] == [1, 2]

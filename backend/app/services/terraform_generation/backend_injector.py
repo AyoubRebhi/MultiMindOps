@@ -31,18 +31,28 @@ This is the single most important property of this module:
   other's state, and DynamoDB locking on the shared table serialises concurrent
   operations on the same key.
 
-Pre-launch setup (operator responsibility, outside the platform repo)
----------------------------------------------------------------------
+Two modes (remote state is OPTIONAL)
+------------------------------------
+* **Default / MVP** — ``TF_STATE_*`` env vars are NOT set. ``backend.tf`` declares
+  a **local** backend. Generation always succeeds; the project works with plain
+  ``terraform init`` / ``terraform apply`` and needs no platform-managed infra.
+* **Enterprise** — all three of ``TF_STATE_BUCKET`` / ``TF_STATE_REGION`` /
+  ``TF_STATE_LOCK_TABLE`` are set. ``backend.tf`` declares the per-project S3
+  backend with DynamoDB locking (the logic below — unchanged).
+
+``backend_config_from_env`` still raises ``BackendConfigurationError`` when the
+S3 backend is requested but mis-/under-configured — but it is only called once the
+caller has confirmed (via :func:`remote_backend_configured`) that enterprise mode
+is in effect, so missing env vars no longer block generation; they select the
+local backend instead.
+
+Pre-launch setup for ENTERPRISE mode (operator responsibility)
+--------------------------------------------------------------
 1. Create a single management AWS account.
 2. ``aws s3api create-bucket --bucket <state-bucket>`` with versioning + SSE-KMS.
 3. ``aws dynamodb create-table`` for the lock table (PK = LockID, on-demand).
 4. Block public access on the bucket.
 5. Set ``TF_STATE_BUCKET``, ``TF_STATE_REGION``, ``TF_STATE_LOCK_TABLE`` env vars.
-
-Until those env vars are present, ``backend_config_from_env`` raises
-``BackendConfigurationError`` so we NEVER silently fall back to a placeholder
-backend (which would make Terraform use empty local state on the runner) or to
-"use the LLM's guess".
 """
 
 from __future__ import annotations
@@ -57,6 +67,37 @@ _BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$")
 _AWS_REGION_RE = re.compile(r"^[a-z]{2}-[a-z]+-\d+$")
 _DYNAMO_TABLE_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,255}$")
 _PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
+
+# The three env vars that switch on enterprise (remote S3) state.
+_REMOTE_STATE_ENV_VARS = ("TF_STATE_BUCKET", "TF_STATE_REGION", "TF_STATE_LOCK_TABLE")
+
+# Local backend.tf — the default/MVP mode. A real, functional local backend (not
+# a placeholder): `terraform init` + `terraform apply` work with zero
+# platform-managed infrastructure. No `required_version` here so it never
+# conflicts with the one already declared in providers.tf.
+_LOCAL_BACKEND_TF = """# AUTO-GENERATED — DO NOT EDIT.
+# No remote backend configured — using LOCAL Terraform state. `terraform init`
+# and `terraform apply` work without any platform-managed infrastructure. Set
+# TF_STATE_BUCKET / TF_STATE_REGION / TF_STATE_LOCK_TABLE to enable the S3 backend.
+
+terraform {
+  backend "local" {}
+}
+"""
+
+
+def remote_backend_configured() -> bool:
+    """True when ALL ``TF_STATE_*`` env vars are set (enterprise mode is active).
+
+    This is the switch between the two modes: when it returns False the platform
+    emits a local backend and generation continues; it never raises.
+    """
+    return all(os.getenv(name) for name in _REMOTE_STATE_ENV_VARS)
+
+
+def render_local_backend_tf() -> str:
+    """Emit the local (default/MVP) ``backend.tf``. Pure, deterministic."""
+    return _LOCAL_BACKEND_TF
 
 
 class BackendConfigurationError(RuntimeError):

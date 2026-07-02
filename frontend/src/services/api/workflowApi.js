@@ -563,6 +563,137 @@ export function mapDestroyPhase(api = {}) {
   };
 }
 
+/* ── Infrastructure Recovery phase mapper ───────────────────────────────────── */
+
+/** Map a RecoveryReport payload into the camelCase shape the panel consumes. */
+export function mapRecoveryReport(api) {
+  if (!api) return null;
+  return {
+    status: api.status || null,
+    failureType: api.failure_type || null,
+    rootCause: api.root_cause || null,
+    terraformStateAvailable: !!api.terraform_state_available,
+    terraformOutputsAvailable: !!api.terraform_outputs_available,
+    recoverable: !!api.recoverable,
+    recommendedAction: api.recommended_action || null,
+    recommendedActionLabel: api.recommended_action_label || null,
+    confidence: api.confidence || null,
+    detectedResources: arr(api.detected_resources).map((r) => ({
+      resourceType: r.resource_type || null,
+      identifier: r.identifier || null,
+      raw: r.raw || null,
+    })),
+    explanation: api.explanation || null,
+    availableActions: arr(api.available_actions).map((a) => ({
+      id: a.id || null,
+      label: a.label || null,
+      description: a.description || null,
+      enabled: !!a.enabled,
+      recommended: !!a.recommended,
+    })),
+    generatedAt: api.generated_at || null,
+  };
+}
+
+/**
+ * Map the GET .../recovery projection into the recovery-phase view model. The
+ * backend is purely diagnostic — this reflects whether a structured recovery is
+ * available for a failed bootstrap plus the read-only RecoveryReport. Tolerant of
+ * partials so a not-yet-failed run renders the "nothing to recover" state.
+ */
+export function mapRecoveryPhase(api = {}) {
+  return {
+    workflowId: api.workflow_id || null,
+    projectId: api.project_id || null,
+    taskId: api.task_id || null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    phaseStatus: api.phase_status || null,
+    recoveryAvailable: !!api.recovery_available,
+    failed: !!api.failed,
+    hasRepoUrl: !!api.has_repo_url,
+    hasGithubToken: !!api.has_github_token,
+    hasTerraform: !!api.has_terraform,
+    monitoringAvailable: !!api.monitoring_available,
+    run: api.run ? mapPipelineRun(api.run) : null,
+    report: mapRecoveryReport(api.report),
+  };
+}
+
+/* ── Infrastructure Lifecycle phase mapper ──────────────────────────────────── */
+
+/**
+ * Map the GET .../lifecycle projection into the lifecycle-dashboard view model.
+ * Aggregates status, terraform state, inventory, recovery history, immutable
+ * lifecycle history, action availability and the read-only run observations.
+ */
+export function mapLifecyclePhase(api = {}) {
+  return {
+    workflowId: api.workflow_id || null,
+    projectId: api.project_id || null,
+    taskId: api.task_id || null,
+    currentPhase: api.current_phase || null,
+    status: api.status || null,
+    infrastructureStatus: api.infrastructure_status || 'Pending',
+    canManage: !!api.can_manage,
+    hasRepoUrl: !!api.has_repo_url,
+    hasGithubToken: !!api.has_github_token,
+    hasTerraform: !!api.has_terraform,
+    retryBootstrapAvailable: !!api.retry_bootstrap_available,
+    destroyAvailable: !!api.destroy_available,
+    destroyBlockReason: api.destroy_block_reason || null,
+    terraformState: {
+      backendConfigured: !!api.terraform_state?.backend_configured,
+      backendType: api.terraform_state?.backend_type || null,
+      stateBucket: api.terraform_state?.state_bucket || null,
+      stateKey: api.terraform_state?.state_key || null,
+      workspace: api.terraform_state?.workspace || 'default',
+      lastApply: api.terraform_state?.last_apply || null,
+      lastDestroy: api.terraform_state?.last_destroy || null,
+      managedResourcesCount: api.terraform_state?.managed_resources_count || 0,
+      importedResourcesCount: api.terraform_state?.imported_resources_count || 0,
+      driftStatus: api.terraform_state?.drift_status || 'unavailable',
+    },
+    inventory: arr(api.inventory).map((g) => ({
+      service: g.service,
+      resources: arr(g.resources).map((r) => ({
+        resourceType: r.resource_type,
+        name: r.name,
+        terraformAddress: r.terraform_address,
+      })),
+    })),
+    recoveryHistory: arr(api.recovery_history).map((h) => ({
+      timestamp: h.timestamp || null,
+      detectedIssue: h.detected_issue || null,
+      actionTaken: h.action_taken || null,
+      status: h.status || 'info',
+      durationMs: h.duration_ms || null,
+      source: h.source || 'lifecycle',
+    })),
+    recoveryRecommendations: arr(api.recovery_recommendations),
+    lifecycleHistory: arr(api.lifecycle_history).map((e) => ({
+      id: e.id,
+      eventType: e.event_type,
+      status: e.status,
+      summary: e.summary || '',
+      durationMs: e.duration_ms || null,
+      createdAt: e.created_at || null,
+      metadata: e.metadata || {},
+    })),
+    actions: arr(api.actions).map((a) => ({
+      id: a.id,
+      label: a.label,
+      enabled: !!a.enabled,
+      requiresConfirmation: !!a.requires_confirmation,
+      reason: a.reason || null,
+    })),
+    monitoringAvailable: !!api.monitoring_available,
+    bootstrapRun: api.bootstrap_run ? mapPipelineRun(api.bootstrap_run) : null,
+    deployRun: api.deploy_run ? mapPipelineRun(api.deploy_run) : null,
+    destroyRun: api.destroy_run ? mapPipelineRun(api.destroy_run) : null,
+  };
+}
+
 /* ── Workflow revision mappers (regenerate + revision history) ─────────────── */
 
 /** Map the POST .../regenerate reply (RegeneratePhaseResponse) to camelCase. */
@@ -1140,6 +1271,67 @@ export const workflowApi = {
       )}/destroy`
     );
     return mapDestroyPhase(data);
+  },
+
+  /**
+   * GET /projects/:projectId/workflows/:workflowId/recovery — the read-only
+   * Infrastructure Recovery diagnosis for a failed bootstrap. PURELY DIAGNOSTIC:
+   * the backend never runs Terraform (no apply / destroy / import) and never
+   * touches AWS — it observes the failed run, classifies the failure, and returns
+   * a RecoveryReport with recommendations. The recovery actions are disabled
+   * placeholders; the engineer decides what to do.
+   */
+  async getRecoveryPhase(projectId, workflowId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/recovery`
+    );
+    return mapRecoveryPhase(data);
+  },
+
+  /**
+   * GET /projects/:projectId/workflows/:workflowId/lifecycle — the Infrastructure
+   * Lifecycle dashboard (status, terraform state, inventory, recovery history,
+   * immutable lifecycle history, actions + read-only run observations).
+   */
+  async getLifecyclePhase(projectId, workflowId) {
+    const data = await apiClient.get(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/lifecycle`
+    );
+    return mapLifecyclePhase(data);
+  },
+
+  /**
+   * POST .../lifecycle/retry-bootstrap — re-dispatch bootstrap.yml (only when the
+   * last bootstrap failed). GitHub Actions runs it; records a BOOTSTRAP_RETRY
+   * lifecycle event. Returns { status, message, dispatched, eventId }.
+   */
+  async retryBootstrap(projectId, workflowId) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/lifecycle/retry-bootstrap`,
+      {}
+    );
+    return data;
+  },
+
+  /**
+   * POST .../lifecycle/destroy — dispatch destroy.yml after a TWO-step
+   * confirmation. BOTH `confirm` and `acknowledgeDataLoss` must be true. GitHub
+   * Actions runs `terraform destroy`; records a DESTROY_REQUESTED event.
+   */
+  async lifecycleDestroy(projectId, workflowId, { confirm, acknowledgeDataLoss }) {
+    const data = await apiClient.post(
+      `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(
+        workflowId
+      )}/lifecycle/destroy`,
+      { confirm: !!confirm, acknowledge_data_loss: !!acknowledgeDataLoss }
+    );
+    return data;
   },
 
   /**

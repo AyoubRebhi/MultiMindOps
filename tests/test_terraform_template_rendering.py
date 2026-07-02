@@ -27,7 +27,6 @@ from backend.app.services.terraform_generation.renderers.template_renderer impor
     MissingTemplateVariableError,
     TemplateCompatibilityError,
     TemplateSelectionError,
-    TerraformBackendConfigError,
 )
 
 
@@ -398,21 +397,26 @@ def test_validator_passes_with_real_backend() -> None:
     assert not any(i.source == "backend_config" for i in result.issues)
 
 
-def test_validator_rejects_missing_backend() -> None:
+def test_validator_warns_on_missing_backend_not_fails() -> None:
+    """No backend = local state (default/MVP) → WARNING (degraded), not failure."""
     artifacts = _valid_artifacts()
     artifacts.pop("terraform_backend", None)
     result = TerraformValidator(skip_subprocess_validators=True).validate(artifacts)
-    assert result.validators_run.get("backend_config") == "failed"
-    assert result.is_blocking
-    assert any(i.source == "backend_config" for i in result.issues)
+    assert result.validators_run.get("backend_config") == "warnings"
+    assert not result.is_blocking  # generation continues
+    assert any(
+        i.source == "backend_config" and i.severity == "warning"
+        for i in result.issues
+    )
 
 
-def test_validator_rejects_placeholder_backend() -> None:
+def test_validator_warns_on_local_backend() -> None:
+    """A local backend.tf is accepted with a warning, never a failure."""
     artifacts = _valid_artifacts()
-    artifacts["terraform_backend"] = "# backend.tf placeholder — not configured\n"
+    artifacts["terraform_backend"] = 'terraform {\n  backend "local" {}\n}\n'
     result = TerraformValidator(skip_subprocess_validators=True).validate(artifacts)
-    assert result.validators_run.get("backend_config") == "failed"
-    assert result.is_blocking
+    assert result.validators_run.get("backend_config") == "warnings"
+    assert not result.is_blocking
 
 
 @pytest.mark.parametrize("field", ["bucket", "region", "dynamodb_table"])
@@ -486,23 +490,63 @@ def test_backend_falls_back_to_task_id_when_no_project_id() -> None:
     assert 'key            = "projects/task-only-1/terraform.tfstate"' in backend
 
 
-def test_render_raises_when_backend_env_missing(
+# ── Scenario A — default/MVP: TF_STATE_* absent → local backend, no exception ─
+
+
+def _without_remote_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("TF_STATE_BUCKET", "TF_STATE_REGION", "TF_STATE_LOCK_TABLE"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_local_backend_when_env_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No TF_STATE_* → generation SUCCEEDS with a local backend (no exception)."""
+    _without_remote_env(monkeypatch)
+    renderer = TerraformTemplateRenderer()
+    result = renderer.render(_monolith_balanced(), project_id="proj-1")
+    backend = result.artifacts["terraform_backend"]
+    assert 'backend "local"' in backend
+    assert 'backend "s3"' not in backend
+    assert "placeholder" not in backend.lower()
+    assert result.metadata["backend_mode"] == "local"
+    assert result.metadata["backend_warning"]
+
+
+def test_local_backend_when_no_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No id to key state by → local backend, generation still succeeds."""
+    _without_remote_env(monkeypatch)
+    renderer = TerraformTemplateRenderer()
+    result = renderer.render(_monolith_balanced())
+    assert 'backend "local"' in result.artifacts["terraform_backend"]
+    assert result.metadata["backend_mode"] == "local"
+
+
+def test_local_backend_generation_is_degraded_not_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No placeholder backend: missing TF_STATE_* env vars fail generation."""
-    monkeypatch.delenv("TF_STATE_BUCKET", raising=False)
-    monkeypatch.delenv("TF_STATE_REGION", raising=False)
-    monkeypatch.delenv("TF_STATE_LOCK_TABLE", raising=False)
-    renderer = TerraformTemplateRenderer()
-    with pytest.raises(TerraformBackendConfigError):
-        renderer.render(_monolith_balanced(), project_id="proj-1")
+    """End-to-end: local-mode artifacts validate as warnings (degraded), NOT failed."""
+    _without_remote_env(monkeypatch)
+    artifacts = TerraformTemplateRenderer().render(
+        _monolith_balanced(), project_id="proj-1"
+    ).artifacts
+    result = TerraformValidator(skip_subprocess_validators=True).validate(artifacts)
+    assert result.status in ("warnings", "passed")  # never "failed"
+    assert not result.is_blocking
+    assert any(
+        i.source == "backend_config" and "local Terraform state" in i.message
+        for i in result.issues
+    )
 
 
-def test_render_raises_when_no_project_or_task_id() -> None:
-    """A stable id is required to key the per-project state."""
-    renderer = TerraformTemplateRenderer()
-    with pytest.raises(TerraformBackendConfigError):
-        renderer.render(_monolith_balanced())
+# ── Scenario B — enterprise: TF_STATE_* present → S3 backend (preserved) ──────
+
+
+def test_s3_backend_when_env_present() -> None:
+    """The autouse fixture sets TF_STATE_* → enterprise S3 backend, unchanged."""
+    result = TerraformTemplateRenderer().render(_monolith_balanced(), project_id="proj-1")
+    backend = result.artifacts["terraform_backend"]
+    assert 'backend "s3"' in backend
+    assert result.metadata["backend_mode"] == "remote"
+    assert result.metadata["backend_warning"] is None
 
 
 # ── Missing template variable detection ──────────────────────────────────────

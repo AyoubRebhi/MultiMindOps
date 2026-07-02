@@ -239,6 +239,7 @@ class OrchestratorAgent(BaseAgent):
             repository_visibility=state.get("repository_visibility", "public"),
             github_token=state.get("github_token"),
             uploaded_env=state.get("uploaded_env_input"),
+            force=bool(state.get("force_reanalysis")),
         )
 
         logs = list(state.get("logs", []))
@@ -1479,6 +1480,7 @@ class OrchestratorAgent(BaseAgent):
         repository_visibility: str = "public",
         github_token: str | None = None,
         uploaded_env_input: dict | None = None,
+        force_reanalysis: bool = False,
     ) -> dict:
         """
         Unified replacement for run_plan_preview.
@@ -1501,6 +1503,9 @@ class OrchestratorAgent(BaseAgent):
             uploaded_env_input=uploaded_env_input,
         )
         state["approved_artifacts"] = None
+        # Propagated to _analyze_repository_node → codebase_agent.run(force=...)
+        # so a forced re-analysis bypasses the repository-analysis cache.
+        state["force_reanalysis"] = force_reanalysis
 
         state = self._initialize_node(state)
 

@@ -145,6 +145,63 @@ def test_bootstrap_happy_path_transitions_through_all_states():
     assert session.closed is True
 
 
+def test_bootstrap_force_routes_to_reanalyze_not_get_or_create():
+    """A forced re-analysis must call WorkflowOrchestrationService.reanalyze
+    (which re-invokes the LLM + bypasses the cache), NOT get_or_create_workflow
+    (which would reuse the active workflow and skip analysis entirely)."""
+    project = _FakeProject()
+    user = _FakeUser()
+    factory, session = _make_session_factory(project, user)
+
+    fake = (MagicMock(id="w1"), MagicMock(id="t1"), {"current_phase": "architecture_decision_complete"})
+
+    with patch(
+        "backend.app.services.core.project_bootstrap_service."
+        "WorkflowOrchestrationService.reanalyze",
+        return_value=fake,
+    ) as reanalyze, patch(
+        "backend.app.services.core.project_bootstrap_service."
+        "WorkflowOrchestrationService.get_or_create_workflow",
+    ) as get_or_create:
+        ProjectBootstrapService.run_bootstrap_analysis(
+            session_factory=factory,
+            project_id="p1",
+            user_id="u1",
+            force=True,
+        )
+
+    assert reanalyze.call_count == 1
+    get_or_create.assert_not_called()
+    assert project.bootstrap_status == STATUS_READY
+    assert project.bootstrap_error is None
+
+
+def test_bootstrap_default_uses_get_or_create_not_reanalyze():
+    """Without force, the normal bootstrap path must NOT force a re-analysis."""
+    project = _FakeProject()
+    user = _FakeUser()
+    factory, session = _make_session_factory(project, user)
+
+    fake = (MagicMock(id="w1"), MagicMock(id="t1"), {"current_phase": "architecture_decision_complete"})
+
+    with patch(
+        "backend.app.services.core.project_bootstrap_service."
+        "WorkflowOrchestrationService.get_or_create_workflow",
+        return_value=fake,
+    ) as get_or_create, patch(
+        "backend.app.services.core.project_bootstrap_service."
+        "WorkflowOrchestrationService.reanalyze",
+    ) as reanalyze:
+        ProjectBootstrapService.run_bootstrap_analysis(
+            session_factory=factory,
+            project_id="p1",
+            user_id="u1",
+        )
+
+    assert get_or_create.call_count == 1
+    reanalyze.assert_not_called()
+
+
 def test_bootstrap_records_structured_failure_on_orchestrator_error():
     project = _FakeProject()
     user = _FakeUser()

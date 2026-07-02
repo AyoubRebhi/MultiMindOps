@@ -206,53 +206,44 @@ class TerraformValidator:
         self,
         artifacts: Mapping[str, str],
     ) -> Tuple[List[TerraformValidationIssue], ValidationStatus]:
-        """Reject an absent, empty, placeholder, or incomplete S3 backend.
+        """Validate the backend. Remote S3 state is OPTIONAL.
 
         Deterministic and binary-free, so it runs in every environment — CI,
-        developer workstations, and ``skip_subprocess_validators`` mode. The
-        rendered backend.tf must declare an ``s3`` backend with a non-empty
-        bucket, region, dynamodb_table (lock table) and key, or generation is
-        blocked with a meaningful error.
+        developer workstations, and ``skip_subprocess_validators`` mode.
+
+        Two acceptable modes:
+
+        * **local (default/MVP)** — no ``backend "s3"`` block (or no backend.tf).
+          NOT an error: emits a WARNING ("using local Terraform state") so the
+          phase completes ``degraded``, exactly as the platform now wants.
+        * **remote (enterprise)** — a ``backend "s3"`` block. It must be COMPLETE
+          (non-empty bucket / region / dynamodb_table / key); a half-configured S3
+          backend IS a real defect and fails validation.
         """
         content = (artifacts.get("terraform_backend") or "").strip()
         issues: List[TerraformValidationIssue] = []
 
-        def _err(message: str, remediation: str) -> None:
+        # No S3 backend block → local state. A warning, not a failure.
+        if not re.search(r'backend\s+"s3"\s*\{', content):
             issues.append(
                 TerraformValidationIssue(
-                    severity="error",
+                    severity="warning",
                     source="backend_config",
                     file="backend.tf",
-                    message=message,
-                    remediation=remediation,
+                    message=(
+                        "Remote Terraform backend not configured — using local "
+                        "Terraform state."
+                    ),
+                    remediation=(
+                        "This is fine for development. For shared/production state "
+                        "set TF_STATE_BUCKET / TF_STATE_REGION / TF_STATE_LOCK_TABLE "
+                        "to generate an S3 remote backend."
+                    ),
                 )
             )
+            return issues, "warnings"
 
-        provision_hint = (
-            "Provision the management S3 bucket + DynamoDB lock table and set "
-            "TF_STATE_BUCKET / TF_STATE_REGION / TF_STATE_LOCK_TABLE so a real "
-            "S3 backend is generated."
-        )
-
-        # Empty or placeholder backend → empty backend configuration.
-        if not content or "placeholder" in content.lower():
-            _err(
-                "Terraform remote-state backend is not configured "
-                "(empty or placeholder backend.tf).",
-                provision_hint,
-            )
-            return issues, "failed"
-
-        # Must declare an S3 backend block (no local state allowed).
-        if not re.search(r'backend\s+"s3"\s*\{', content):
-            _err(
-                'No `backend "s3"` block found in backend.tf — local state is '
-                "not allowed for deploys.",
-                provision_hint,
-            )
-            return issues, "failed"
-
-        # Required, non-empty fields.
+        # An S3 backend IS declared (enterprise) → it must be complete.
         required = (
             ("bucket", "state bucket", "TF_STATE_BUCKET"),
             ("region", "state region", "TF_STATE_REGION"),
@@ -268,9 +259,14 @@ class TerraformValidator:
                     else "The backend `key` must include the project id "
                     "(projects/<project-id>/terraform.tfstate)."
                 )
-                _err(
-                    f"Terraform backend is missing the {label} ({field_name}).",
-                    hint,
+                issues.append(
+                    TerraformValidationIssue(
+                        severity="error",
+                        source="backend_config",
+                        file="backend.tf",
+                        message=f"Terraform backend is missing the {label} ({field_name}).",
+                        remediation=hint,
+                    )
                 )
 
         return issues, ("failed" if issues else "passed")

@@ -347,6 +347,7 @@ class ArtifactPersistenceService:
         content: str,
         generated_by_agent: Optional[str] = None,
         validation_status: str = "pending",
+        force_new_version: bool = False,
     ) -> Artifact:
         """Upsert one artifact and append a new ``ArtifactVersion`` if changed.
 
@@ -354,6 +355,14 @@ class ArtifactPersistenceService:
           * No existing row → create with version=1, write v1 history.
           * Existing row with identical content → no-op, return row unchanged.
           * Existing row with new content → bump version, append history.
+
+        ``force_new_version`` overrides the identical-content no-op: an EXPLICIT
+        regeneration must produce an auditable new ``ArtifactVersion`` even when a
+        deterministic generator re-emits byte-identical content (otherwise the
+        regenerate reports success while silently reusing the stale row). It only
+        bumps the version + appends history — approval is preserved because the
+        bytes are unchanged. Off by default so every other caller keeps the
+        idempotent retry-dedupe behaviour.
         """
         existing = (
             db.query(Artifact)
@@ -394,10 +403,11 @@ class ArtifactPersistenceService:
             )
             return artifact
 
-        # Existing — only append a version if content actually changed.
-        # Compare on HASH (not content) so a flag-day re-hash doesn't
-        # silently treat a real change as a no-op.
-        if existing.content_hash == new_hash:
+        # Existing — only append a version if content actually changed, UNLESS
+        # the caller explicitly forces one. Compare on HASH (not content) so a
+        # flag-day re-hash doesn't silently treat a real change as a no-op.
+        content_unchanged = existing.content_hash == new_hash
+        if content_unchanged and not force_new_version:
             # Still refresh denormalized fields in case they moved. Approval
             # state is preserved — same content means the approval still applies.
             existing.validation_status = validation_status
@@ -405,11 +415,14 @@ class ArtifactPersistenceService:
             existing.workflow_id = workflow_id or existing.workflow_id
             return existing
 
-        # ── Phase 2 — content change invalidates approval ─────────────────
+        # ── Phase 2 — a REAL content change invalidates approval ──────────
         # The reviewer approved the OLD content. The new bytes have not been
         # reviewed; the enforcement gate must reject any execution attempt
-        # until a CLOUD_ARCHITECT re-approves.
-        if existing.approval_state == "approved" or existing.approved_content_hash:
+        # until a CLOUD_ARCHITECT re-approves. A forced version bump over
+        # IDENTICAL bytes does not invalidate — the exact bytes stay approved.
+        if not content_unchanged and (
+            existing.approval_state == "approved" or existing.approved_content_hash
+        ):
             logger.warning(
                 "[ArtifactGovernance] content changed on artifact=%s "
                 "(was hash=%s now hash=%s) — invalidating approval",

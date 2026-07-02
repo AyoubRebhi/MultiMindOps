@@ -75,6 +75,8 @@ export default function ProjectDetails() {
   // Prefer the polling analysis payload's status (fresher) over the project row.
   const bootstrapStatus = analysis?.bootstrapStatus || project.bootstrapStatus;
   const bootstrapError = analysis?.bootstrapError || project.bootstrapError;
+  // A re-analysis is already running — hide the trigger so it can't be double-fired.
+  const analyzing = bootstrapStatus === 'analyzing' || bootstrapStatus === 'context_building';
 
   return (
     <ContentContainer>
@@ -84,6 +86,19 @@ export default function ProjectDetails() {
         breadcrumbs={[{ label: 'Projects', to: '/projects' }, { label: project.name }]}
         actions={
           <>
+            {project.repositoryUrl && (
+              <button
+                type="button"
+                className="boc btn px-3 py-2"
+                style={{ fontSize: '.85rem' }}
+                disabled={retrying || analyzing}
+                onClick={handleRetry}
+                title="Re-run codebase analysis — re-invokes the LLM and ignores the cached result"
+              >
+                <i className={`fa-solid fa-arrows-rotate me-2 ${retrying ? 'fa-spin' : ''}`} />
+                {retrying ? 'Re-analyzing…' : 'Re-analyze'}
+              </button>
+            )}
             {project.repositoryUrl && (
               <a
                 href={project.repositoryUrl}

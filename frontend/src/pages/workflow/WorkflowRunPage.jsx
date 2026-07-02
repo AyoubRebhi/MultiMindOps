@@ -20,6 +20,8 @@ import WorkflowGithubActionsPhase from './WorkflowGithubActionsPhase';
 import WorkflowRepositoryInstallationPhase from './WorkflowRepositoryInstallationPhase';
 import WorkflowMonitoringPhase from './WorkflowMonitoringPhase';
 import WorkflowInfrastructureDestroyPhase from './WorkflowInfrastructureDestroyPhase';
+import WorkflowInfrastructureRecoveryPhase from './WorkflowInfrastructureRecoveryPhase';
+import WorkflowInfrastructureLifecyclePhase from './WorkflowInfrastructureLifecyclePhase';
 
 /**
  * WorkflowRunPage — opens a workflow and RESUMES it from its last saved phase.
@@ -164,6 +166,18 @@ export default function WorkflowRunPage() {
           workflowId={workflowId}
           workflow={workflow}
           onAdvance={handleRegenerated}
+        />
+      ) : view === 'recovery' ? (
+        <WorkflowInfrastructureRecoveryPhase
+          key={phaseKey}
+          workflowId={workflowId}
+          workflow={workflow}
+        />
+      ) : view === 'lifecycle' ? (
+        <WorkflowInfrastructureLifecyclePhase
+          key={phaseKey}
+          workflowId={workflowId}
+          workflow={workflow}
         />
       ) : IMPLEMENTED_WORKFLOW_VIEWS.has(view) ? (
         // Reserved: future integrated phase surfaces render here.

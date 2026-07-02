@@ -60,6 +60,7 @@ class CodebaseAnalysisAgent(BaseAgent):
         repository_visibility: str = "public",
         github_token: str | None = None,
         uploaded_env: Dict[str, Any] | None = None,
+        force: bool = False,
     ) -> Dict[str, Any]:
         repo_identity = self.fingerprint_service.build_identity(repo_url)
         cache_decision = {
@@ -90,6 +91,18 @@ class CodebaseAnalysisAgent(BaseAgent):
                 "status": "changed",
                 "reason": f"remote_metadata_unavailable:{type(exc).__name__}",
                 "latest_analysis": None,
+            }
+
+        # Forced re-analysis (the operator clicked "Re-analyze"): never serve the
+        # cached result, even when the commit + env fingerprint are unchanged.
+        # Downgrade an ``unchanged`` verdict to ``changed`` so the full
+        # clone → security → LLM analysis path below runs and re-persists a fresh
+        # registry record.
+        if force and cache_decision.get("status") == "unchanged":
+            cache_decision = {
+                "status": "changed",
+                "reason": "forced_reanalysis",
+                "latest_analysis": cache_decision.get("latest_analysis"),
             }
 
         latest_analysis = cache_decision.get("latest_analysis") or {}

@@ -45,11 +45,14 @@ export const workflowAnalysisApi = {
    * @param {string} projectId
    */
   async startWorkflow(projectId) {
-    return this.getAnalysis(projectId);
+    // Reference the module object (not `this`) — these methods are passed as
+    // detached callbacks (useWorkflowAnalysis → mutate(fn)), which strips `this`.
+    return workflowAnalysisApi.getAnalysis(projectId);
   },
 
   async rerunWorkflow(projectId) {
-    return this.getAnalysis(projectId);
+    // See startWorkflow: `this` is undefined when called as a detached callback.
+    return workflowAnalysisApi.getAnalysis(projectId);
   },
 };
 

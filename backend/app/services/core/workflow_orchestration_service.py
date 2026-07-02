@@ -184,6 +184,7 @@ class WorkflowOrchestrationService:
         user: User,
         prompt: str,
         execution_mode: str = "full",
+        force_reanalysis: bool = False,
     ) -> Tuple[Workflow, Task, dict]:
         """Begin a new workflow run for a project.
 
@@ -191,6 +192,9 @@ class WorkflowOrchestrationService:
         pauses for user plan selection. Creates both a ``Workflow`` row and a
         backing ``Task`` row (the orchestrator persists state on the Task,
         which we keep so the legacy ``/workflow/*`` router can also resume it).
+
+        ``force_reanalysis`` is threaded into the codebase-analysis agent so the
+        repository-analysis cache is bypassed (used by :meth:`reanalyze`).
         """
         workflow = Workflow(
             project_id=project.id,
@@ -212,6 +216,39 @@ class WorkflowOrchestrationService:
         )
         TaskService.update_task_status(db, task, "in_progress")
 
+        state = WorkflowOrchestrationService._execute_architecture_decision(
+            db,
+            project=project,
+            workflow=workflow,
+            task=task,
+            prompt=prompt,
+            force_reanalysis=force_reanalysis,
+        )
+
+        db.commit()
+        db.refresh(workflow)
+        db.refresh(task)
+        return workflow, task, state
+
+    @staticmethod
+    def _execute_architecture_decision(
+        db: Session,
+        *,
+        project: Project,
+        workflow: Workflow,
+        task: Task,
+        prompt: str,
+        force_reanalysis: bool = False,
+    ) -> dict:
+        """Run the architecture-decision phase and persist its outcome.
+
+        Shared by :meth:`start_workflow` (fresh run) and :meth:`reanalyze`
+        (in-place re-run on the existing workflow). Runs the codebase analysis
+        (``force_reanalysis`` bypasses the repository-analysis cache), records
+        the resulting phase on ``workflow``, saves the state onto ``task``, and
+        captures the analysis digests into ProjectContext — all WITHOUT
+        committing, so the caller owns the transaction boundary.
+        """
         # Phase 4 — pull the GitHub PAT (if any) from the encrypted store
         # at request time and pass it directly into the agent call. The
         # token is never written to ``state`` here, and the orchestrator's
@@ -234,6 +271,7 @@ class WorkflowOrchestrationService:
             repo_url=project.repository_url or None,
             repository_visibility="public",
             github_token=gh_token,
+            force_reanalysis=force_reanalysis,
         )
 
         # A security-blocked repo never produces architecture strategies. It must
@@ -286,10 +324,69 @@ class WorkflowOrchestrationService:
             phase=capture_phase,
             generated_by="OrchestratorAgent",
         )
+        return state
+
+    @staticmethod
+    def reanalyze(
+        db: Session,
+        *,
+        project: Project,
+        user: User,
+        prompt: str,
+    ) -> Tuple[Workflow, Task, dict]:
+        """Force a fresh codebase re-analysis for a project.
+
+        Unlike :meth:`get_or_create_workflow` — which REUSES an active workflow
+        and never re-runs analysis — this ALWAYS re-invokes the codebase-analysis
+        LLM (bypassing the repository-analysis cache) and overwrites the persisted
+        ProjectContext digests.
+
+        Respects the one-active-workflow invariant: it re-runs analysis IN PLACE
+        on the project's existing active workflow (resetting its phase state so
+        the stale downstream phases are re-run against the new analysis). When no
+        active workflow exists (e.g. the previous run is terminal), it starts a
+        fresh one with the cache bypass enabled.
+        """
+        workflow = WorkflowOrchestrationService.get_active_workflow(db, project.id)
+        task = (
+            WorkflowOrchestrationService.get_backing_task(db, workflow)
+            if workflow is not None
+            else None
+        )
+
+        if workflow is None or task is None:
+            return WorkflowOrchestrationService.start_workflow(
+                db,
+                project=project,
+                user=user,
+                prompt=prompt,
+                force_reanalysis=True,
+            )
+
+        # Re-run in place on the existing active workflow. Reset the phase state
+        # so downstream phases (docker/terraform/…) produced from the OLD analysis
+        # are cleared — they must be re-run against the freshly analyzed repo.
+        TaskService.update_task_status(db, task, "in_progress")
+        workflow.phases_state = {}
+        workflow.status = "running"
+        workflow.finished_at = None
+
+        state = WorkflowOrchestrationService._execute_architecture_decision(
+            db,
+            project=project,
+            workflow=workflow,
+            task=task,
+            prompt=prompt,
+            force_reanalysis=True,
+        )
 
         db.commit()
         db.refresh(workflow)
         db.refresh(task)
+        logger.info(
+            "[Workflow] project=%s workflow=%s RE-ANALYZED in place (phase=%s status=%s)",
+            project.id, workflow.id, workflow.current_phase, workflow.status,
+        )
         return workflow, task, state
 
     @staticmethod
@@ -748,6 +845,12 @@ class WorkflowOrchestrationService:
                     content=f.content,
                     generated_by_agent="GitHubActionsGenerationService",
                     validation_status="passed",
+                    # Running this phase is an explicit (re)generation. The
+                    # renderer is deterministic, so a rerun re-emits identical
+                    # bytes; force a new ArtifactVersion anyway so every
+                    # regenerate is auditable history instead of a silent no-op
+                    # that reuses a stale artifact.
+                    force_new_version=True,
                 )
                 persisted_ids.append(artifact.id)
             pipelines_meta.append({

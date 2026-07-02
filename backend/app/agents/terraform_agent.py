@@ -260,41 +260,37 @@ class TerraformAgent(EnhancedBaseAgent):
         artifacts = response.setdefault("artifacts", {})
 
         # ── Deterministic backend.tf — overwrite any LLM-produced version ────
-        # The LLM is forbidden from emitting backend.tf because state-bucket
-        # hallucination is unrecoverable. State is keyed by project_id (falling
-        # back to task_id) so it persists across runs and is isolated per
-        # project. If the backend cannot be configured we RAISE rather than keep
-        # an LLM-hallucinated or placeholder backend — a missing remote backend
-        # silently breaks destroy and re-deploy.
+        # The LLM is forbidden from emitting backend.tf (state-bucket
+        # hallucination is unrecoverable). Remote S3 state is OPTIONAL: when the
+        # TF_STATE_* env vars are set (+ an id to key state by) we emit the
+        # per-project S3 backend; otherwise we emit a local backend so generation
+        # always succeeds. Never raises just because remote state is unavailable.
         from backend.app.services.terraform_generation.backend_injector import (
-            BackendConfigurationError, backend_config_from_env, render_backend_tf,
-        )
-        from backend.app.services.terraform_generation.renderers.template_renderer import (
-            TerraformBackendConfigError,
+            BackendConfigurationError, backend_config_from_env,
+            remote_backend_configured, render_backend_tf, render_local_backend_tf,
         )
 
         backend_project_id = project_id or task_id
-        if not backend_project_id:
-            raise TerraformBackendConfigError(
-                "Cannot generate backend.tf: a project_id (or task_id) is required "
-                "for per-project remote state isolation.",
-                metadata={"reason": "missing_project_id"},
+        if remote_backend_configured() and backend_project_id:
+            try:
+                cfg = backend_config_from_env(backend_project_id)
+                artifacts["terraform_backend"] = render_backend_tf(cfg)
+                logger.info(
+                    "[TerraformAgent] S3 backend.tf overwritten deterministically "
+                    "(bucket=%s, key=%s)", cfg.bucket, cfg.state_key,
+                )
+            except BackendConfigurationError as exc:
+                logger.warning(
+                    "[TerraformAgent] Remote backend requested but invalid (%s) — "
+                    "using local Terraform state.", exc,
+                )
+                artifacts["terraform_backend"] = render_local_backend_tf()
+        else:
+            logger.warning(
+                "[TerraformAgent] No remote Terraform backend configured "
+                "(TF_STATE_* unset) — using local Terraform state.",
             )
-        try:
-            cfg = backend_config_from_env(backend_project_id)
-        except BackendConfigurationError as exc:
-            raise TerraformBackendConfigError(
-                f"Cannot generate backend.tf: {exc}",
-                metadata={
-                    "reason": "backend_config_unavailable",
-                    "project_id": backend_project_id,
-                },
-            ) from exc
-        artifacts["terraform_backend"] = render_backend_tf(cfg)
-        logger.info(
-            "[TerraformAgent] backend.tf overwritten deterministically "
-            "(bucket=%s, key=%s)", cfg.bucket, cfg.state_key,
-        )
+            artifacts["terraform_backend"] = render_local_backend_tf()
 
         terraform_outputs_contract = self._extract_outputs_contract(
             outputs_hcl=str(artifacts.get("terraform_outputs") or ""),
@@ -353,9 +349,10 @@ class TerraformAgent(EnhancedBaseAgent):
         No LLM is invoked. Every byte of HCL is reproducible from
         {blueprint, strategy_tier, task_id, project_id, container_port}.
 
-        ``project_id`` keys the S3 remote-state backend (per-project isolation).
-        Rendering raises ``TerraformBackendConfigError`` if it is missing or the
-        TF_STATE_* env vars are unset — generation never emits a placeholder.
+        ``project_id`` keys the S3 remote-state backend (per-project isolation)
+        in enterprise mode. Remote state is OPTIONAL: when the TF_STATE_* env vars
+        are unset, a local backend is emitted and generation continues — never a
+        placeholder, never raised.
         """
         container_port = self._first_container_port(infrastructure_context)
         project_name = (

@@ -163,6 +163,97 @@ def test_edit_does_not_invalidate_when_never_approved(db):
     assert artifact.approval_state == "pending_review"
 
 
+# ── force_new_version (explicit regenerate over deterministic bytes) ────────
+
+
+def test_force_new_version_bumps_on_identical_content(db):
+    """The regenerate bug fix: a deterministic re-generation emits identical
+    bytes, but an explicit regenerate must still append an auditable new
+    version instead of a silent no-op that reuses the stale row."""
+    a1 = _upsert(db, content="SAME")
+    db.commit()
+    assert a1.version == 1
+    assert db.query(ArtifactVersion).filter_by(artifact_id=a1.id).count() == 1
+
+    a2 = ArtifactPersistenceService.upsert_artifact(
+        db,
+        project_id="p1",
+        workflow_id=None,
+        artifact_type="docker",
+        artifact_subtype="Dockerfile",
+        content="SAME",  # byte-identical
+        generated_by_agent="test",
+        force_new_version=True,
+    )
+    db.commit()
+
+    assert a2.id == a1.id  # same logical artifact
+    assert a2.version == 2  # but a NEW version was cut
+    versions = (
+        db.query(ArtifactVersion)
+        .filter_by(artifact_id=a1.id)
+        .order_by(ArtifactVersion.version.asc())
+        .all()
+    )
+    # History preserved (v1 kept), never overwritten.
+    assert [v.version for v in versions] == [1, 2]
+    assert all(v.content == "SAME" for v in versions)
+
+
+def test_force_new_version_preserves_approval_on_identical_content(db):
+    """Forcing a version over IDENTICAL bytes must NOT invalidate approval —
+    the reviewer approved these exact bytes, so the approval still applies."""
+    artifact = _upsert(db, content="APPROVED-BYTES")
+    db.commit()
+    ArtifactApprovalService.record(
+        db, artifact=artifact, user_id="reviewer-1", action="approve",
+    )
+    assert artifact.approval_state == "approved"
+
+    ArtifactPersistenceService.upsert_artifact(
+        db,
+        project_id="p1",
+        workflow_id=None,
+        artifact_type="docker",
+        artifact_subtype="Dockerfile",
+        content="APPROVED-BYTES",  # identical
+        generated_by_agent="test",
+        force_new_version=True,
+    )
+    db.commit()
+    db.refresh(artifact)
+    assert artifact.version == 2
+    assert artifact.approval_state == "approved"  # preserved
+    assert artifact.approved_content_hash == compute_content_hash("APPROVED-BYTES")
+
+
+def test_force_new_version_still_invalidates_on_real_change(db):
+    """force_new_version does not weaken governance: a REAL content change
+    still invalidates approval, exactly as an ordinary edit would."""
+    artifact = _upsert(db, content="OLD")
+    db.commit()
+    ArtifactApprovalService.record(
+        db, artifact=artifact, user_id="reviewer-1", action="approve",
+    )
+    assert artifact.approval_state == "approved"
+
+    ArtifactPersistenceService.upsert_artifact(
+        db,
+        project_id="p1",
+        workflow_id=None,
+        artifact_type="docker",
+        artifact_subtype="Dockerfile",
+        content="NEW",  # real change
+        generated_by_agent="test",
+        force_new_version=True,
+    )
+    db.commit()
+    db.refresh(artifact)
+    assert artifact.version == 2
+    assert artifact.approval_state == "pending_review"
+    assert artifact.approved_content_hash is None
+
+
 # ── ArtifactApprovalService binding ────────────────────────────────────────
 
 

@@ -156,3 +156,76 @@ def test_active_workflow_without_task_creates_fresh(db, project, stub_agents):
     # A usable workflow (with a task) is created instead of returning the broken one.
     assert wf.id != "w-broken"
     assert task is not None
+
+
+# ─── Force re-analysis (WorkflowOrchestrationService.reanalyze) ───────────────
+
+
+def test_reanalyze_reruns_in_place_on_active_workflow(db, project, stub_agents):
+    """reanalyze must re-run analysis on the EXISTING active workflow (not reuse
+    it untouched like get_or_create, and not create a duplicate), clearing the
+    stale downstream phase state so it is re-run against the fresh analysis."""
+    from backend.app.services.core.workflow_orchestration_service import (
+        WorkflowOrchestrationService as WOS,
+    )
+
+    wf1, task1, _ = WOS.get_or_create_workflow(
+        db, project=project, user=_user(), prompt="deploy",
+    )
+    # Simulate downstream progress that a re-analysis must invalidate.
+    wf1.phases_state = {**(wf1.phases_state or {}), "DOCKER": {"status": "completed"}}
+    db.commit()
+
+    wf2, task2, _ = WOS.reanalyze(
+        db, project=project, user=_user(), prompt="re-analyze",
+    )
+
+    # In place: same workflow + backing task, no duplicate row.
+    assert wf2.id == wf1.id
+    assert task2.id == task1.id
+    assert _wf_count(db) == 1
+    # Stale downstream phase cleared; the fresh architecture-decision is recorded.
+    assert "DOCKER" not in (wf2.phases_state or {})
+    assert "ARCHITECTURE_DECISION" in (wf2.phases_state or {})
+    assert wf2.status == "awaiting_input"
+
+
+def test_reanalyze_starts_fresh_when_no_active_workflow(db, project, stub_agents):
+    """With no active workflow, reanalyze starts a new run (cache still bypassed)."""
+    from backend.app.services.core.workflow_orchestration_service import (
+        WorkflowOrchestrationService as WOS,
+    )
+
+    assert _wf_count(db) == 0
+    wf, task, _ = WOS.reanalyze(
+        db, project=project, user=_user(), prompt="x",
+    )
+    assert wf is not None and task is not None
+    assert _wf_count(db) == 1
+
+
+def test_reanalyze_threads_force_flag_into_orchestrator(db, project, monkeypatch):
+    """reanalyze must call the orchestrator with force_reanalysis=True so the
+    repository-analysis cache is bypassed and gpt-5-mini actually re-runs."""
+    from backend.app.agents.orchestrator_agent import OrchestratorAgent
+    from backend.app.services.core.credentials_service import CredentialsService
+    from backend.app.services.core.project_context_service import ProjectContextService
+    from backend.app.services.core.workflow_orchestration_service import (
+        WorkflowOrchestrationService as WOS,
+    )
+
+    calls: list[dict] = []
+
+    def _capture(self, **kw):
+        calls.append(kw)
+        return dict(_ARCH_STATE)
+
+    monkeypatch.setattr(OrchestratorAgent, "__init__", lambda self: None)
+    monkeypatch.setattr(OrchestratorAgent, "run_architecture_decision_phase", _capture)
+    monkeypatch.setattr(CredentialsService, "get_credential", lambda *a, **k: None)
+    monkeypatch.setattr(ProjectContextService, "capture_from_state", lambda *a, **k: [])
+
+    WOS.reanalyze(db, project=project, user=_user(), prompt="x")
+
+    assert calls, "orchestrator was never invoked"
+    assert calls[-1].get("force_reanalysis") is True

@@ -126,6 +126,8 @@ export const BACKEND_WORKFLOW_PHASE_META = {
   REPOSITORY_INSTALLATION: { label: 'Repository Installation', icon: 'fa-code-branch' },
   WORKFLOW_MONITORING: { label: 'Workflow Monitoring', icon: 'fa-satellite-dish' },
   INFRASTRUCTURE_DESTROY: { label: 'Infrastructure Destroy', icon: 'fa-trash-can' },
+  INFRASTRUCTURE_RECOVERY: { label: 'Infrastructure Recovery', icon: 'fa-kit-medical' },
+  INFRASTRUCTURE_LIFECYCLE: { label: 'Infrastructure Lifecycle', icon: 'fa-server' },
 };
 
 /**
@@ -173,12 +175,18 @@ export const WORKFLOW_PHASE_VIEW = {
   // Infrastructure destroy — tear down the provisioned AWS resources via a
   // GitHub Actions destroy.yml (the backend never runs Terraform).
   INFRASTRUCTURE_DESTROY: 'destroy',
+  // Infrastructure recovery — read-only diagnosis of a failed bootstrap
+  // (classify the failure + recommend a recovery; no execution).
+  INFRASTRUCTURE_RECOVERY: 'recovery',
+  // Infrastructure lifecycle — the FINAL operational phase (after monitoring):
+  // status, terraform state, inventory, recovery history, retry/destroy actions.
+  INFRASTRUCTURE_LIFECYCLE: 'lifecycle',
 };
 
 /** Views that are fully integrated with live backend data today. */
 export const IMPLEMENTED_WORKFLOW_VIEWS = new Set([
   'analysis', 'planning', 'docker', 'terraform', 'github_actions',
-  'repository_installation', 'monitoring', 'destroy',
+  'repository_installation', 'monitoring', 'destroy', 'recovery', 'lifecycle',
 ]);
 
 /* ===========================================================================
@@ -206,6 +214,8 @@ export const CANONICAL_PHASE_ORDER = [
   'REPOSITORY_INSTALLATION',
   'WORKFLOW_MONITORING',
   'INFRASTRUCTURE_DESTROY',
+  'INFRASTRUCTURE_RECOVERY',
+  'INFRASTRUCTURE_LIFECYCLE',
 ];
 
 /** Direct dependency edges: phase → phases that CONSUME its output. */
@@ -356,6 +366,16 @@ export const STATUS_META = {
   destroy_running: { label: 'Destroying', variant: 'running', icon: 'fa-spinner' },
   destroy_succeeded: { label: 'Destroyed', variant: 'success', icon: 'fa-circle-check' },
   destroy_failed: { label: 'Destroy failed', variant: 'danger', icon: 'fa-circle-xmark' },
+  // Infrastructure-recovery diagnosis (phases_state[INFRASTRUCTURE_RECOVERY].status).
+  recovery_available: { label: 'Recovery available', variant: 'warning', icon: 'fa-kit-medical' },
+  no_failure_detected: { label: 'No failure detected', variant: 'success', icon: 'fa-circle-check' },
+  // Infrastructure lifecycle — aggregate status + event statuses.
+  Healthy: { label: 'Healthy', variant: 'success', icon: 'fa-circle-check' },
+  Failed: { label: 'Failed', variant: 'danger', icon: 'fa-circle-xmark' },
+  Destroyed: { label: 'Destroyed', variant: 'pending', icon: 'fa-ban' },
+  Pending: { label: 'Pending', variant: 'pending', icon: 'fa-hourglass-half' },
+  requested: { label: 'Requested', variant: 'warning', icon: 'fa-paper-plane' },
+  info: { label: 'Info', variant: 'pending', icon: 'fa-circle-info' },
   suspended: { label: 'Suspended', variant: 'danger', icon: 'fa-user-slash' },
   // Backend terminal Workflow.status for an abandoned run.
   cancelled: { label: 'Cancelled', variant: 'pending', icon: 'fa-ban' },

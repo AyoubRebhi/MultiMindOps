@@ -252,6 +252,86 @@ export function useDestroyPhase(projectId, workflowId, pollMs = 15000) {
 }
 
 /**
+ * useRecoveryPhase — fetch the read-only Infrastructure Recovery diagnosis (GET
+ * .../recovery) for a failed bootstrap. The backend is purely diagnostic (it
+ * never runs Terraform / touches AWS); `refetch` powers the manual refresh.
+ *
+ * Polls lightly while the bootstrap run is still in flight (not yet failed and
+ * no report) so the surface flips to "Recovery available" as soon as a failure
+ * is observed; stops once a report exists or there is nothing to watch.
+ *
+ * @param {string} projectId
+ * @param {string} workflowId
+ * @param {number} pollMs   poll interval in ms (default 20000)
+ */
+export function useRecoveryPhase(projectId, workflowId, pollMs = 20000) {
+  const ready = !!projectId && !!workflowId;
+  const state = useAsync(
+    () =>
+      ready
+        ? workflowApi.getRecoveryPhase(projectId, workflowId)
+        : Promise.resolve(null),
+    [projectId, workflowId],
+    { immediate: ready }
+  );
+
+  const { data, refetch } = state;
+  // Keep polling only while we have data, the run is being observed, and no
+  // failure has been diagnosed yet (so a fresh failure surfaces automatically).
+  const keepPolling =
+    ready && !!data && data.monitoringAvailable && !data.recoveryAvailable;
+
+  useEffect(() => {
+    if (!keepPolling || !pollMs) return undefined;
+    const id = setInterval(() => {
+      refetch();
+    }, pollMs);
+    return () => clearInterval(id);
+  }, [keepPolling, pollMs, refetch]);
+
+  return state;
+}
+
+/**
+ * useLifecyclePhase — fetch the Infrastructure Lifecycle dashboard (GET
+ * .../lifecycle) and POLL it while a run is in flight, so status, history and
+ * action availability stay live without a WebSocket. Read-only fetch; `refetch`
+ * powers the manual Refresh button and is called after retry/destroy actions.
+ *
+ * @param {string} projectId
+ * @param {string} workflowId
+ * @param {number} pollMs   poll interval in ms (default 20000)
+ */
+export function useLifecyclePhase(projectId, workflowId, pollMs = 20000) {
+  const ready = !!projectId && !!workflowId;
+  const state = useAsync(
+    () =>
+      ready
+        ? workflowApi.getLifecyclePhase(projectId, workflowId)
+        : Promise.resolve(null),
+    [projectId, workflowId],
+    { immediate: ready }
+  );
+
+  const { data, refetch } = state;
+  // Keep polling while any observed pipeline run is still in flight.
+  const isLive = (r) => r && r.found && !r.conclusion;
+  const keepPolling =
+    ready && !!data &&
+    (isLive(data.bootstrapRun) || isLive(data.deployRun) || isLive(data.destroyRun));
+
+  useEffect(() => {
+    if (!keepPolling || !pollMs) return undefined;
+    const id = setInterval(() => {
+      refetch();
+    }, pollMs);
+    return () => clearInterval(id);
+  }, [keepPolling, pollMs, refetch]);
+
+  return state;
+}
+
+/**
  * useTerraformPhase — fetch everything the Terraform surface needs (Generation
  * AND Validation) in ONE shot, from existing endpoints: the workflow's
  * authoritative `phases_state` (GET project-scoped workflow) and the project
