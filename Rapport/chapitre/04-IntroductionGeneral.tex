@@ -4,55 +4,52 @@
 \adjustmtc
 \thispagestyle{MyStyle}
 
-Les organisations qui développent des applications modernes font face à un défi
-croissant~: la complexité des environnements cloud s'est considérablement accrue ces
-dernières années, au point que configurer et déployer une infrastructure correcte est
-devenu une tâche qui mobilise des équipes entières. Docker, Kubernetes, Terraform,
-pipelines CI/CD~--- chaque couche technologique ajoute sa propre couche de
-configuration, d'erreurs potentielles, et de coûts difficiles à anticiper.
+Le Cloud Computing et les pratiques DevOps ont profondément transformé la manière dont
+les logiciels sont conçus, déployés et exploités. En quelques années, les projets
+informatiques modernes se sont progressivement détachés des serveurs traditionnels pour
+adopter des architectures dites \textit{cloud-native}, reposant sur la conteneurisation,
+l'\textit{Infrastructure as Code} et les pipelines d'intégration et de livraison
+continues (CI/CD). Ces approches favorisent des cycles de développement plus courts, une
+plus grande automatisation et une meilleure reproductibilité des environnements.
 
-Dans ce contexte, les pratiques DevSecOps ont émergé comme une réponse à cette
-fragmentation~: l'idée est d'intégrer la sécurité, l'automatisation et la livraison
-continue dans un même flux de travail cohérent. En théorie, cela permet de déployer
-plus vite, plus sûrement, et avec moins d'interventions manuelles. En pratique,
-mettre en place ce flux demande un niveau d'expertise que beaucoup d'équipes n'ont
-pas~--- ou n'ont pas le temps d'acquérir.
+Cette évolution s'accompagne toutefois d'une augmentation notable de la complexité
+architecturale. Pour livrer une application aujourd'hui, un ingénieur doit maîtriser un
+ensemble hétérogène de technologies~--- Docker, Kubernetes, Terraform, fournisseurs cloud
+et outils d'automatisation~--- et prendre de nombreuses décisions techniques tout au long
+du cycle de vie du logiciel. Le choix d'une architecture, le dimensionnement des
+ressources, l'organisation des artefacts de déploiement et la mise en place des pipelines
+constituent autant d'étapes exigeantes, où une erreur de conception peut avoir des
+répercussions importantes sur la fiabilité et le coût de l'infrastructure.
 
-Les outils basés sur l'intelligence artificielle ont tenté d'apporter une réponse à
-cette problématique. Certains assistent la génération de code, d'autres analysent des
-pipelines CI/CD ou génèrent des configurations d'infrastructure. Mais ces solutions
-restent partielles. Un outil qui génère un Dockerfile n'analyse pas votre dépôt pour
-comprendre votre stack. Un assistant qui propose une architecture ne vérifie pas si
-elle est cohérente avec vos contraintes de budget. Et quand un déploiement échoue,
-vous êtes souvent seul face aux logs.
+Parallèlement, l'émergence de l'intelligence artificielle générative et des grands
+modèles de langage (LLM) ouvre de nouvelles perspectives pour accompagner le travail
+d'ingénierie. Ces modèles se révèlent progressivement capables de soutenir la conception
+logicielle, la génération d'infrastructures et l'automatisation de tâches répétitives.
+Il convient cependant de ne pas surestimer leur portée~: l'IA doit être envisagée non pas
+comme un substitut à l'expertise humaine, mais comme une technologie d'aide à la
+décision, dont le rôle est d'assister l'ingénieur plutôt que de se substituer à lui.
 
-C'est à partir de ce constat que ce projet a été initié, dans le cadre d'un stage de
-fin d'études au sein de Talan Tunisie Consulting~: concevoir une plateforme capable
-d'accompagner l'utilisateur de bout en bout dans la création et le déploiement d'une
-infrastructure cloud moderne. Non pas comme un simple générateur de fichiers, mais
-comme un système capable d'analyser, de raisonner, de générer et de corriger~---
-automatiquement, et de manière cohérente.
+Dans la pratique, les assistants d'ingénierie fondés sur l'IA restent aujourd'hui
+partiels. Ils se limitent le plus souvent à produire des extraits de code ou des fichiers
+de configuration isolés, sans offrir une vision d'ensemble du projet. Ils proposent
+rarement une analyse globale du dépôt, une recommandation d'architecture cloud adaptée aux
+contraintes du projet, une préparation cohérente des artefacts de déploiement, une
+validation interactive des choix, une correction intelligente des erreurs, ni un cadre
+clair pour la supervision humaine des décisions. L'ingénieur se retrouve ainsi à assembler
+manuellement des sorties fragmentées, sans garantie de cohérence globale.
 
-La plateforme développée s'appuie sur une architecture multi-agents IA, où chaque
-agent est spécialisé dans une étape précise du workflow DevSecOps~: analyse du code
-source, décision architecturale, estimation des coûts AWS, génération des artefacts
-(Docker, Terraform, Kubernetes, CI/CD), et correction automatique des erreurs
-d'exécution. Ces agents ne fonctionnent pas de manière isolée~; ils partagent un
-contexte commun et collaborent autour d'un workflow orchestré, ce qui garantit la
-cohérence globale des artefacts produits.
-
-Pour limiter les hallucinations inhérentes aux modèles de langage, nous avons adopté
-une approche de génération contrainte baptisée \textit{Structured Constrained
-Generation}. Plutôt que de laisser le LLM générer librement un fichier entier, le
-système découpe la génération en sections indépendantes, guidées par des
-\textit{blueprints} structurés et enrichies par un système RAG spécialisé. Cette
-approche s'est avérée plus stable et plus fiable que la génération classique, en
-particulier pour les configurations Terraform et Kubernetes.
-
-L'objectif principal de ce travail est donc de fournir une plateforme intelligente,
-utilisable concrètement, qui réduit la charge cognitive et le temps de mise en place
-des infrastructures cloud~--- en s'appuyant sur l'IA non pas comme un gadget, mais
-comme un véritable assistant d'ingénierie.
+C'est dans ce contexte que s'inscrit ce projet, réalisé dans le cadre d'un stage de fin
+d'études au sein de Talan Tunisie Consulting. Nous proposons \textbf{MultiMindOps}, une
+plateforme d'assistance IA destinée aux ingénieurs Cloud et DevOps. Plutôt que de générer
+des fichiers isolés, la plateforme accompagne l'ingénieur de façon continue~: elle analyse
+automatiquement un projet logiciel, propose plusieurs architectures cloud, estime les
+ressources nécessaires, génère les principaux artefacts DevOps et accompagne l'utilisateur
+dans la validation des décisions. La conception de MultiMindOps repose sur une philosophie
+\textit{Human-in-the-Loop}, dans laquelle l'ingénieur conserve la maîtrise des décisions
+stratégiques et valide chaque étape du processus. La sécurité n'y est pas traitée comme
+une fonctionnalité autonome, mais comme une exigence de qualité transversale, intégrée aux
+artefacts générés ainsi qu'à l'architecture de la plateforme, et soutenue par des bonnes
+pratiques appliquées au moment de la génération.
 
 \bigskip
 
@@ -60,25 +57,20 @@ comme un véritable assistant d'ingénierie.
 
 \begin{itemize}
     \item \textbf{Chapitre 1 --- Cadre général du projet~:} présentation de
-    l'organisme d'accueil, contexte et problématique, analyse des solutions
-    existantes, description de la solution proposée, analyse des besoins et
-    méthodologie adoptée.
+    l'organisme d'accueil, du contexte et de la problématique, analyse des solutions
+    existantes, description de la solution proposée et de la méthodologie adoptée.
 
-    \item \textbf{Chapitre 2 --- Concepts fondamentaux~:} état de l'art des
-    technologies utilisées~: architectures multi-agents, LLM, RAG, DevSecOps,
-    Infrastructure as Code, orchestration cloud.
+    \item \textbf{Chapitre 2 --- Concepts fondamentaux~:} état de l'art des concepts et
+    technologies mobilisés~: intelligence artificielle générative et LLM, architectures
+    multi-agents, RAG, Infrastructure as Code, conteneurisation et orchestration cloud.
 
-    \item \textbf{Chapitre 3 --- Analyse et conception~:} modélisation de
-    l'architecture globale du système, diagrammes UML, choix technologiques et
-    conception détaillée des agents et des workflows.
+    \item \textbf{Chapitre 3 --- Analyse et conception~:} analyse des besoins,
+    modélisation de l'architecture globale du système, diagrammes UML et conception
+    détaillée des agents et des workflows.
 
-    \item \textbf{Chapitre 4 --- Étude expérimentale~:} protocoles de validation,
-    tests fonctionnels et d'intégration, analyse des résultats et évaluation des
-    performances de la plateforme.
-
-    \item \textbf{Chapitre 5 --- Réalisation~:} implémentation des agents IA,
-    génération des artefacts DevSecOps, interfaces utilisateur et démonstration
-    des fonctionnalités de la plateforme.
+    \item \textbf{Chapitre 4 --- Réalisation et mise en œuvre~:} implémentation de la
+    plateforme, mise en place des agents IA, génération des artefacts DevOps, interfaces
+    utilisateur et démonstration des fonctionnalités.
 \end{itemize}
 
 \bigskip

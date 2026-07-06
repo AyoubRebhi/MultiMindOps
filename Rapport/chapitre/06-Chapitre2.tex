@@ -7,283 +7,221 @@
 
 \section{Introduction}
 
-Ce chapitre a pour objectif de présenter les concepts techniques qui constituent la
-base de compréhension du projet. Avant d'aborder l'architecture et l'implémentation
-de la plateforme, il est nécessaire de clarifier les notions fondamentales sur
-lesquelles elle repose~: le DevSecOps, le Cloud Computing, l'Infrastructure as Code,
-les pipelines CI/CD, la conteneurisation, et l'intégration de l'intelligence
-artificielle dans les environnements d'automatisation. Ces concepts ne sont pas
-simplement des buzzwords~; ils définissent concrètement la manière dont les systèmes
-logiciels modernes sont construits et exploités.
+Ce chapitre présente les concepts nécessaires à la compréhension de \textbf{MultiMindOps}.
+Il ne vise pas à dresser un cours général sur le DevOps ou le Cloud, mais à réunir les
+notions strictement utiles pour situer les choix de la plateforme. Nous partons de
+l'ingénierie Cloud et DevOps, puis nous décrivons les technologies cloud mobilisées (AWS,
+Terraform, Docker, Kubernetes). Nous détaillons ensuite les briques d'intelligence
+artificielle qui font le c\oe ur du système, avant de clarifier la manière dont la qualité
+et la sécurité sont intégrées aux artefacts produits. Chaque notion est présentée en lien
+direct avec une capacité de la plateforme, plutôt que de façon isolée.
 
-\section{DevSecOps : culture et pratiques}
+\section{Ingénierie Cloud et DevOps}
 
-\subsection{Origines et définition}
+\subsection{Cloud-native et automatisation}
 
-Le terme DevSecOps est issu de la fusion de trois disciplines~: le développement
-logiciel (\textit{Dev}), les opérations système (\textit{Ops}), et la sécurité
-(\textit{Sec}). Il représente une évolution naturelle du mouvement DevOps apparu dans
-les années 2010, dont l'objectif était de rapprocher les équipes de développement et
-d'exploitation pour accélérer les cycles de livraison. L'ajout de la sécurité comme
-composante native~--- plutôt que comme une étape finale de validation~--- est ce qui
-définit le DevSecOps.
+Le mouvement DevOps est né du besoin de rapprocher le développement et l'exploitation afin
+de raccourcir les cycles de livraison et de fiabiliser les mises en production~\cite{DEVOPS_HANDBOOK}.
+Sa logique repose sur l'automatisation~: puisque les déploiements deviennent fréquents, les
+étapes manuelles doivent laisser place à des chaînes reproductibles, testées et traçables.
 
-Concrètement, l'idée est d'intégrer les contrôles de sécurité directement dans le
-pipeline de développement et de déploiement, à chaque étape, plutôt que de traiter
-la sécurité comme une phase distincte. On parle de \textit{shift-left}~: les
-vérifications de vulnérabilités, les analyses de code statique et les tests de
-conformité sont effectués le plus tôt possible dans le cycle de vie logiciel.
-
-\subsection{Principes clés}
-
-Plusieurs principes structurent les pratiques DevSecOps. Le premier est
-l'\textbf{automatisation}~: les contrôles manuels ne peuvent pas suivre la cadence
-des déploiements continus. Il faut donc automatiser les tests, les scans de
-vulnérabilités, et les validations de configuration. Le deuxième principe est la
-\textbf{traçabilité}~: chaque artefact déployé doit pouvoir être retracé jusqu'à son
-code source, ses dépendances et ses tests. Enfin, la \textbf{responsabilité partagée}
-implique que la sécurité n'est pas le problème d'une seule équipe~--- chaque
-développeur, opérateur et architecte est concerné.
-
-\subsection{DevSecOps et intelligence artificielle}
-
-L'émergence des outils d'IA appliqués au DevSecOps a ouvert de nouvelles
-perspectives. Les modèles de langage peuvent analyser des logs d'erreur, suggérer
-des corrections de configuration, ou détecter des patterns anormaux dans les
-pipelines. C'est précisément dans cette direction que s'inscrit notre projet~: tirer
-parti des capacités des LLM pour automatiser des tâches qui requièrent habituellement
-une expertise humaine avancée.
-
-\section{Cloud Computing et Infrastructure as Code}
-
-\subsection{Cloud Computing : rappel des modèles}
-
-Le Cloud Computing désigne la mise à disposition de ressources informatiques~---
-serveurs, stockage, bases de données, réseau~--- via internet, à la demande et
-généralement à la consommation. On distingue trois grands modèles de service~:
-l'IaaS (\textit{Infrastructure as a Service}), le PaaS (\textit{Platform as a
-Service}) et le SaaS (\textit{Software as a Service}). Dans le contexte de ce
-projet, c'est principalement l'IaaS qui est visé, avec AWS comme fournisseur de
-référence.
-
-Les architectures cloud modernes sont dites \textit{cloud-native} lorsqu'elles sont
-conçues pour exploiter les caractéristiques propres au cloud~: élasticité, haute
-disponibilité, distribution géographique, et facturation à l'usage. Ce modèle impose
-des choix techniques spécifiques, notamment l'utilisation de conteneurs, de
-microservices et d'orchestrateurs.
+Les applications modernes prolongent cette logique à travers le modèle
+\textit{cloud-native}~\cite{CNCF}, conçu pour tirer parti de l'élasticité, de la haute
+disponibilité et de la facturation à l'usage du cloud. Ce modèle s'appuie sur les
+conteneurs, les microservices et les orchestrateurs. Il apporte de l'agilité, mais déplace
+la difficulté vers l'ingénierie de l'infrastructure~: multiplication des outils, nombreuses
+décisions d'architecture, et sensibilité accrue au coût et à la performance. La sécurité
+constitue, dans ce cadre, l'un des attributs de qualité à préserver au même titre que la
+fiabilité et la maîtrise des dépenses. C'est précisément cette charge d'ingénierie que
+MultiMindOps cherche à alléger, en automatisant les étapes répétitives tout en laissant la
+décision à l'ingénieur.
 
 \subsection{Infrastructure as Code}
 
-L'Infrastructure as Code (IaC) consiste à décrire l'infrastructure d'un système sous
-forme de fichiers de configuration versionnables, lisibles et automatisables.
-Plutôt que de configurer des serveurs manuellement via une interface graphique, on
-écrit du code qui décrit l'état désiré de l'infrastructure, et un outil se charge
-de l'appliquer.
+L'\textit{Infrastructure as Code} (IaC) consiste à décrire l'infrastructure sous forme de
+fichiers versionnables plutôt que de la configurer manuellement~\cite{IAC_MORRIS}. On y
+déclare l'état souhaité des ressources, et un outil se charge de l'appliquer. L'intérêt
+principal est la \textbf{reproductibilité}~: un même code produit un même environnement, ce
+qui réduit les écarts entre développement et production et facilite l'audit des changements.
 
-\textbf{Terraform}, développé par HashiCorp, est l'outil IaC le plus répandu dans
-les environnements cloud. Il utilise un langage déclaratif, le HCL
-(\textit{HashiCorp Configuration Language}), pour décrire des ressources cloud AWS,
-Azure, GCP, et bien d'autres. Son approche déclarative signifie que l'on décrit
-\textit{ce qu'on veut}, non \textit{comment y arriver}~--- Terraform se charge du
-plan d'exécution.
+Cette propriété est centrale pour MultiMindOps~: puisque la plateforme génère des artefacts
+d'infrastructure, ceux-ci doivent être cohérents et directement exploitables. La
+reproductibilité attendue de l'IaC impose donc que la génération soit rigoureuse et
+vérifiée, et non approximative.
 
-Un point important est la gestion de l'\textbf{état}~: Terraform maintient un
-fichier d'état (\texttt{terraform.tfstate}) qui représente la correspondance entre
-ce qui est décrit dans le code et ce qui existe réellement dans le cloud. Cette
-notion est fondamentale pour comprendre pourquoi la génération automatique de fichiers
-Terraform doit être rigoureuse et cohérente.
+\subsection{CI/CD moderne}
 
-\subsection{Estimation des coûts cloud}
+L'intégration continue (CI) consiste à fusionner fréquemment les modifications de code en
+déclenchant automatiquement compilation, tests et analyses~; la livraison continue (CD)
+prolonge ce principe jusqu'au déploiement automatisé~\cite{DEVOPS_HANDBOOK}. Un pipeline
+enchaîne classiquement le déclenchement sur \textit{push}, la construction des images, les
+tests, la production des artefacts et le déploiement.
 
-L'un des défis majeurs des infrastructures cloud est la maîtrise des coûts. Selon la
-nature des ressources provisionnées~--- instances EC2, bases de données RDS, services
-S3, load balancers~--- la facture mensuelle peut varier considérablement. Les
-pratiques FinOps, qui combinent ingénierie financière et exploitation cloud,
-recommandent d'anticiper ces coûts dès la phase de conception. C'est pourquoi la
-plateforme développée dans ce projet intègre un module d'estimation des coûts AWS,
-permettant de comparer différentes stratégies d'architecture avant tout déploiement.
+Aujourd'hui, \textbf{GitHub Actions} est l'un des outils les plus répandus pour décrire ces
+pipelines directement dans le dépôt~\cite{GITHUB_ACTIONS_DOCS}. L'automatisation qu'il
+apporte réduit les délais et limite les erreurs humaines liées aux déploiements manuels.
+MultiMindOps s'inscrit dans cette continuité en préparant des pipelines cohérents avec
+l'infrastructure retenue, afin que l'artefact de déploiement ne soit pas dissocié des choix
+d'architecture.
 
-\section{Intégration et Déploiement Continus (CI/CD)}
+\section{Technologies Cloud}
 
-\subsection{Principes du CI/CD}
+Cette section décrit les technologies cloud sur lesquelles s'appuient les artefacts générés
+par la plateforme.
 
-L'intégration continue (CI) désigne la pratique qui consiste à intégrer fréquemment
-les modifications de code dans un dépôt partagé, en déclenchant automatiquement une
-série de vérifications~: compilation, tests unitaires, analyse statique. L'objectif
-est de détecter les régressions le plus tôt possible, avant que le code ne soit
-fusionné dans la branche principale.
+\subsection{AWS et ses principaux services}
 
-Le déploiement continu (CD) étend ce principe à la livraison et au déploiement.
-Une fois le code validé, il peut être automatiquement déployé en environnement de
-préproduction, voire de production, sans intervention manuelle. Cette automatisation
-réduit les délais de mise en production et limite les erreurs humaines liées aux
-déploiements manuels.
+AWS est le fournisseur de référence retenu dans ce projet. Il propose un catalogue étendu de
+services, dont les plus courants pour une application web sont~: \texttt{EC2} (calcul),
+\texttt{RDS} (bases de données managées), \texttt{S3} (stockage objet), \texttt{ECS} et
+\texttt{EKS} (exécution de conteneurs), les \textit{Elastic Load Balancers} (répartition de
+charge) et \texttt{IAM} (gestion des accès). Le \textit{Well-Architected Framework} d'AWS
+formalise les bonnes pratiques associées à ces services en matière de fiabilité, de
+performance, de coût et de sécurité~\cite{AWS_WELL_ARCHITECTED}.
 
-\subsection{Structure d'un pipeline CI/CD}
+Un principe d'ingénierie important pour la plateforme découle de ce catalogue~: les besoins
+d'infrastructure peuvent être \emph{déduits} du projet lui-même plutôt que produits au
+hasard. En analysant le dépôt~--- frameworks, dépendances, environnement d'exécution et
+besoins de stockage~--- il devient possible d'associer un contexte technique à des services
+adaptés. Ainsi, un projet utilisant PostgreSQL oriente naturellement vers une base
+\texttt{Amazon RDS}~; la présence d'actifs statiques suggère un stockage \texttt{Amazon S3}~;
+une application distribuée conduit à envisager \texttt{ECS}, \texttt{EKS} ou un
+\textit{Load Balancer}. Cette approche ancre la recommandation d'architecture dans le
+contexte réel du projet, et non dans une génération arbitraire du modèle de langage.
 
-Un pipeline CI/CD est typiquement composé de plusieurs étapes enchaînées~:
+\subsection{Terraform}
 
-\begin{itemize}
-    \item \textbf{Source~:} déclenchement du pipeline à chaque \textit{push} ou
-    \textit{pull request} sur le dépôt.
-    \item \textbf{Build~:} compilation du code et construction des images Docker si
-    applicable.
-    \item \textbf{Test~:} exécution des tests unitaires, d'intégration, et des
-    analyses de sécurité (\textit{SAST}, \textit{DAST}).
-    \item \textbf{Package~:} création des artefacts déployables (images, archives).
-    \item \textbf{Deploy~:} déploiement automatisé en environnement cible via des
-    outils comme Kubernetes ou Terraform.
-\end{itemize}
+\textbf{Terraform}, développé par HashiCorp, est l'outil IaC le plus répandu pour le
+provisionnement multi-cloud~\cite{TERRAFORM_DOCS}. Il utilise un langage déclaratif, le HCL
+(\textit{HashiCorp Configuration Language}), où l'on décrit \textit{ce que l'on veut}, à
+charge pour l'outil de calculer le plan d'exécution.
 
-Les outils les plus utilisés pour implémenter ces pipelines sont GitHub Actions,
-GitLab CI, Jenkins et ArgoCD pour les déploiements continus sur Kubernetes.
+Un point déterminant est la gestion de l'\textbf{état}~: le fichier \texttt{terraform.tfstate}
+maintient la correspondance entre le code et les ressources réellement provisionnées. Cette
+notion explique pourquoi la génération automatique de configurations Terraform doit être
+cohérente et déterministe~: un artefact mal formé ou incohérent avec l'état existant peut
+rendre l'infrastructure inexploitable.
 
-\subsection{CI/CD et DevSecOps}
+\subsection{Docker et Kubernetes}
 
-Dans une approche DevSecOps, les pipelines CI/CD ne se contentent pas de tester le
-code~; ils intègrent des étapes de vérification de sécurité automatisée. Cela inclut
-l'analyse des dépendances pour détecter des vulnérabilités connues, le scan des
-images Docker pour identifier des failles dans les couches de base, et la validation
-des configurations d'infrastructure avant déploiement. Ces vérifications, si elles
-sont bien intégrées, ne ralentissent pas le pipeline~--- elles le sécurisent.
+Un conteneur encapsule une application avec toutes ses dépendances dans une unité légère et
+portable, partageant le noyau de l'hôte~; il démarre plus vite et pèse moins qu'une machine
+virtuelle. \textbf{Docker} a popularisé ce paradigme~: un \texttt{Dockerfile} décrit, sous
+forme d'instructions, comment construire l'image, ensuite exécutable à l'identique sur toute
+machine disposant du moteur Docker~\cite{DOCKER_DOCS}. La qualité de ce fichier~--- image de
+base, droits d'exécution, gestion des variables~--- influe directement sur la sécurité et la
+taille de l'image, ce qui justifie une génération encadrée et validée.
 
-\section{Conteneurisation et Orchestration}
+Lorsque le nombre de conteneurs croît, l'orchestration devient indispensable.
+\textbf{Kubernetes} s'est imposé comme le standard pour déployer, mettre à l'échelle et
+maintenir des flottes de conteneurs~\cite{K8S_DOCS}. Il repose sur des abstractions
+déclarées en YAML (\textit{Pods}, \textit{Services}, \textit{Deployments}), qui s'inscrivent
+naturellement dans une démarche IaC~\cite{CNCF}. L'association de Docker (portabilité), de
+Kubernetes (orchestration) et de Terraform (provisionnement) forme le socle des
+architectures cloud-native modernes. Pour MultiMindOps, cela signifie que les différents
+artefacts (Dockerfile, manifestes Kubernetes, fichiers Terraform) doivent être générés de
+manière cohérente entre eux.
 
-\subsection{Docker et la conteneurisation}
+\section{Intelligence Artificielle appliquée à l'ingénierie Cloud}
 
-Un conteneur est une unité d'exécution légère et portable qui encapsule une
-application avec toutes ses dépendances~: bibliothèques, configuration, environnement
-d'exécution. Contrairement à une machine virtuelle, un conteneur partage le noyau du
-système hôte, ce qui le rend beaucoup plus léger et plus rapide à démarrer.
+Cette section constitue le c\oe ur du chapitre. Elle suit une progression naturelle~: des
+modèles de langage aux agents, puis à l'ancrage documentaire (RAG), à la génération
+contrainte, et enfin à la supervision humaine.
 
-\textbf{Docker} est la technologie de conteneurisation qui a largement popularisé ce
-paradigme. Un \texttt{Dockerfile} décrit, sous forme d'instructions séquentielles,
-comment construire l'image d'un conteneur. Cette image est ensuite instanciée en
-conteneur sur n'importe quelle machine disposant du moteur Docker, garantissant la
-reproductibilité de l'environnement.
+\subsection{Large Language Models}
 
-La qualité d'un Dockerfile a des implications directes sur la sécurité, la
-performance et la maintenabilité d'une application~: taille de l'image, choix de
-l'image de base, droits d'exécution, gestion des variables d'environnement. C'est
-précisément pourquoi la génération automatique de Dockerfiles par un système IA
-nécessite des contraintes strictes et une validation systématique.
+Les \textit{Large Language Models} (LLM) sont des modèles entraînés sur de vastes corpus,
+capables de comprendre et de générer du texte, y compris du code et des fichiers de
+configuration~\cite{OPENAI_DOCS}. Leur intérêt pour l'ingénierie cloud tient à leur capacité
+à analyser un dépôt, à raisonner sur une architecture et à produire des artefacts techniques.
 
-\subsection{Kubernetes et l'orchestration de conteneurs}
-
-Lorsque le nombre de conteneurs à gérer augmente, la gestion manuelle devient
-impraticable. \textbf{Kubernetes} est la plateforme d'orchestration de conteneurs qui
-s'est imposée comme le standard de l'industrie pour gérer des flottes de conteneurs à
-grande échelle.
-
-Kubernetes prend en charge le déploiement, la mise à l'échelle automatique, la
-répartition de charge, la récupération sur panne, et la gestion des mises à jour sans
-interruption de service. Il introduit une série d'abstractions~: les
-\textit{Pods} (groupes de conteneurs), les \textit{Services} (exposition réseau), les
-\textit{Deployments} (gestion du cycle de vie), et les \textit{ConfigMaps} et
-\textit{Secrets} (gestion de la configuration). Ces ressources sont déclarées sous
-forme de fichiers YAML, qui s'inscrivent naturellement dans une approche IaC.
-
-\subsection{Architecture cloud-native}
-
-L'association de Docker, Kubernetes et Terraform constitue la base d'une architecture
-\textit{cloud-native} moderne. Docker assure la portabilité des applications,
-Kubernetes leur orchestration, et Terraform le provisionnement de l'infrastructure
-sous-jacente. Cette combinaison permet de gérer des systèmes distribués de manière
-reproductible, automatisée et versionnée.
-
-\section{Intelligence Artificielle appliquée à l'automatisation DevSecOps}
-
-\subsection{Large Language Models et génération de code}
-
-Les \textit{Large Language Models} (LLM) sont des modèles de langage entraînés sur
-de très grands corpus de textes, capables de comprendre et de générer du texte dans
-un très large spectre de contextes. Des modèles comme GPT d'OpenAI ont démontré des
-capacités remarquables dans des tâches de génération de code, d'analyse de logs,
-de suggestion de correctifs et de raisonnement technique.
-
-Dans le contexte DevSecOps, les LLM peuvent être utilisés pour générer
-automatiquement des fichiers de configuration (Dockerfile, YAML Kubernetes, HCL
-Terraform), analyser des messages d'erreur et proposer des corrections, ou encore
-comparer des architectures cloud selon différents critères. Ces capacités sont
-cependant conditionnées par la qualité des prompts et du contexte fourni au modèle.
+MultiMindOps s'appuie sur ces capacités pour analyser les projets et générer les artefacts.
+Toutefois, la qualité des sorties dépend fortement du contexte fourni, et une génération
+libre reste exposée aux hallucinations. Cette limite motive directement les trois notions
+suivantes.
 
 \subsection{Architectures multi-agents}
 
-Un système multi-agents est composé de plusieurs agents autonomes, chacun spécialisé
-dans une tâche précise, et capables de collaborer pour accomplir un objectif global.
-Cette approche est particulièrement adaptée aux tâches complexes qui ne peuvent pas
-être résolues efficacement par un seul modèle générique.
+Un système multi-agents décompose un objectif complexe en tâches confiées à plusieurs agents
+autonomes et spécialisés, qui collaborent autour d'un contexte partagé~\cite{LANGGRAPH}.
+Cette organisation convient mieux qu'un modèle unique et généraliste aux workflows longs et
+hétérogènes.
 
-Dans le cadre de l'automatisation DevSecOps, une architecture multi-agents permet de
-décomposer le workflow en étapes spécialisées~: un agent analyse le code source, un
-autre prend des décisions architecturales, un troisième génère les fichiers Terraform,
-un quatrième valide les résultats et un cinquième détecte et corrige les erreurs. La
-spécialisation de chaque agent améliore la qualité des sorties et facilite la
-maintenance du système.
+Dans la plateforme, chaque étape est prise en charge par un agent dédié~: analyse du code,
+décision d'architecture, génération d'un type d'artefact, puis détection et correction des
+erreurs. Cette spécialisation améliore la qualité de chaque sortie et facilite l'évolution
+du système.
 
-\subsection{Retrieval-Augmented Generation (RAG)}
+\subsection{Retrieval-Augmented Generation}
 
-Le RAG (\textit{Retrieval-Augmented Generation}) est une technique qui enrichit les
-requêtes envoyées à un LLM en y adjoignant des documents pertinents extraits d'une
-base de connaissances. Plutôt que de se fier uniquement aux connaissances encodées
-dans les paramètres du modèle, le système récupère dynamiquement des informations
-contextuelles et les intègre dans le prompt.
+Le \textit{Retrieval-Augmented Generation} (RAG) enrichit la requête envoyée au modèle avec
+des documents pertinents extraits d'une base de connaissances~\cite{RAG_LEWIS}. Plutôt que
+de se fier aux seules connaissances internes du modèle, le système récupère dynamiquement le
+contexte utile et l'intègre au \textit{prompt}.
 
-Cette approche est particulièrement utile dans un contexte DevSecOps, où les bonnes
-pratiques évoluent rapidement et où des connaissances spécifiques~--- bonnes pratiques
-Terraform, patterns de sécurité Docker, configurations Kubernetes recommandées~---
-doivent être intégrées dans les générations. Un système RAG spécialisé par domaine
-technique permet de produire des artefacts mieux alignés sur les standards actuels,
-avec moins d'hallucinations.
+Cette technique est précieuse pour l'ingénierie cloud, où les bonnes pratiques évoluent
+rapidement. MultiMindOps utilise une base de connaissances spécialisée par domaine technique
+afin d'aligner les artefacts générés sur les standards actuels et de réduire les
+hallucinations.
 
 \subsection{Structured Constrained Generation}
 
-La génération libre par LLM, bien que flexible, souffre d'un problème fondamental~:
-l'absence de structure garantie. Pour un Dockerfile ou un fichier Terraform, une
-erreur de syntaxe ou une incohérence entre sections peut rendre l'artefact
-inutilisable. La \textit{Structured Constrained Generation} est une approche qui
-découpe la génération en sections indépendantes, chacune guidée par un
-\textit{blueprint} structuré qui contraint la forme et le contenu de la sortie. Les
-sections sont ensuite assemblées de manière déterministe. Cette technique, adoptée
-dans notre projet, améliore significativement la fiabilité et la validité des
-artefacts générés.
+La génération libre souffre d'un défaut majeur~: l'absence de structure garantie. Pour un
+Dockerfile ou un fichier Terraform, une simple incohérence peut rendre l'artefact
+inutilisable. La \textit{Structured Constrained Generation} répond à ce problème en
+découpant la génération en sections indépendantes, chacune guidée par un \textit{blueprint}
+qui contraint sa forme et son contenu, avant un assemblage déterministe. Adoptée dans le
+projet, cette approche améliore nettement la validité et la fiabilité des artefacts produits.
 
-\section{Sécurité dans les environnements DevOps}
+\subsection{Human-in-the-Loop}
 
-\subsection{Sécurité des images et des conteneurs}
+L'approche \textit{Human-in-the-Loop} place l'ingénieur au centre du processus~: l'IA
+\emph{assiste} la décision, elle ne s'y substitue pas~\cite{HITL_MOSQUEIRA}. Ce principe est
+structurant pour MultiMindOps, où l'automatisation ne dispense jamais l'utilisateur de son
+jugement.
 
-L'une des surfaces d'attaque les plus négligées dans les environnements conteneurisés
-est l'image Docker elle-même. Une image construite sur une base obsolète ou contenant
-des bibliothèques vulnérables expose l'application à des risques réels. Les bonnes
-pratiques recommandent d'utiliser des images de base minimales (\texttt{alpine},
-\texttt{distroless}), de ne pas exécuter les processus en tant que \texttt{root}, et
-de scanner les images avec des outils comme Trivy ou Snyk avant déploiement.
+Concrètement, l'ingénieur intervient à plusieurs points de contrôle~: validation de
+l'architecture cloud recommandée, validation de l'estimation des coûts, approbation des
+artefacts générés, et arbitrage des actions correctives proposées en cas d'erreur. La
+plateforme reste ainsi un outil d'aide à la décision, la responsabilité des choix
+stratégiques demeurant humaine.
 
-\subsection{Sécurité de l'Infrastructure as Code}
+\section{Qualité et sécurité des artefacts générés}
 
-Les fichiers IaC peuvent eux-mêmes contenir des erreurs de sécurité~: des ports
-ouverts inutilement, des buckets S3 publics, des permissions IAM trop larges. Des
-outils comme \textit{tfsec} ou \textit{Checkov} permettent d'analyser
-statiquement les fichiers Terraform et d'identifier ces problèmes avant qu'ils ne
-soient appliqués en production. Intégrer ces vérifications dans le pipeline CI/CD,
-avant le \texttt{terraform apply}, est une pratique DevSecOps fondamentale.
+La sécurité n'est pas la finalité de la plateforme, mais une exigence de qualité
+transversale, intégrée aux artefacts générés et à l'architecture du système. Elle se traduit
+par l'application de bonnes pratiques d'ingénierie au moment de la génération, alignées sur
+le pilier sécurité du \textit{Well-Architected Framework}~\cite{AWS_WELL_ARCHITECTED}.
+
+\subsection{Sécurisation des conteneurs}
+
+Une image Docker construite sur une base obsolète ou trop permissive élargit inutilement la
+surface d'attaque. Les bonnes pratiques privilégient des images de base minimales, l'exécution
+des processus avec un utilisateur non privilégié plutôt que \texttt{root}, et l'absence de
+tout secret embarqué dans l'image. Ces règles sont appliquées lors de la génération des
+Dockerfiles.
+
+\subsection{Bonnes pratiques Infrastructure as Code}
+
+Les fichiers IaC peuvent introduire des faiblesses~: ports ouverts sans nécessité, buckets
+S3 publics, permissions IAM trop larges. Respecter le principe de moindre privilège et
+restreindre les expositions réseau dès la génération permet d'éviter que ces erreurs ne
+soient appliquées en production.
 
 \subsection{Gestion des secrets}
 
-Dans un pipeline d'automatisation, la gestion des credentials est un enjeu critique.
-Les mots de passe, clés API, et tokens d'accès ne doivent jamais apparaître en clair
-dans les fichiers de configuration ou les dépôts de code. Des solutions comme
-AWS Secrets Manager, HashiCorp Vault ou les \textit{Secrets} Kubernetes permettent
-de centraliser et de sécuriser ces informations, en les injectant dynamiquement dans
-les environnements d'exécution.
+Les identifiants, clés d'API et \textit{tokens} ne doivent jamais figurer en clair dans les
+fichiers de configuration ni dans le dépôt. Des solutions telles qu'AWS Secrets Manager,
+HashiCorp Vault ou les \textit{Secrets} Kubernetes centralisent ces informations et les
+injectent au moment de l'exécution. Les artefacts générés sont conçus pour référencer ces
+mécanismes plutôt que d'exposer des valeurs sensibles.
 
 \section{Conclusion}
 
-Ce chapitre a posé les bases conceptuelles nécessaires à la compréhension du projet.
-Le DevSecOps, l'Infrastructure as Code, les pipelines CI/CD, la conteneurisation
-avec Docker et Kubernetes, et l'utilisation des LLM dans des architectures
-multi-agents forment le socle technologique sur lequel repose la plateforme
-développée. Les notions de RAG et de \textit{Structured Constrained Generation}
-expliquent les choix d'architecture IA adoptés pour garantir la fiabilité des
-artefacts produits. Le chapitre suivant sera consacré à l'analyse des besoins et à
-la conception détaillée du système.
+Ce chapitre a réuni les concepts nécessaires à la compréhension de la plateforme~: les
+principes de l'ingénierie Cloud et DevOps, les technologies cloud mobilisées (AWS,
+Terraform, Docker, Kubernetes) et les briques d'intelligence artificielle qui en constituent
+le c\oe ur (LLM, agents, RAG, génération contrainte et supervision humaine). Nous avons
+également précisé que la sécurité est traitée comme une exigence de qualité transversale,
+intégrée aux artefacts produits. Le chapitre suivant s'appuie sur ces fondations pour
+présenter l'analyse des besoins et la conception détaillée du système.
