@@ -1,9 +1,9 @@
 \babel@toc {french}{}\relax 
 \thispagestyle {MyStyle}
-\contentsline {chapter}{LISTE DES FIGURES}{vi}{chapter*.4}%
-\contentsline {chapter}{LISTE DES TABLEAUX}{vii}{chapter*.5}%
-\contentsline {chapter}{LISTE DES ABRÉVIATIONS}{viii}{chapter*.6}%
-\contentsline {chapter}{Introduction Générale}{ix}{chapter*.7}%
+\contentsline {chapter}{LISTE DES FIGURES}{viii}{chapter*.4}%
+\contentsline {chapter}{LISTE DES TABLEAUX}{ix}{chapter*.5}%
+\contentsline {chapter}{LISTE DES ABRÉVIATIONS}{x}{chapter*.6}%
+\contentsline {chapter}{Introduction Générale}{xi}{chapter*.7}%
 \contentsline {chapter}{\numberline {1}Cadre général du projet}{2}{chapter.1}%
 \contentsline {section}{\numberline {1.1}Introduction}{3}{section.1.1}%
 \contentsline {section}{\numberline {1.2}Présentation de l'organisme d'accueil}{3}{section.1.2}%
@@ -53,54 +53,47 @@
 \contentsline {subsection}{\numberline {3.2.1}Identification des acteurs}{24}{subsection.3.2.1}%
 \contentsline {subsubsection}{\numberline {3.2.1.1}Ingénieur DevOps}{24}{subsubsection.3.2.1.1}%
 \contentsline {subsubsection}{\numberline {3.2.1.2}Administrateur}{25}{subsubsection.3.2.1.2}%
-\contentsline {subsection}{\numberline {3.2.2}Exigences fonctionnelles}{26}{subsection.3.2.2}%
-\contentsline {subsection}{\numberline {3.2.3}Exigences non fonctionnelles}{27}{subsection.3.2.3}%
-\contentsline {section}{\numberline {3.3}Modélisation du système}{28}{section.3.3}%
-\contentsline {subsection}{\numberline {3.3.1}Vue fonctionnelle}{29}{subsection.3.3.1}%
-\contentsline {subsubsection}{\numberline {3.3.1.1}Diagramme global de cas d'utilisation}{29}{subsubsection.3.3.1.1}%
-\contentsline {subsection}{\numberline {3.3.2}Vue structurelle}{31}{subsection.3.3.2}%
-\contentsline {subsubsection}{\numberline {3.3.2.1}Diagramme d'activité}{31}{subsubsection.3.3.2.1}%
-\contentsline {subsection}{\numberline {3.3.3}Vue dynamique}{33}{subsection.3.3.3}%
-\contentsline {subsubsection}{\numberline {3.3.3.1}Diagramme de séquence}{33}{subsubsection.3.3.3.1}%
-\contentsline {section}{\numberline {3.4}Aperçu des capacités IA de Multi-MindsOps}{34}{section.3.4}%
-\contentsline {subsection}{\numberline {3.4.1}Remédiation intelligente des erreurs (Corrector Agent)}{34}{subsection.3.4.1}%
-\contentsline {subsubsection}{\numberline {3.4.1.1}Architecture et workflow}{35}{subsubsection.3.4.1.1}%
-\contentsline {paragraph}{\numberline {a)}Entrées.}{36}{paragraph.3.4.1.1.1}%
-\contentsline {paragraph}{\numberline {b)}Sorties.}{36}{paragraph.3.4.1.1.2}%
-\contentsline {paragraph}{\numberline {c)}Base de connaissances et RAG.}{36}{paragraph.3.4.1.1.3}%
-\contentsline {paragraph}{\numberline {d)}Modèle LLM.}{36}{paragraph.3.4.1.1.4}%
-\contentsline {subsubsection}{\numberline {3.4.1.2}Évaluation et justification du modèle}{37}{subsubsection.3.4.1.2}%
-\contentsline {subsection}{\numberline {3.4.2}Génération d'infrastructure assistée par IA}{37}{subsection.3.4.2}%
-\contentsline {subsubsection}{\numberline {3.4.2.1}Architecture et workflow}{38}{subsubsection.3.4.2.1}%
-\contentsline {paragraph}{\numberline {a)}Entrées.}{39}{paragraph.3.4.2.1.1}%
-\contentsline {paragraph}{\numberline {b)}Sorties.}{39}{paragraph.3.4.2.1.2}%
-\contentsline {paragraph}{\numberline {c)}Base de connaissances et RAG.}{39}{paragraph.3.4.2.1.3}%
-\contentsline {paragraph}{\numberline {d)}Modèle LLM.}{39}{paragraph.3.4.2.1.4}%
-\contentsline {subsubsection}{\numberline {3.4.2.2}Évaluation et justification du modèle}{40}{subsubsection.3.4.2.2}%
-\contentsline {subsection}{\numberline {3.4.3}Génération de pipelines CI/CD assistée par IA}{40}{subsection.3.4.3}%
-\contentsline {subsubsection}{\numberline {3.4.3.1}Architecture et workflow}{41}{subsubsection.3.4.3.1}%
-\contentsline {paragraph}{\numberline {a)}Entrées.}{42}{paragraph.3.4.3.1.1}%
-\contentsline {paragraph}{\numberline {b)}Sorties.}{42}{paragraph.3.4.3.1.2}%
-\contentsline {paragraph}{\numberline {c)}Base de connaissances et RAG.}{42}{paragraph.3.4.3.1.3}%
-\contentsline {paragraph}{\numberline {d)}Modèle LLM.}{42}{paragraph.3.4.3.1.4}%
-\contentsline {subsubsection}{\numberline {3.4.3.2}Évaluation et justification du modèle}{43}{subsubsection.3.4.3.2}%
-\contentsline {section}{\numberline {3.5}Conclusion}{44}{section.3.5}%
-\contentsline {chapter}{\numberline {4}Réalisation et mise en œuvre}{45}{chapter.4}%
-\contentsline {section}{\numberline {4.1}Introduction}{46}{section.4.1}%
-\contentsline {section}{\numberline {4.2}Environnement de développement}{46}{section.4.2}%
-\contentsline {subsection}{\numberline {4.2.1}Environnement matériel}{46}{subsection.4.2.1}%
-\contentsline {subsection}{\numberline {4.2.2}Environnement logiciel}{46}{subsection.4.2.2}%
-\contentsline {subsection}{\numberline {4.2.3}Technologies utilisées}{47}{subsection.4.2.3}%
-\contentsline {subsubsection}{\numberline {4.2.3.1}Technologies de développement}{47}{subsubsection.4.2.3.1}%
-\contentsline {subsubsection}{\numberline {4.2.3.2}Technologies DevOps et Cloud}{48}{subsubsection.4.2.3.2}%
-\contentsline {subsubsection}{\numberline {4.2.3.3}Technologies IA et Agents intelligents}{48}{subsubsection.4.2.3.3}%
-\contentsline {section}{\numberline {4.3}Interfaces Homme-Machine}{48}{section.4.3}%
-\contentsline {subsection}{\numberline {4.3.1}Authentification et gestion des utilisateurs}{49}{subsection.4.3.1}%
-\contentsline {subsection}{\numberline {4.3.2}Tableau de bord et gestion des projets}{51}{subsection.4.3.2}%
-\contentsline {subsection}{\numberline {4.3.3}Sélection des architectures cloud}{52}{subsection.4.3.3}%
-\contentsline {subsection}{\numberline {4.3.4}Génération intelligente des artefacts DevOps}{53}{subsection.4.3.4}%
-\contentsline {subsection}{\numberline {4.3.5}Remédiation intelligente des erreurs}{55}{subsection.4.3.5}%
-\contentsline {subsection}{\numberline {4.3.6}Validation et exécution des workflows}{57}{subsection.4.3.6}%
-\contentsline {section}{\numberline {4.4}Conclusion}{59}{section.4.4}%
-\contentsline {chapter}{CONCLUSION GÉNÉRALE}{60}{chapter*.44}%
-\contentsline {chapter}{WEBOGRAPHIE}{60}{chapter*.44}%
+\contentsline {subsection}{\numberline {3.2.2}Exigences fonctionnelles}{25}{subsection.3.2.2}%
+\contentsline {subsection}{\numberline {3.2.3}Exigences non fonctionnelles}{26}{subsection.3.2.3}%
+\contentsline {section}{\numberline {3.3}Modélisation du système}{27}{section.3.3}%
+\contentsline {subsection}{\numberline {3.3.1}Vue fonctionnelle}{27}{subsection.3.3.1}%
+\contentsline {subsubsection}{\numberline {3.3.1.1}Diagramme global de cas d'utilisation}{27}{subsubsection.3.3.1.1}%
+\contentsline {subsection}{\numberline {3.3.2}Vue structurelle}{29}{subsection.3.3.2}%
+\contentsline {subsubsection}{\numberline {3.3.2.1}Diagramme d'activité}{29}{subsubsection.3.3.2.1}%
+\contentsline {subsection}{\numberline {3.3.3}Vue dynamique}{29}{subsection.3.3.3}%
+\contentsline {subsubsection}{\numberline {3.3.3.1}Diagramme de séquence}{29}{subsubsection.3.3.3.1}%
+\contentsline {subsection}{\numberline {3.3.4}Architecture globale de la plateforme}{31}{subsection.3.3.4}%
+\contentsline {section}{\numberline {3.4}Aperçu des capacités IA de MultiMindOps}{31}{section.3.4}%
+\contentsline {subsection}{\numberline {3.4.1}Méthodologie d'évaluation et choix des modèles}{32}{subsection.3.4.1}%
+\contentsline {subsubsection}{\numberline {3.4.1.1}Fournisseur de raisonnement mutualisé}{33}{subsubsection.3.4.1.1}%
+\contentsline {subsubsection}{\numberline {3.4.1.2}Choix du modèle d'embedding pour le RAG}{33}{subsubsection.3.4.1.2}%
+\contentsline {subsection}{\numberline {3.4.2}Remédiation intelligente des erreurs (Corrector Agent)}{34}{subsection.3.4.2}%
+\contentsline {subsubsection}{\numberline {3.4.2.1}Architecture et workflow}{34}{subsubsection.3.4.2.1}%
+\contentsline {subsubsection}{\numberline {3.4.2.2}Justification métier}{35}{subsubsection.3.4.2.2}%
+\contentsline {subsection}{\numberline {3.4.3}Génération d'infrastructure assistée par IA}{36}{subsection.3.4.3}%
+\contentsline {subsubsection}{\numberline {3.4.3.1}Architecture et workflow}{36}{subsubsection.3.4.3.1}%
+\contentsline {subsubsection}{\numberline {3.4.3.2}Justification métier}{37}{subsubsection.3.4.3.2}%
+\contentsline {subsection}{\numberline {3.4.4}Génération de pipelines CI/CD assistée par IA}{37}{subsection.3.4.4}%
+\contentsline {subsubsection}{\numberline {3.4.4.1}Architecture et workflow}{37}{subsubsection.3.4.4.1}%
+\contentsline {subsubsection}{\numberline {3.4.4.2}Justification métier}{39}{subsubsection.3.4.4.2}%
+\contentsline {section}{\numberline {3.5}Conclusion}{39}{section.3.5}%
+\contentsline {chapter}{\numberline {4}Réalisation et mise en œuvre}{41}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Introduction}{42}{section.4.1}%
+\contentsline {section}{\numberline {4.2}Environnement de développement}{42}{section.4.2}%
+\contentsline {subsection}{\numberline {4.2.1}Environnement matériel}{42}{subsection.4.2.1}%
+\contentsline {subsection}{\numberline {4.2.2}Environnement logiciel}{42}{subsection.4.2.2}%
+\contentsline {subsection}{\numberline {4.2.3}Technologies utilisées}{43}{subsection.4.2.3}%
+\contentsline {subsubsection}{\numberline {4.2.3.1}Technologies de développement}{43}{subsubsection.4.2.3.1}%
+\contentsline {subsubsection}{\numberline {4.2.3.2}Technologies DevOps et Cloud}{44}{subsubsection.4.2.3.2}%
+\contentsline {subsubsection}{\numberline {4.2.3.3}Technologies IA et Agents intelligents}{44}{subsubsection.4.2.3.3}%
+\contentsline {section}{\numberline {4.3}Interfaces Homme-Machine}{44}{section.4.3}%
+\contentsline {subsection}{\numberline {4.3.1}Authentification et gestion des utilisateurs}{45}{subsection.4.3.1}%
+\contentsline {subsection}{\numberline {4.3.2}Tableau de bord et gestion des projets}{47}{subsection.4.3.2}%
+\contentsline {subsection}{\numberline {4.3.3}Sélection des architectures cloud}{48}{subsection.4.3.3}%
+\contentsline {subsection}{\numberline {4.3.4}Génération intelligente des artefacts DevOps}{49}{subsection.4.3.4}%
+\contentsline {subsection}{\numberline {4.3.5}Remédiation intelligente des erreurs}{51}{subsection.4.3.5}%
+\contentsline {subsection}{\numberline {4.3.6}Validation et exécution des workflows}{53}{subsection.4.3.6}%
+\contentsline {section}{\numberline {4.4}Conclusion}{54}{section.4.4}%
+\contentsline {chapter}{CONCLUSION GÉNÉRALE}{55}{chapter*.43}%
+\contentsline {section}{Perspectives}{56}{section*.44}%
+\contentsline {chapter}{WEBOGRAPHIE}{56}{section*.44}%

@@ -291,21 +291,10 @@ La figure~\ref{fig:docker-build-success} présente le résultat d'un build réus
 application de la correction proposée, confirmant l'efficacité de la boucle de
 remédiation.
 
-\begin{figure}[H]
-    \centering
-    \includegraphics[width=0.9\textwidth]{images/Intelligent Error Remediation.png}
-    \caption{Cycle de remédiation intelligente des erreurs}
-    \label{fig:error-remediation-ui}
-\end{figure}
-
-La figure~\ref{fig:error-remediation-ui} synthétise le cycle de remédiation~: détection
-de l'erreur, proposition de correction et revalidation de l'artefact sous le contrôle de
-l'utilisateur.
-
 \subsection{Validation et exécution des workflows}
 
-La plateforme valide et exécute les artefacts générés tout en assurant le contrôle de
-leur conformité et de leur sécurité.
+La plateforme valide et exécute les artefacts générés tout en vérifiant leur conformité
+et le respect des bonnes pratiques.
 
 \begin{figure}[H]
     \centering
@@ -320,13 +309,15 @@ ressources cloud sont provisionnées conformément à l'architecture sélectionn
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.9\textwidth]{images/Security agent.jpg}
-    \caption{Audit de sécurité des artefacts}
+    \caption{Vérification des bonnes pratiques dans les artefacts générés}
     \label{fig:security-agent}
 \end{figure}
 
-La figure~\ref{fig:security-agent} présente l'agent de sécurité. Il contrôle les
-artefacts générés afin de détecter les vulnérabilités et de garantir le respect des
-bonnes pratiques DevSecOps.
+La figure~\ref{fig:security-agent} illustre la vérification des bonnes pratiques appliquée
+aux artefacts générés. La sécurité y est traitée comme une exigence de qualité
+transversale~: le contrôle vérifie que les artefacts respectent les bonnes pratiques
+(utilisateur non-\textit{root}, permissions minimales, absence de secrets en clair) dès
+leur génération, sans constituer une étape de sécurité isolée.
 
 \section{Conclusion}
 

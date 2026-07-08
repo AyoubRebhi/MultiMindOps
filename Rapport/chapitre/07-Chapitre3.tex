@@ -7,504 +7,447 @@
 
 \section{Introduction}
 
-Après avoir présenté le cadre général du projet et les concepts technologiques sur
-lesquels il repose, ce chapitre formalise les besoins de la plateforme et pose les
-bases de sa conception. Nous identifions d'abord les acteurs qui interagissent avec le
-système, ainsi que les exigences fonctionnelles et non fonctionnelles découlant du
-contexte présenté au chapitre précédent. Nous proposons ensuite une modélisation UML
-qui représente le système selon ses aspects fonctionnel, structurel et dynamique.
-Enfin, nous décrivons les capacités d'intelligence artificielle qui distinguent la
-plateforme, en détaillant l'architecture et les choix de modèles de ses agents
-spécialisés. Cette analyse constitue le socle sur lequel s'appuiera la réalisation
-présentée dans les chapitres suivants.
+Après le cadre général du projet et les concepts fondamentaux, ce chapitre formalise les
+besoins de la plateforme et pose les bases de sa conception. Nous identifions les acteurs
+puis les exigences fonctionnelles et non fonctionnelles, avant de proposer une
+modélisation UML (vues fonctionnelle, structurelle et dynamique) complétée par une
+architecture globale. Nous décrivons enfin les capacités d'intelligence artificielle qui
+distinguent la plateforme et les choix de modèles de ses agents spécialisés.
 
 \section{Analyse des besoins}
 
 \subsection{Identification des acteurs}
 
-L'analyse des besoins commence par l'identification des utilisateurs qui interagissent
-directement avec la plateforme. Contrairement à une première itération du projet, qui
-envisageait un nombre plus large de profils, le périmètre actuel se concentre sur deux
-acteurs principaux~: l'\textbf{Ingénieur DevOps} et l'\textbf{Administrateur}. Ce
-recentrage reflète l'usage réel observé pendant le développement~: la plateforme est
-avant tout un outil de travail pour un ingénieur qui souhaite automatiser la conception
-et le déploiement d'une infrastructure, complété par un rôle de gestion et de
-supervision globale assuré par un administrateur.
+La plateforme s'adresse à deux acteurs principaux~: l'\textbf{Ingénieur DevOps} et
+l'\textbf{Administrateur}. Ce périmètre reflète l'usage réel observé pendant le
+développement~: un outil de travail pour l'ingénieur qui automatise la conception et le
+déploiement d'une infrastructure, complété par un rôle de supervision globale.
 
 \subsubsection{Ingénieur DevOps}
 
-L'ingénieur DevOps est l'utilisateur principal de la plateforme. C'est lui qui initie un
-projet, fournit les informations relatives au dépôt applicatif à analyser et échange
-avec le système au fil des étapes du workflow. Ses interactions couvrent l'ensemble du
-cycle proposé par la plateforme~:
+L'ingénieur DevOps est l'utilisateur principal~: il initie un projet, fournit le dépôt
+applicatif à analyser et interagit avec le système au fil du workflow. Ses interactions
+couvrent l'ensemble du cycle~:
 
 \begin{itemize}
-    \item décrire le besoin d'automatisation et fournir les informations du dépôt
-    cible~;
-    \item consulter les résultats de l'analyse du projet applicatif réalisée par les
-    agents~;
-    \item examiner les stratégies d'architecture proposées et choisir celle qui
-    correspond le mieux à ses contraintes~;
+    \item fournir les informations du dépôt cible~;
+    \item consulter l'analyse du projet réalisée par les agents~;
+    \item examiner les stratégies d'architecture proposées et choisir la plus adaptée à
+    ses contraintes~;
     \item valider, ou demander la régénération, des artefacts produits (Dockerfile,
     fichiers Terraform, manifestes Kubernetes, pipelines CI/CD)~;
     \item déclencher les opérations de build, de validation et de planification
     Terraform~;
-    \item suivre l'avancement du workflow en temps réel et, en cas d'échec, examiner
-    les corrections proposées par le \textit{Corrector Agent} avant de les approuver.
+    \item suivre le workflow en temps réel et approuver, en cas d'échec, les corrections
+    proposées par le \textit{Corrector Agent}.
 \end{itemize}
 
-L'ingénieur DevOps n'a pas besoin de maîtriser en détail la syntaxe de chaque outil~:
-la plateforme se charge de produire les artefacts, son rôle étant de guider, valider et
-arbitrer les décisions importantes.
+Il n'a pas besoin de maîtriser la syntaxe de chaque outil~: la plateforme produit les
+artefacts, son rôle étant de guider, valider et arbitrer les décisions importantes.
 
 \subsubsection{Administrateur}
 
-L'administrateur dispose d'une vue transverse sur la plateforme. Son rôle ne porte pas
-sur la conception d'une infrastructure en particulier, mais sur le bon fonctionnement
-général du système~:
+L'administrateur dispose d'une vue transverse et veille au bon fonctionnement général du
+système, sans porter sur la conception d'une infrastructure en particulier~:
 
 \begin{itemize}
-    \item gestion des projets enregistrés sur la plateforme (création, consultation,
-    suppression)~;
-    \item suivi global de l'état des workflows en cours ou terminés, tous projets
-    confondus~;
-    \item supervision des artefacts générés et de l'historique des exécutions~;
-    \item accès aux informations de configuration du système, notamment les
-    fournisseurs LLM utilisés et leur disponibilité.
+    \item gérer les projets enregistrés (création, consultation, suppression)~;
+    \item suivre l'état des workflows en cours ou terminés, tous projets confondus~;
+    \item superviser les artefacts générés et l'historique des exécutions~;
+    \item accéder à la configuration du système, notamment les fournisseurs LLM utilisés
+    et leur disponibilité.
 \end{itemize}
 
-En pratique, l'administrateur correspond davantage à un profil de responsable technique
-ou de \textit{lead} DevOps souhaitant disposer d'une visibilité d'ensemble sur
-l'utilisation de la plateforme, sans nécessairement intervenir sur chaque projet.
+Ce profil correspond à un responsable technique ou un \textit{lead} DevOps souhaitant une
+visibilité d'ensemble sur l'utilisation de la plateforme, sans intervenir sur chaque
+projet.
 
 \subsection{Exigences fonctionnelles}
 
-Les exigences fonctionnelles ont été regroupées par module, en cohérence avec
-l'architecture multi-agents présentée au chapitre précédent. Chaque module correspond à
-une étape du pipeline DevSecOps automatisé par la plateforme.
+Les exigences fonctionnelles sont regroupées par module, en cohérence avec l'architecture
+multi-agents~; chaque module correspond à une étape du pipeline DevOps automatisé par la
+plateforme.
 
 \begin{itemize}
     \item \textbf{Gestion des projets~:} créer un projet à partir d'un dépôt GitHub,
-    consulter son état d'avancement et accéder à l'historique des workflows associés.
+    consulter son avancement et accéder à l'historique des workflows associés.
 
-    \item \textbf{Analyse du code~:} analyser le dépôt fourni afin d'identifier le
-    langage, le framework, les dépendances et les éléments structurants du projet
-    (présence d'un Dockerfile, d'un fichier de dépendances, d'une base de données,
-    etc.).
+    \item \textbf{Analyse du code~:} identifier le langage, le framework, les dépendances
+    et les éléments structurants du projet (Dockerfile, fichier de dépendances, base de
+    données, etc.).
 
-    \item \textbf{Génération d'architecture~:} proposer, à partir de l'analyse,
-    plusieurs stratégies d'architecture cloud (par exemple \textit{Low Cost},
-    \textit{Balanced}, \textit{High Performance}), accompagnées d'une estimation de
-    coût, et permettre à l'utilisateur d'en sélectionner une.
+    \item \textbf{Génération d'architecture~:} proposer plusieurs stratégies cloud
+    (\textit{Low Cost}, \textit{Balanced}, \textit{High Performance}) accompagnées d'une
+    estimation de coût, et permettre d'en sélectionner une.
 
-    \item \textbf{Génération Docker~:} générer automatiquement un Dockerfile adapté au
-    projet, en tenant compte du langage, du gestionnaire de dépendances et des bonnes
-    pratiques de sécurité et d'optimisation d'image.
+    \item \textbf{Génération Docker~:} générer un Dockerfile adapté au projet, en tenant
+    compte du langage, du gestionnaire de dépendances et des bonnes pratiques
+    d'optimisation d'image.
 
-    \item \textbf{Génération Terraform~:} générer les fichiers Terraform correspondant à
-    l'architecture sélectionnée, en respectant les conventions HCL et la cohérence entre
-    les ressources déclarées.
+    \item \textbf{Génération Terraform~:} générer les fichiers Terraform de l'architecture
+    sélectionnée, en respectant les conventions HCL et la cohérence entre ressources.
 
-    \item \textbf{Validation Terraform~:} exécuter une validation des fichiers générés
-    (\texttt{terraform validate}) et remonter les éventuelles erreurs de syntaxe ou de
-    configuration.
+    \item \textbf{Validation Terraform~:} exécuter \texttt{terraform validate} et remonter
+    les erreurs éventuelles de syntaxe ou de configuration.
 
-    \item \textbf{Planification Terraform~:} produire un plan d'exécution
-    (\texttt{terraform plan}) afin de présenter à l'utilisateur les ressources qui
-    seraient créées, modifiées ou supprimées avant tout déploiement réel.
+    \item \textbf{Planification Terraform~:} produire un plan (\texttt{terraform plan})
+    présentant les ressources créées, modifiées ou supprimées avant tout déploiement réel.
 
-    \item \textbf{Gestion des artefacts~:} conserver les artefacts générés (Dockerfile,
-    fichiers Terraform, manifestes Kubernetes, configurations CI/CD) de manière
+    \item \textbf{Gestion des artefacts~:} conserver les artefacts générés de manière
     persistante, versionnée et associée au projet correspondant.
 
-    \item \textbf{Suivi des workflows~:} permettre à l'utilisateur de suivre, étape par
-    étape et en temps réel, l'état d'exécution du workflow (en attente, en cours,
-    terminé, en erreur), ainsi que les actions de correction déclenchées en cas
+    \item \textbf{Suivi des workflows~:} suivre en temps réel l'état d'exécution de chaque
+    étape (en attente, en cours, terminé, en erreur) et les corrections déclenchées en cas
     d'échec.
 \end{itemize}
 
 \subsection{Exigences non fonctionnelles}
 
-Au-delà des fonctionnalités attendues, plusieurs exigences de qualité conditionnent la
-viabilité de la plateforme dans un usage réel.
+Au-delà des fonctionnalités attendues, plusieurs exigences de qualité conditionnent
+l'usage réel de la plateforme.
 
 \begin{itemize}
-    \item \textbf{Sécurité~:} les artefacts générés doivent respecter les bonnes
-    pratiques DevSecOps (utilisateurs non-\textit{root} dans les conteneurs, absence de
-    secrets en clair, permissions minimales sur les ressources cloud). Les échanges avec
-    les fournisseurs LLM ne doivent exposer que les informations strictement
-    nécessaires à la génération.
+    \item \textbf{Sécurité~:} les artefacts générés respectent les bonnes pratiques de
+    sécurité (utilisateurs non-\textit{root} dans les conteneurs, absence de secrets en
+    clair, permissions minimales sur les ressources cloud), et les échanges avec les
+    fournisseurs LLM n'exposent que les informations strictement nécessaires à la
+    génération.
 
-    \item \textbf{Performance~:} les opérations d'analyse et de génération doivent
-    rester dans des temps de réponse compatibles avec une utilisation interactive,
-    malgré la dépendance à des appels LLM dont la latence peut varier.
+    \item \textbf{Performance~:} les opérations d'analyse et de génération restent dans des
+    temps compatibles avec une utilisation interactive, malgré la latence variable des
+    appels LLM.
 
-    \item \textbf{Disponibilité~:} la plateforme doit limiter l'impact des
-    indisponibilités ponctuelles d'un fournisseur LLM grâce à un mécanisme de
-    \textit{fallback} entre plusieurs fournisseurs, afin de ne pas bloquer un workflow en
-    cours.
+    \item \textbf{Disponibilité~:} un mécanisme de \textit{fallback} entre plusieurs
+    fournisseurs LLM limite l'impact des indisponibilités ponctuelles et évite de bloquer
+    un workflow en cours.
 
-    \item \textbf{Extensibilité~:} l'architecture multi-agents doit permettre d'ajouter
-    de nouveaux agents spécialisés (pour un nouveau type d'artefact ou un nouveau
-    fournisseur cloud) sans remettre en cause les agents existants.
+    \item \textbf{Extensibilité~:} l'architecture multi-agents permet d'ajouter de nouveaux
+    agents (nouveau type d'artefact, nouveau fournisseur cloud) sans remettre en cause les
+    agents existants.
 
-    \item \textbf{Maintenabilité~:} chaque agent doit rester responsable d'un périmètre
-    clairement délimité, afin de faciliter la correction des anomalies et l'évolution
-    indépendante de chaque module.
+    \item \textbf{Maintenabilité~:} chaque agent reste responsable d'un périmètre
+    clairement délimité, ce qui facilite la correction des anomalies et l'évolution
+    indépendante des modules.
 
-    \item \textbf{Traçabilité~:} chaque étape du workflow, chaque artefact généré et
-    chaque correction appliquée doivent être enregistrés, afin de pouvoir reconstituer a
-    posteriori le déroulement complet d'une exécution.
+    \item \textbf{Traçabilité~:} chaque étape, chaque artefact et chaque correction sont
+    enregistrés, afin de reconstituer a posteriori le déroulement d'une exécution.
 
-    \item \textbf{Ergonomie~:} l'interface doit présenter l'avancement du workflow de
-    manière claire et progressive, en évitant de confronter l'utilisateur à des détails
-    techniques (logs bruts, sorties d'outils) tant qu'une intervention de sa part n'est
-    pas nécessaire.
+    \item \textbf{Ergonomie~:} l'interface présente l'avancement du workflow de manière
+    claire et progressive, sans exposer l'utilisateur aux détails techniques tant qu'une
+    intervention n'est pas nécessaire.
 \end{itemize}
 
 \section{Modélisation du système}
 
-Les besoins exprimés ci-dessus restent, par nature, descriptifs. Pour passer d'une
-liste d'exigences à une conception exploitable, nous nous appuyons sur le langage de
-modélisation UML, qui permet de représenter le système selon plusieurs points de vue
-complémentaires. La vue fonctionnelle met en évidence les interactions entre les
-acteurs et le système~; la vue structurelle décrit l'organisation des traitements~; la
-vue dynamique illustre le déroulement temporel des scénarios les plus représentatifs.
-Prises ensemble, ces trois vues couvrent les aspects essentiels de la conception.
+Pour passer des exigences à une conception exploitable, nous nous appuyons sur le langage
+UML, qui représente le système selon trois vues complémentaires~: la vue fonctionnelle met
+en évidence les interactions entre acteurs et système, la vue structurelle décrit
+l'organisation des traitements, et la vue dynamique illustre le déroulement temporel des
+scénarios représentatifs.
 
 \subsection{Vue fonctionnelle}
 
 \subsubsection{Diagramme global de cas d'utilisation}
 
-\begin{figure}[H]
+\begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.95\textwidth]{images/Use_Case_Diagram.png}
+    \includegraphics[width=0.85\textwidth]{images/Use_Case_Diagram.png}
     \caption{Diagramme global de cas d'utilisation de la plateforme}
     \label{fig:use-case-global}
 \end{figure}
 
 Le diagramme de la figure~\ref{fig:use-case-global} représente les principales
-fonctionnalités offertes par la plateforme, ici désignée \textit{MultiMinds IA}, ainsi
-que les acteurs qui y participent. L'ingénieur DevOps reste l'acteur déclencheur~: c'est
-lui qui décrit le besoin d'automatisation et fournit les informations du dépôt cible. À
-partir de ces deux cas d'utilisation initiaux, le système prend le relais à travers deux
-acteurs secondaires représentant les sous-systèmes internes~: le \textit{système
-multi-agents}, responsable de l'analyse du projet, de la génération des artefacts DevOps
-et de la proposition d'architectures, et le \textit{système d'exécution}, responsable de
-l'exécution effective des artefacts et pipelines ainsi que de la détection et de la
+fonctionnalités de la plateforme et les acteurs concernés. L'ingénieur DevOps est l'acteur
+déclencheur~: il décrit le besoin d'automatisation et fournit le dépôt cible. Le système
+prend ensuite le relais à travers deux sous-systèmes représentés comme acteurs
+secondaires~: le \textit{système multi-agents}, responsable de l'analyse du projet, de la
+génération des artefacts DevOps et de la proposition d'architectures, et le \textit{système
+d'exécution}, responsable de l'exécution des artefacts ainsi que de la détection et de la
 correction des erreurs.
 
-Représenter les sous-systèmes comme des acteurs n'est pas anodin~: cela matérialise la
-frontière entre ce qui relève de la décision humaine et ce qui relève de
-l'automatisation. On observe par exemple que le cas \textit{Choisir une architecture}
-est relié par une relation \texttt{<<include>>} au cas \textit{Proposer des
-architectures}~: l'ingénieur DevOps ne peut choisir que si le système a préalablement
-généré des propositions. De même, les cas \textit{Valider les artefacts générés} et
-\textit{Déclencher le déploiement} placent explicitement l'utilisateur en position de
-contrôle avant toute action irréversible, ce qui répond au besoin de validation humaine
-multi-étapes. Enfin, le cas \textit{Détecter et corriger les erreurs}, porté par le
-système d'exécution, illustre la boucle de correction automatique détaillée plus loin.
+Cette représentation matérialise la frontière entre décision humaine et automatisation. Le
+cas \textit{Choisir une architecture} est relié par une relation \texttt{<<include>>} au
+cas \textit{Proposer des architectures}~: le choix suppose des propositions préalables. De
+même, les cas \textit{Valider les artefacts générés} et \textit{Déclencher le déploiement}
+placent l'utilisateur en position de contrôle avant toute action irréversible, ce qui
+répond au besoin de validation humaine multi-étapes~; enfin, le cas \textit{Détecter et
+corriger les erreurs}, porté par le système d'exécution, illustre la boucle de correction
+détaillée plus loin.
 
 \subsection{Vue structurelle}
 
 \subsubsection{Diagramme d'activité}
 
-\begin{figure}[H]
+\begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.7\textwidth]{images/Diag activité.png}
+    \includegraphics[width=0.62\textwidth]{images/Diag activité.png}
     \caption{Diagramme d'activité~--- déroulement global du workflow}
     \label{fig:activite-workflow}
 \end{figure}
 
-La figure~\ref{fig:activite-workflow} décrit l'organisation des traitements de la
-plateforme, depuis la soumission de la requête par l'ingénieur DevOps jusqu'à la
-production du rapport final. Après récupération du dépôt GitHub, une première condition
-vérifie que l'analyse du projet s'est correctement déroulée~; en cas d'échec, le
-workflow se termine immédiatement sur une erreur.
+La figure~\ref{fig:activite-workflow} décrit l'organisation des traitements, de la
+soumission de la requête jusqu'à la production du rapport final. Après récupération du
+dépôt GitHub, une première condition vérifie le bon déroulement de l'analyse~; en cas
+d'échec, le workflow se termine immédiatement.
 
-Si l'analyse réussit, l'\textit{Architecture Decision Agent} propose plusieurs
-stratégies d'architecture (\textit{Low}, \textit{Balanced}, \textit{High}) que
-l'utilisateur consulte avant de valider, ou non, l'architecture retenue. Tant que
-l'architecture n'est pas validée, le workflow revient à l'étape de consultation, ce qui
-correspond à un point de décision itératif plutôt qu'à un choix figé.
-
-Une fois l'architecture validée, le système procède à la génération des artefacts DevOps
-(Dockerfile, Terraform, manifestes Kubernetes, configuration CI/CD), à leur tour soumis
-à validation. En cas d'échec, le \textit{Corrector Agent} propose une correction~: si
-elle est approuvée, les artefacts sont régénérés et un nouveau cycle de validation est
-lancé, dans la limite d'un nombre maximal de tentatives~; au-delà, le workflow se termine
-en échec. Lorsque les artefacts sont validés, le workflow se conclut par la production
-d'un rapport final. Ce diagramme synthétise ainsi les deux boucles de validation
----~architecture et artefacts~--- qui structurent l'ensemble du pipeline.
+Si l'analyse réussit, l'\textit{Architecture Decision Agent} propose plusieurs stratégies
+(\textit{Low}, \textit{Balanced}, \textit{High}) que l'utilisateur valide ou non. Tant que
+l'architecture n'est pas validée, le workflow revient à l'étape de consultation. Une fois
+validée, le système génère les artefacts DevOps (Dockerfile, Terraform, Kubernetes, CI/CD),
+à leur tour soumis à validation. En cas d'échec, le \textit{Corrector Agent} propose une
+correction~: si elle est approuvée, les artefacts sont régénérés et revalidés, dans la
+limite d'un nombre maximal de tentatives~; au-delà, le workflow échoue. Ce diagramme
+synthétise ainsi les deux boucles de validation ---~architecture et artefacts~--- qui
+structurent le pipeline.
 
 \subsection{Vue dynamique}
 
 \subsubsection{Diagramme de séquence}
 
-\begin{figure}[H]
+\begin{figure}[htbp]
     \centering
-    \includegraphics[width=\textwidth]{images/Diag Sequence.png}
+    \includegraphics[width=0.90\textwidth]{images/Diag Sequence.png}
     \caption{Diagramme de séquence~--- génération et correction d'un Dockerfile}
     \label{fig:sequence-docker}
 \end{figure}
 
-La figure~\ref{fig:sequence-docker} illustre le scénario de génération d'un Dockerfile et
-de sa correction automatique en cas d'échec de build, qui correspond directement au
-fonctionnement du \textit{Corrector Agent}.
+La figure~\ref{fig:sequence-docker} illustre la génération d'un Dockerfile et sa correction
+automatique en cas d'échec de build. L'ingénieur DevOps soumet un prompt via le frontend~;
+celui-ci est transmis à l'\textit{Orchestrator Agent}, qui sollicite l'\textit{Infrastructure
+Agent} pour générer le Dockerfile. Le fichier est ensuite construit par le \textit{Docker
+Engine}, à l'intérieur d'une boucle bornée à trois tentatives.
 
-L'action déclenchante est la soumission d'un prompt par l'ingénieur DevOps via le
-frontend. Ce prompt est transmis à l'\textit{Orchestrator Agent}, qui sollicite
-l'\textit{Infrastructure Agent} pour générer un Dockerfile adapté au projet. Le
-Dockerfile est ensuite soumis à un build via le \textit{Docker Engine}, à l'intérieur
-d'une boucle bornée à trois tentatives au maximum.
+Si le build échoue, l'erreur est remontée à l'orchestrateur, qui transmet les journaux au
+\textit{Corrector Agent}. Ce dernier analyse l'erreur et génère une proposition de
+correction, que l'ingénieur DevOps valide ou modifie avant régénération et nouveau build.
+Lorsque le build aboutit, le résultat remonte à l'utilisateur. Ce scénario met en évidence
+un point central de la conception~: la correction n'est jamais totalement automatique, elle
+reste soumise à la validation de l'ingénieur, conformément au principe de validation humaine
+multi-étapes.
 
-Si le build échoue, le système entre dans un bloc alternatif~: l'erreur est remontée à
-l'orchestrateur, qui transmet les logs au \textit{Corrector Agent}. Ce dernier analyse
-l'erreur et génère une proposition de correction, affichée à l'utilisateur. L'ingénieur
-DevOps peut alors valider ou modifier la correction avant que le Dockerfile ne soit
-régénéré et qu'un nouveau build ne soit lancé. Lorsque le build aboutit, le résultat est
-remonté jusqu'à l'utilisateur. Ce diagramme met en évidence un point central de la
-conception~: la correction d'erreur n'est jamais totalement automatique~--- elle reste
-soumise à la validation de l'ingénieur DevOps, conformément au principe de validation
-humaine multi-étapes identifié dans les exigences non fonctionnelles.
+\subsection{Architecture globale de la plateforme}
 
-\section{Aperçu des capacités IA de Multi-MindsOps}
+Les vues précédentes décrivent le système par facettes. La figure~\ref{fig:architecture-globale}
+en donne une vision d'ensemble, du frontend jusqu'aux outils DevOps mobilisés le long du
+pipeline.
 
-La valeur de la plateforme repose sur un ensemble d'agents IA spécialisés, chacun dédié
-à un type d'artefact DevSecOps. Cette section décrit l'architecture et les choix de
-modèles de trois d'entre eux~: la remédiation intelligente des erreurs, la génération
-d'infrastructure et la génération de pipelines CI/CD. Tous s'appuient sur un même socle
-de conception~: un ancrage documentaire par RAG, un modèle de raisonnement principal
-(GPT-5-mini) et un mécanisme de repli multi-fournisseurs (modèles hébergés sur Groq)
-garantissant la continuité de service.
-
-\subsection{Remédiation intelligente des erreurs (Corrector Agent)}
-
-Le \textit{Corrector Agent} intervient lorsqu'un artefact échoue à une étape de build ou
-de validation. Plutôt que d'interrompre le workflow, il diagnostique la cause de l'échec
-et propose une correction ciblée, sous le contrôle de l'utilisateur.
-
-\subsubsection{Architecture et workflow}
-
-\begin{figure}[H]
+\begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.9\textwidth]{images/Intelligent Error Remediation.png}
-    \caption{Architecture fonctionnelle du \textit{Corrector Agent}}
-    \label{fig:corrector-arch}
+    \includegraphics[width=\textwidth]{images/Diag architecture globale.png}
+    \caption{Architecture globale de la plateforme MultiMindOps}
+    \label{fig:architecture-globale}
 \end{figure}
 
-Le workflow de la figure~\ref{fig:corrector-arch} repose sur un principe de conception
-clé~: une analyse déterministe précède systématiquement le recours au modèle de langage.
-Les journaux d'échec sont d'abord normalisés et analysés par des règles déterministes,
-qui isolent l'erreur et la classifient. Le modèle GPT-5-mini n'intervient qu'ensuite,
-pour enrichir ce diagnostic et formuler une correction. La proposition est soumise à
-l'utilisateur (\textit{human-in-the-loop})~: une fois approuvée, elle alimente une boucle
-de remédiation bornée à trois tentatives, qui régénère puis revalide l'artefact. Si
-l'artefact devient valide, il est livré comme \textit{Corrected Artifact}~; dans le cas
-contraire, ou si la limite de tentatives est atteinte, le cas est escaladé. Cette
-combinaison ---~déterminisme d'abord, IA ensuite, validation humaine et boucle bornée~---
-limite le coût des appels au modèle et évite les corrections divergentes.
+Le frontend communique avec le backend, qui orchestre les agents IA. Ces agents s'appuient
+sur une base de connaissances RAG et sur des fournisseurs LLM pour raisonner, puis pilotent
+les outils DevOps (Docker, Terraform, CI/CD) afin de produire et d'exécuter les artefacts.
+Aux étapes critiques, une validation humaine intervient avant toute action, conformément au
+principe \textit{Human-in-the-Loop}.
 
-\paragraph{Entrées.} Les journaux d'une exécution en échec (build ou validation),
-l'artefact fautif et le contexte du projet associé.
+\section{Aperçu des capacités IA de MultiMindOps}
 
-\paragraph{Sorties.} Un artefact corrigé et validé, ou une escalade documentée lorsque la
-boucle est épuisée, dans les deux cas tracée pour audit.
+La valeur de la plateforme repose sur des agents IA spécialisés, chacun dédié à un type
+d'artefact DevOps~: la remédiation intelligente des erreurs, la génération d'infrastructure
+et la génération de pipelines CI/CD. Ces agents partagent un même socle technique
+---~ancrage documentaire par RAG et fournisseur de raisonnement mutualisé~--- que nous
+décrivons d'abord, avant de détailler les spécificités métier de chacun.
 
-\paragraph{Base de connaissances et RAG.} Une base de connaissances vectorisée recense
-les motifs d'erreurs récurrents et leurs remédiations. À chaque diagnostic, les passages
-les plus pertinents sont récupérés et injectés dans le contexte du modèle, ce qui ancre
-la correction sur des solutions éprouvées plutôt que sur les seules connaissances
-internes du modèle.
+\subsection{Méthodologie d'évaluation et choix des modèles}
 
-\paragraph{Modèle LLM.} L'étape d'enrichissement repose sur GPT-5-mini, retenu pour sa
-capacité à raisonner sur des journaux d'erreurs hétérogènes et à produire des correctifs
-structurés et exploitables par la plateforme.
+La comparaison qualitative des modèles ne repose pas sur une appréciation subjective, mais
+sur la combinaison de plusieurs sources~: les benchmarks publics disponibles dans la
+littérature, la documentation officielle des fournisseurs, les expérimentations menées dans
+le cadre du projet, et une évaluation automatisée de la qualité des artefacts selon une
+approche \textit{LLM-as-a-Judge}~\cite{LLM_AS_JUDGE}, où un modèle de langage note les
+sorties d'après une grille prédéfinie. Le score final, exprimé sur~5, correspond à une
+moyenne pondérée de plusieurs critères~: qualité des artefacts générés, cohérence
+syntaxique, respect des bonnes pratiques, stabilité des réponses, temps de génération et
+coût d'utilisation. Les valeurs rapportées dans ce chapitre découlent donc de cette
+méthodologie, et non d'une estimation arbitraire.
 
-\subsubsection{Évaluation et justification du modèle}
-\label{subsec:corrector-eval}
+\subsubsection{Fournisseur de raisonnement mutualisé}
 
-La remédiation d'erreurs est la tâche la plus exigeante en raisonnement de la plateforme~:
-le modèle doit interpréter des messages d'erreur variés, en inférer la cause profonde et
-proposer une modification précise sans dégrader le reste de l'artefact. Ces exigences
-écartent les modèles les plus légers, qui produisent des diagnostics superficiels, et
-favorisent un modèle au raisonnement robuste et à la sortie prévisible.
+Les trois agents reposent sur une architecture commune, ce qui permet de mutualiser le
+choix du fournisseur principal. \textbf{GPT-5-mini} assure la compréhension du contexte, la
+génération structurée et le raisonnement. \textbf{Llama~3.3~70B}, hébergé sur Groq,
+n'intervient qu'en \textit{fallback} automatique~: il garantit la continuité du service en
+cas d'indisponibilité ou de dépassement de quota du fournisseur principal. Ces deux modèles
+occupant des rôles distincts~--- principal et secours~--- leur comparaison directe
+apporterait peu~; l'analyse comparative est plutôt consacrée à un choix réellement
+structurant pour la qualité des réponses~: le modèle d'\textit{embedding} du système RAG.
 
-GPT-5-mini a été retenu car il offre le meilleur compromis entre qualité de raisonnement,
-fiabilité des sorties structurées et coût d'exécution. Sa régularité réduit le nombre
-d'itérations nécessaires, ce qui est déterminant pour une boucle de correction où chaque
-tentative engage un appel au modèle. Pour garantir la résilience du service, des modèles
-hébergés sur Groq sont intégrés comme fournisseurs de repli~: en cas d'indisponibilité ou
-de limitation de débit du fournisseur principal, la génération bascule automatiquement,
-sans interruption du workflow.
+\subsubsection{Choix du modèle d'embedding pour le RAG}
 
-\subsection{Génération d'infrastructure assistée par IA}
+La pertinence de la récupération documentaire dépend directement du modèle d'\textit{embedding}
+retenu. Deux candidats ont été évalués selon la méthodologie précédente~:
+\texttt{text-embedding-\allowbreak3-small} (OpenAI) et \texttt{nomic-embed-\allowbreak text-v1.5} (Nomic AI). La
+qualité de recherche s'appuie sur les scores publiés du benchmark MTEB~\cite{MTEB}, les
+autres critères provenant de la documentation des fournisseurs~\cite{OPENAI_DOCS,NOMIC_EMBED}
+et des mesures réalisées dans le projet.
 
-L'\textit{Infrastructure Agent} assure le provisionnement automatisé de l'infrastructure
-cible. À partir du contexte projet, il sélectionne une architecture adaptée et génère les
-artefacts correspondants, prêts au déploiement.
-
-\subsubsection{Architecture et workflow}
-
-\begin{figure}[H]
+\begin{table}[htbp]
     \centering
-    \includegraphics[width=0.95\textwidth]{images/Powered Infrastructure Generation.png}
-    \caption{Architecture fonctionnelle de l'\textit{Infrastructure Agent}}
-    \label{fig:infra-arch}
-\end{figure}
-
-Le workflow de la figure~\ref{fig:infra-arch} sépare nettement trois responsabilités~:
-la décision, la génération et la validation. Une phase d'analyse construit d'abord le
-contexte technique du projet, puis une étape de décision architecturale combine
-extraction des besoins, estimation des coûts et sélection de l'architecture la plus
-pertinente. L'\textit{Infrastructure Agent} exploite cette décision pour choisir un
-\textit{blueprint} de référence et piloter la génération. Deux services encadrent ce
-raisonnement~: le serveur MCP, qui fournit un accès outillé aux ressources
-d'infrastructure, et la base de connaissances RAG, qui ancre les sorties sur des
-références éprouvées. Les artefacts produits sont enfin soumis à une étape de validation
-avant de constituer un livrable déployable. Cette séparation garantit la traçabilité et
-la fiabilité des artefacts.
-
-\paragraph{Entrées.} La description du projet et son contexte technique~: besoins
-applicatifs, contraintes de déploiement et objectifs de coût.
-
-\paragraph{Sorties.} Des artefacts d'infrastructure validés et prêts au déploiement
-(fichiers Terraform et manifestes Kubernetes).
-
-\paragraph{Base de connaissances et RAG.} Une base vectorisée regroupe les bonnes
-pratiques d'infrastructure (Terraform, Kubernetes). Les passages pertinents sont
-récupérés à la volée et injectés dans le raisonnement de l'agent, en complément du
-serveur MCP qui expose les ressources d'infrastructure de façon structurée.
-
-\paragraph{Modèle LLM.} La génération repose sur GPT-5-mini, retenu pour sa capacité à
-raisonner sur des architectures à plusieurs composants et à produire des configurations
-déclaratives valides (HCL, YAML).
-
-\begin{table}[H]
-    \centering
-    \caption{Comparaison qualitative des modèles candidats~--- génération d'infrastructure}
-    \label{tab:infra-models}
-    \begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{4.4cm} *{4}{>{\centering\arraybackslash}X}@{}}
+    \caption{Comparaison des modèles d'\textit{embedding} candidats pour le système RAG}
+    \label{tab:embedding-models}
+    \footnotesize
+    \begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{3.4cm} c *{4}{>{\centering\arraybackslash}X} c@{}}
         \hline
-        \textbf{Critère} & \textbf{GPT-5-mini} & \textbf{Llama 3.3 70B} & \textbf{Qwen 72B} & \textbf{Mistral 7B} \\
+        \textbf{Modèle} & \textbf{Dim.} & \textbf{Qualité de recherche} & \textbf{Coût} & \textbf{Temps d'encodage} & \textbf{Compat. RAG} & \textbf{Score (/5)} \\
         \hline
-        Raisonnement & Très élevé & Élevé & Élevé & Moyen \\
-        Qualité Terraform & Très élevé & Élevé & Moyen & Faible \\
-        Qualité Kubernetes & Très élevé & Élevé & Moyen & Faible \\
-        Fenêtre de contexte & Très élevé & Élevé & Élevé & Moyen \\
-        Rapidité d'inférence & Élevé & Moyen & Moyen & Très élevé \\
-        Efficience (coût) & Élevé & Moyen & Moyen & Très élevé \\
+        \texttt{text-embedding-\allowbreak 3-small} & 1536 & $\approx$\,62 (MTEB) & API ($\approx$\,0,02\,\$/1\,M tok.) & Latence réseau & Native & \textbf{4,6} \\
+        \texttt{nomic-embed-\allowbreak text-v1.5} & 768 & $\approx$\,62 (MTEB) & Gratuit (auto-hébergé) & Local, rapide & Bonne & 4,3 \\
         \hline
     \end{tabularx}
 \end{table}
 
-Les valeurs qualitatives sont orientées de sorte que «~Très élevé~» corresponde toujours
-au comportement le plus favorable. Le tableau~\ref{tab:infra-models} fait ressortir un
-arbitrage clair~: les modèles légers privilégient la rapidité et le coût au détriment de
-la qualité des artefacts, tandis que les grands modèles open-source progressent en
-raisonnement mais restent en deçà sur la conformité des configurations déclaratives.
+Les deux modèles offrent une qualité de recherche comparable sur MTEB. \texttt{text-embedding-\allowbreak3-small}
+a néanmoins été retenu pour son intégration native à la pile OpenAI de la plateforme et sa
+dimension supérieure (1536), au prix d'un coût d'API et d'une latence réseau que
+\texttt{nomic-embed-\allowbreak text-v1.5} évite grâce à un hébergement local. Ce dernier demeure une
+alternative crédible pour un déploiement entièrement auto-hébergé.
 
-\subsubsection{Évaluation et justification du modèle}
+\subsection{Remédiation intelligente des erreurs (Corrector Agent)}
 
-La génération d'infrastructure exige des sorties à la fois longues, structurées et
-strictement conformes à des schémas déclaratifs. Une configuration partiellement
-invalide échoue à la validation et déclenche des reprises coûteuses~; la régularité du
-modèle prime donc sur sa seule capacité brute.
+Le \textit{Corrector Agent} intervient lorsqu'un artefact échoue à une étape de build ou de
+validation~: plutôt que d'interrompre le workflow, il diagnostique la cause de l'échec et
+propose une correction ciblée, sous le contrôle de l'utilisateur.
 
-GPT-5-mini a été retenu car il maximise la probabilité de produire des artefacts
-Terraform et Kubernetes valides dès la première passe, ce qui réduit les échecs de
-validation et sécurise l'estimation des coûts. Sa cohérence sur des sorties longues
-s'aligne directement avec la nature des fichiers d'infrastructure. Comme pour les autres
-agents, le mécanisme de repli multi-fournisseurs décrit en
-section~\ref{subsec:corrector-eval} (modèles hébergés sur Groq) assure la continuité du
-service en cas d'indisponibilité du fournisseur principal.
+\subsubsection{Architecture et workflow}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/Intelligent Error Remediation.png}
+    \caption{Architecture fonctionnelle du \textit{Corrector Agent}}
+    \label{fig:corrector-arch}
+\end{figure}
+
+Le workflow de la figure~\ref{fig:corrector-arch} repose sur un principe clé~: une analyse
+déterministe précède le recours au modèle. Les journaux d'échec sont d'abord normalisés et
+classifiés par des règles déterministes~; GPT-5-mini n'intervient qu'ensuite, pour enrichir
+le diagnostic et formuler une correction. La proposition est soumise à l'utilisateur
+(\textit{human-in-the-loop})~: une fois approuvée, elle alimente une boucle bornée à trois
+tentatives qui régénère puis revalide l'artefact. En cas de succès, l'artefact corrigé est
+livré~; sinon, ou si la limite est atteinte, le cas est escaladé. Ce séquencement
+---~déterminisme d'abord, IA ensuite, validation humaine et boucle bornée~--- limite le
+coût des appels au modèle et évite les corrections divergentes.
+
+\begin{itemize}
+    \item \textbf{Entrées :} les journaux d'une exécution en échec (build ou validation),
+    l'artefact fautif et le contexte du projet associé.
+    \item \textbf{Sorties :} un artefact corrigé et validé, ou une escalade documentée
+    lorsque la boucle est épuisée, dans les deux cas tracée pour audit.
+    \item \textbf{Base de connaissances (RAG) :} une base vectorisée des motifs d'erreurs
+    récurrents et de leurs remédiations~; les passages pertinents sont injectés dans le
+    contexte du modèle pour ancrer la correction sur des solutions éprouvées.
+    \item \textbf{LLM utilisé :} GPT-5-mini, avec repli automatique sur Llama~3.3~70B.
+\end{itemize}
+
+\subsubsection{Justification métier}
+
+La remédiation d'erreurs est la tâche la plus exigeante en \textbf{raisonnement} de la
+plateforme~: l'agent doit interpréter des journaux hétérogènes, en inférer la cause profonde
+et proposer une modification ciblée sans dégrader le reste de l'artefact. C'est cette
+capacité d'analyse des logs et de raisonnement causal qui prime ici, et sur laquelle
+GPT-5-mini se distingue des modèles légers, au diagnostic souvent superficiel. La régularité
+de ses sorties limite en outre le nombre d'itérations de la boucle de correction, où chaque
+tentative engage un appel au modèle.
+
+\subsection{Génération d'infrastructure assistée par IA}
+
+L'\textit{Infrastructure Agent} assure le provisionnement automatisé de l'infrastructure
+cible~: à partir du contexte projet, il sélectionne une architecture adaptée et génère les
+artefacts correspondants, prêts au déploiement.
+
+\subsubsection{Architecture et workflow}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.90\textwidth]{images/Powered Infrastructure Generation.png}
+    \caption{Architecture fonctionnelle de l'\textit{Infrastructure Agent}}
+    \label{fig:infra-arch}
+\end{figure}
+
+Le workflow de la figure~\ref{fig:infra-arch} sépare trois responsabilités~: la décision,
+la génération et la validation. Une phase d'analyse construit d'abord le contexte technique
+du projet, puis une étape de décision combine extraction des besoins, estimation des coûts
+et sélection de l'architecture la plus pertinente. L'\textit{Infrastructure Agent} exploite
+cette décision pour choisir un \textit{blueprint} de référence et piloter la génération.
+Deux services encadrent ce raisonnement~: le serveur MCP, qui fournit un accès outillé aux
+ressources d'infrastructure, et la base RAG, qui ancre les sorties sur des références
+éprouvées. Les artefacts produits sont enfin validés avant de constituer un livrable
+déployable, ce qui garantit leur traçabilité et leur fiabilité.
+
+\begin{itemize}
+    \item \textbf{Entrées :} la description du projet et son contexte technique (besoins
+    applicatifs, contraintes de déploiement, objectifs de coût).
+    \item \textbf{Sorties :} des artefacts d'infrastructure validés et prêts au déploiement
+    (fichiers Terraform et manifestes Kubernetes).
+    \item \textbf{Base de connaissances (RAG) :} une base vectorisée des bonnes pratiques
+    Terraform et Kubernetes, complétée par le serveur MCP qui expose les ressources
+    d'infrastructure de façon structurée.
+    \item \textbf{LLM utilisé :} GPT-5-mini, avec repli automatique sur Llama~3.3~70B.
+\end{itemize}
+
+\subsubsection{Justification métier}
+
+La génération d'infrastructure exige des sorties longues, structurées et strictement
+conformes à des schémas déclaratifs (HCL, YAML). L'enjeu central est ici le
+\textbf{déterminisme}~: une configuration partiellement invalide échoue à la validation et
+déclenche des reprises coûteuses. GPT-5-mini a été retenu pour sa capacité à produire des
+artefacts valides dès la première passe, ce qui réduit les échecs de validation et fiabilise
+l'estimation des coûts associée à l'architecture retenue.
 
 \subsection{Génération de pipelines CI/CD assistée par IA}
 
 Le \textit{CI/CD Agent} automatise la construction des pipelines d'intégration et de
-déploiement continus. À partir du contexte projet et de l'infrastructure définie, il
-génère un pipeline complet, validé et conforme aux bonnes pratiques de sécurité.
+déploiement continus~: à partir du contexte projet et de l'infrastructure définie, il génère
+un pipeline complet et validé.
 
 \subsubsection{Architecture et workflow}
 
-\begin{figure}[H]
+\begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.6\textwidth]{images/AI-Powered CICD Generation.png}
+    \includegraphics[width=0.72\textwidth]{images/AI-Powered CICD Generation.png}
     \caption{Architecture fonctionnelle du \textit{CI/CD Agent}}
     \label{fig:cicd-arch}
 \end{figure}
 
 Le workflow de la figure~\ref{fig:cicd-arch} part du contexte d'analyse du projet et de
-l'infrastructure pour dériver les besoins du pipeline. Le \textit{CI/CD Agent} formalise
-ces exigences, puis interroge la base de connaissances RAG afin de récupérer les
-références pertinentes ---~étapes de build, règles de sécurité, conventions de
-déploiement~--- avant de piloter la génération. Le pipeline est produit sous forme
-d'artefacts CI/CD, puis soumis à une étape de validation couvrant la syntaxe et le
-respect des bonnes pratiques. Le choix de conception central est ici l'intégration des
-contrôles de sécurité dès la génération (\textit{security by design}) plutôt qu'en
-contrôle a posteriori, ce qui réduit le risque d'introduire des pipelines non conformes.
+l'infrastructure pour dériver les besoins du pipeline. Le \textit{CI/CD Agent} formalise ces
+exigences, interroge la base RAG pour récupérer les références pertinentes (étapes de build,
+conventions de déploiement) puis pilote la génération. Le pipeline est produit sous forme
+d'artefacts CI/CD, avant une étape de validation portant sur la syntaxe et le respect des
+bonnes pratiques. Les bonnes pratiques de sécurité sont intégrées directement aux artefacts
+générés, comme propriété de qualité du pipeline plutôt que comme contrôle a posteriori.
 
-\paragraph{Entrées.} Le contexte d'analyse du projet et les caractéristiques de
-l'infrastructure cible précédemment générée.
+\begin{itemize}
+    \item \textbf{Entrées :} le contexte d'analyse du projet et les caractéristiques de
+    l'infrastructure cible précédemment générée.
+    \item \textbf{Sorties :} un pipeline CI/CD validé et prêt pour la production (workflows
+    GitHub Actions).
+    \item \textbf{Base de connaissances (RAG) :} une base vectorisée dédiée aux pratiques
+    CI/CD~; les références adaptées sont injectées dans le raisonnement pour aligner les
+    pipelines sur les standards de build et de déploiement.
+    \item \textbf{LLM utilisé :} GPT-5-mini, avec repli automatique sur Llama~3.3~70B.
+\end{itemize}
 
-\paragraph{Sorties.} Un pipeline CI/CD validé et prêt pour la production (workflows
-GitHub Actions).
+\subsubsection{Justification métier}
 
-\paragraph{Base de connaissances et RAG.} Une base vectorisée dédiée aux pratiques CI/CD
-et aux règles de sécurité. La récupération de connaissances injecte les références
-adaptées dans le raisonnement de l'agent, garantissant des pipelines alignés sur les
-standards de build, de déploiement et de sécurité.
-
-\paragraph{Modèle LLM.} La génération repose sur GPT-5-mini, choisi pour sa compréhension
-des dépendances entre étapes de pipeline et des règles de sécurité, ainsi que pour sa
-fiabilité dans la production de définitions YAML valides.
-
-\begin{table}[H]
-    \centering
-    \caption{Comparaison qualitative des modèles candidats~--- génération CI/CD}
-    \label{tab:cicd-models}
-    \begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{4.4cm} *{4}{>{\centering\arraybackslash}X}@{}}
-        \hline
-        \textbf{Critère} & \textbf{GPT-5-mini} & \textbf{Llama 3.3 70B} & \textbf{Qwen 72B} & \textbf{Mistral 7B} \\
-        \hline
-        Raisonnement CI/CD & Très élevé & Élevé & Élevé & Moyen \\
-        Qualité du pipeline & Très élevé & Élevé & Moyen & Faible \\
-        Compréhension des règles de sécurité & Très élevé & Élevé & Moyen & Faible \\
-        Fenêtre de contexte & Très élevé & Élevé & Élevé & Moyen \\
-        Rapidité d'inférence & Élevé & Moyen & Moyen & Très élevé \\
-        Efficience (coût) & Élevé & Moyen & Moyen & Très élevé \\
-        \hline
-    \end{tabularx}
-\end{table}
-
-Le tableau~\ref{tab:cicd-models} confirme la tendance observée pour l'infrastructure~: la
-qualité du pipeline et, surtout, la compréhension des règles de sécurité se dégradent
-nettement sur les modèles légers, alors qu'elles sont déterminantes pour un pipeline
-sûr.
-
-\subsubsection{Évaluation et justification du modèle}
-
-La génération CI/CD se distingue par l'importance des règles de sécurité~: un pipeline
-syntaxiquement correct mais permissif constitue un risque. Le modèle doit donc combiner
-un raisonnement fiable sur l'enchaînement des étapes et une bonne intégration des
-contrôles de sécurité.
-
-GPT-5-mini a été retenu car il satisfait ces deux exigences avec une régularité
-supérieure aux modèles open-source évalués, tout en produisant des définitions YAML
-valides et maintenables. Cette fiabilité permet d'appliquer le principe de
-\textit{security by design} dès la conception du pipeline et de réduire les échecs de
-validation. Le service bénéficie du même mécanisme de repli multi- fournisseurs (modèles
-hébergés sur Groq) que les autres agents, ce qui garantit la continuité du workflow en
-cas d'indisponibilité du fournisseur principal.
+La génération de pipelines CI/CD repose sur la \textbf{cohérence des workflows YAML}~:
+l'enchaînement des étapes (build, test, déploiement) doit être correct et les dépendances
+entre \textit{jobs} respectées. Au-delà de la validité syntaxique, l'agent doit préserver la
+logique globale du pipeline et y intégrer les bonnes pratiques comme propriété de qualité des
+artefacts. GPT-5-mini assure cette cohérence de bout en bout avec une régularité supérieure
+aux modèles évalués, tout en produisant des définitions YAML valides et maintenables.
 
 \section{Conclusion}
 
-Ce chapitre a formalisé les besoins de la plateforme en s'appuyant sur le contexte
-établi précédemment, puis a posé les bases de sa conception à travers une modélisation
-UML couvrant les vues fonctionnelle, structurelle et dynamique. Il a enfin détaillé les
-capacités d'intelligence artificielle qui en constituent le cœur, en explicitant
-l'architecture de ses agents spécialisés et les choix de modèles qui les sous-tendent.
-Ces choix obéissent à une logique commune ---~ancrage documentaire par RAG, raisonnement
-confié à GPT-5-mini et repli multi-fournisseurs pour la résilience~--- déclinée selon les
-exigences propres à chaque type d'artefact. Les chapitres suivants s'appuieront sur cette
-base pour présenter la réalisation effective de la plateforme et son évaluation.
+Ce chapitre a formalisé les besoins de la plateforme, puis posé les bases de sa conception à
+travers une modélisation UML couvrant les vues fonctionnelle, structurelle et dynamique, et
+une architecture globale. Il a enfin détaillé les capacités d'intelligence artificielle qui
+en constituent le c\oe ur, en explicitant l'architecture des agents spécialisés et une
+méthodologie d'évaluation reposant sur des benchmarks publics, la documentation des
+fournisseurs et une approche \textit{LLM-as-a-Judge}. Ces choix obéissent à une logique
+commune~--- ancrage documentaire par RAG et fournisseur de raisonnement mutualisé
+(GPT-5-mini, avec repli sur Llama~3.3~70B)~--- déclinée selon les exigences métier de chaque
+agent. Le chapitre suivant présente la réalisation effective de la plateforme.

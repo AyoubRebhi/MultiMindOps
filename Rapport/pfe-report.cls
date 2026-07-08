@@ -122,11 +122,9 @@
 \fancypagestyle{MyStyle}{
   \renewcommand{\headrulewidth}{0pt}
   \renewcommand{\footrulewidth}{0.5pt}
-  \fancyhead[L]{}
+  \fancyhf{}% Efface en-tête et pied de page
 
-  \fancyfoot[R]{\fontsize{12}{12}\selectfont Page \thepage}% Right footer
-  
-  \fancyfoot[L]{\fontsize{12}{12}\selectfont Nom École}% Right header
+  \fancyfoot[C]{\fontsize{12}{12}\selectfont\thepage}% Numéro de page centré
 
 }
 
@@ -141,11 +139,8 @@
   \renewcommand{\footrulewidth}{0.5pt}
 
   \fancyhead[L]{\fontsize{12}{12}\selectfont\textsc{\MakeLowercase{\leftmark}}}% Left header
- 
 
-  \fancyfoot[R]{\fontsize{12}{12}\selectfont Page \thepage}% Right footer
-  
-  \fancyfoot[L]{\fontsize{12}{12}\selectfont\ Nom École}% Right header
+  \fancyfoot[C]{\fontsize{12}{12}\selectfont\thepage}% Numéro de page centré
 
 }
 

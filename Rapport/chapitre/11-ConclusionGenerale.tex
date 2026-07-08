@@ -4,20 +4,38 @@
 \adjustmtc
 \thispagestyle{MyStyle}
 
-% Guide pour la rédaction de la Conclusion et Perspectives
+L'essor du Cloud Computing et des pratiques DevOps a considérablement élargi les
+possibilités offertes aux équipes de développement, mais au prix d'une complexité
+croissante~: multiplication des technologies à maîtriser, décisions d'architecture
+nombreuses et préparation fastidieuse des artefacts de déploiement. C'est dans ce contexte
+que s'inscrit ce projet de fin d'études, réalisé au sein de Talan Tunisie Consulting, dont
+l'objectif était de concevoir une plateforme capable d'accompagner les ingénieurs Cloud et
+DevOps tout au long de ce processus. La solution proposée, \textbf{MultiMindOps}, se
+présente comme une plateforme d'assistance fondée sur l'intelligence artificielle~: elle
+automatise les tâches répétitives de conception et de préparation de l'infrastructure, tout
+en laissant à l'ingénieur la maîtrise des décisions stratégiques.
 
-La \textbf{Conclusion Générale} a pour objectif de résumer les contributions du projet et d’ouvrir des perspectives d’évolution. Elle doit inclure les éléments suivants :
+Au terme de ce travail, la plateforme réunit un ensemble de contributions cohérentes qui,
+mises bout à bout, couvrent l'essentiel du cycle d'ingénierie Cloud. À partir d'une simple
+analyse automatique d'un projet, MultiMindOps recommande plusieurs architectures cloud
+accompagnées d'une estimation des coûts, puis génère de façon cohérente les principaux
+artefacts DevOps~--- Docker, Terraform et pipelines GitHub Actions. Sa valeur ne tient pas
+seulement à cette automatisation, mais à la fiabilité qu'elle apporte~: une boucle de
+remédiation intelligente diagnostique et corrige les erreurs d'exécution, tandis qu'une
+logique \textit{Human-in-the-Loop} soumet chaque décision critique à la validation de
+l'ingénieur. La sécurité y est traitée comme une exigence de qualité transversale, intégrée
+aux artefacts générés plutôt que comme une étape isolée. La plateforme réduit ainsi la
+charge cognitive et le temps de mise en place d'une infrastructure cloud, sans jamais
+dessaisir l'humain de son rôle de décideur.
 
-\begin{itemize}
-    \item \textbf{Synthèse des réalisations :} Récapitulez les principales étapes du projet et les résultats obtenus.
-    \item \textbf{Impact et apports :} Mettez en avant l'importance du projet et les bénéfices qu’il apporte aux utilisateurs ou à l’entreprise.
-    \item \textbf{Limites :} Identifiez brièvement les contraintes ou améliorations possibles.
-    \item \textbf{Perspectives d’évolution :} Décrivez les pistes d’amélioration et d’extension du projet :
-    \begin{itemize}
-        \item \textbf{À court terme :} Actions immédiates après la mise en place du projet.
-        \item \textbf{À moyen terme :} Évolutions possibles dans les mois ou années à venir.
-        \item \textbf{À long terme :} Vision future et extensions potentielles du projet.
-    \end{itemize}
-\end{itemize}
+\section*{Perspectives}
+\addcontentsline{toc}{section}{Perspectives}
 
-\noindent Cette conclusion doit être rédigée de manière synthétique et mettre en avant la valeur ajoutée du projet ainsi que son potentiel d’évolution.
+Plusieurs pistes réalistes prolongent ce travail. À court terme, l'optimisation du temps
+d'exécution des workflows et l'amélioration continue des recommandations grâce aux retours
+des utilisateurs renforceraient l'expérience d'usage. À moyen terme, l'extension de la
+plateforme à d'autres fournisseurs cloud, tels qu'Azure et Google Cloud Platform,
+élargirait son champ d'application au-delà d'AWS. Enfin, l'enrichissement progressif de la
+base de connaissances RAG et l'ajout de nouveaux agents spécialisés permettraient de couvrir
+davantage de types d'artefacts et de cas d'usage, tout en préservant la cohérence de
+l'architecture multi-agents existante.
